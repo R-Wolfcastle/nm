@@ -26,7 +26,7 @@ import matplotlib.cm as cm
 
 
 
-
+np.set_printoptions(threshold=np.inf, linewidth=1000)
 
 # u lives on cell centres
 #mu lives on face centres
@@ -35,6 +35,8 @@ import matplotlib.cm as cm
 def make_vto(mu):
 
     def vto(u, h):
+        #reflection bc:
+        u = u.at[0].set(u[1])
 
         s_gnd = h + b
         s_flt = h*(1-0.917/1.027)
@@ -54,15 +56,17 @@ def make_vto(mu):
         mu_longer = mu_longer.at[:n].set(mu)
 
         dudx = jnp.zeros((n+1,))
-        dudx = dudx.at[1:n].set((u[1:n] - u[:n-1])/dx)
-        #set reflection boundary condition
-        dudx = dudx.at[0].set(2*u[0]/dx)
+        dudx = dudx.at[1:n+1].set((u[1:n+1] - u[:n])/dx)
+        dudx = dudx.at[-1].set(dudx[-2])
+        ##set reflection boundary condition
+        #dudx = dudx.at[0].set(2*u[1]/dx)
+
 
         mu_nl = mu_longer * (jnp.abs(dudx)+epsilon)**(-2/3)
         # mu_nl = mu_longer.copy()
 
 
-        sliding = 0.5 * (C[1:(n+1)] + C[:n]) * u[:n] * dx
+        sliding = 0.5 * (C[1:(n+1)] + C[:n]) * u[1:n+1] * dx
 
 
         flux = h * mu_nl * dudx
@@ -76,7 +80,12 @@ def make_vto(mu):
         # sgrad = jnp.zeros((n,))
         # sgrad = sgrad.at[-1].set(-s)
 
-        return flux[1:(n+1)] - flux[:n] - h_grad_s - sliding
+        balance_internal = flux[1:(n+1)] - flux[:n] - h_grad_s - sliding
+        balance = jnp.zeros((n+1,))
+        balance = balance.at[1:n+1].set(balance_internal)
+        balance = balance.at[0].set(-balance[1])
+
+        return balance
 
     return vto
 
@@ -98,7 +107,7 @@ def make_advo_linear_differencing(dt):
         
 
         thk_flux   = jnp.zeros((n+2,))
-        thk_flux   = thk_flux.at[2:n+1].set(h_faces[2:n+1] * u[1:])
+        thk_flux   = thk_flux.at[2:n+1].set(h_faces[2:n+1] * u[2:n+1])
         thk_flux   = thk_flux.at[0].set(-u[0] * h[0]) #gets in reflection bc for u and that dhdx=0 (so h0 = h1 = h-1)
         thk_flux   = thk_flux.at[1].set(u[0] * h[0])
 
@@ -143,9 +152,9 @@ def make_advo_first_order_upwind(dt):
 
         thk_flux   = jnp.zeros((n+2,))
         # thk_flux   = thk_flux.at[1:n+1].set(0.5 * (h[:n] + h[1:n+1]) * u) #no upwinding
-        thk_flux   = thk_flux.at[1:n+1].set(h[:n] * u) #first order upwinding
-        thk_flux   = thk_flux.at[0].set(-u[0] * h[0]) #gets in reflection bc for u and that dhdx=0 (so h0 = h1 = h-1)
-        thk_flux   = thk_flux.at[1].set(u[0] * h[0])
+        thk_flux   = thk_flux.at[1:n+1].set(h[:n] * u[1:n+1]) #first order upwinding
+        thk_flux   = thk_flux.at[0].set(u[0] * h[0]) #hopefully u[0]=-u[1] if reflection bcs are good.
+        thk_flux   = thk_flux.at[1].set(u[1] * h[0])
 
         #thickness flux has a discontinuous first derivatve at the grounding
         #line. This isn't great! Maybe can be helped by taking us and hs from
@@ -165,7 +174,7 @@ def make_advo_first_order_upwind(dt):
         #     dhdt[:n] + thk_flux[:n] - thk_flux[1:n+1] - accm_term[:n]
         # )
         # advection_eq = advection_eq.at[-1].set(h[-1]) # so that jac is 1 in LR...
-        # return advection_eq
+        # r eturn advection_eq
 
 
         # return dhdt + thk_flux[:n+1] - thk_flux[1:n+2] - accm_term
@@ -306,6 +315,10 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
             print(j)
             for i in range(num_iterations):
 
+                plotboth(h, u, title="Timestep {}, iteration {}".format(j, i),\
+                    savepath="../misc/full_implicit_tests/{}_{}.png".format(j,i),\
+                    axis_limits = [[-15, 30],[0, 150]], show_plots=False)
+            
                 vto_jac = vto_jac_fn(u, h)
                 advo_jac = advo_jac_fn(u, h, h_old)
 
@@ -318,6 +331,9 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
                                           [[vto_jac[0], vto_jac[1]],
                                           [advo_jac[0], advo_jac[1]]]
                                 )
+
+                print(np.array(full_jacobian).astype(int))
+
                 #print(full_jacobian.shape) #given the above, will have shape (n+n+1, n+n+1)
 
                 #print(np.array(vto_jac[0]))
@@ -341,9 +357,11 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
                 rhs = jnp.concatenate((-vto(u, h), -advo(u, h, h_old)))
 
                 dvar = lalg.solve(full_jacobian, rhs)
+                print(dvar)
 
-                u = u.at[:].set(u+dvar[:n])
-                h = h.at[:].set(h+dvar[n:])
+
+                u = u.at[:].set(u+dvar[:n+1])
+                h = h.at[:].set(h+dvar[n+1:])
 
 
                 # plt.plot(dvar[:n])
@@ -354,9 +372,6 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
 
             hus.append([h, u])
 
-            plotboth(h, u, title="Timestep {}, iteration {}".format(j+1, i),\
-                    savepath="../misc/full_implicit_tests/{}_{}.png".format(j+1,i),\
-                    axis_limits = [[-15, 30],[0, 150]], show_plots=False)
 
             # plotboth(h, u, title="Timestep {}, iteration {}".format(j+1, i),\
             #          savepath=None,\
@@ -491,7 +506,7 @@ def make_solver_sparse_jvp(u_trial, h_trial, dt, num_iterations, num_timesteps, 
 
 
 lx = 1
-n = 100
+n = 10
 dx = lx/n
 x = jnp.linspace(0,lx,n)
 
@@ -590,8 +605,9 @@ epsilon = 1e-10
 
 
 
-
-u_trial = jnp.exp(x)-1
+u_trial = jnp.zeros((n+1,))
+u_trial = u_trial.at[1:].set(jnp.exp(x)-1)
+u_trial = u_trial.at[0].set(-u_trial[1])
 h_trial = h.copy()
 
 
