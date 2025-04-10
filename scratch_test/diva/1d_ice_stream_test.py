@@ -12,9 +12,9 @@ import matplotlib.cm as cm
 np.set_printoptions(precision=1, suppress=False, linewidth=np.inf)
 
 
-# u lives on cell centres
-#mu lives on face centres
-#(as does h, s, phi, ...)
+#Note, for making the sparsity stuff a bit easier, we're co-locating everything.
+#Bite me Suhas V.
+
 
 def make_vto(mu):
 
