@@ -9,135 +9,60 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
 
-np.set_printoptions(precision=2, suppress=False, linewidth=np.inf)
+np.set_printoptions(precision=1, suppress=False, linewidth=np.inf)
 
 
-# u lives on cell centres
-#mu lives on face centres
-#(as does h, s, phi, ...)
-
-def make_vto(h):
-    #NOTE:
-    h = h.at[-1].set(0)
-
-    s_gnd = h + b
-    s_flt = h*(1-0.917/1.027)
-    s = jnp.maximum(s_gnd, s_flt)
-    s = s.at[-1].set(0)
+#Note, for making the sparsity stuff a bit easier, we're co-locating everything.
+#Bite me Suhas V.
 
 
-    p_W = 1.027 * jnp.maximum(0, h-s)
-    p_I = 0.917 * h
-    phi = 1 - (p_W / p_I)
-    C = 300 * phi
-    C = jnp.where(s_gnd>s_flt, C, 0)
+def make_vto(mu):
 
-    C = jnp.where(h==0, 1, C)
+    def vto(u, h):
 
-    h_face = jnp.zeros((n+1,))
-    h_face = h_face.at[1:n-1].set(0.5*(h[:n-2] + h[1:n-1]))
-    h_face = h_face.at[0].set(h_face[1])
-        
+        s_gnd = h + b
+        s_flt = h*(1-0.917/1.027)
+        s = jnp.maximum(s_gnd, s_flt)
+        s = s.at[-1].set(0)
 
-    h_grad_s = jnp.zeros((n,))
-    #leaving out the 9.81 makes a big difference to the convergence... Need to check units
-    h_grad_s = h_grad_s.at[1:n-1].set(0.917 * 9.81 * 0.5 * (s[2:] - s[:n-2]))
 
-    
-    def vto(u, d):
-        #NOTE: I had some issues, but think I solved by remembering the part of the Jacobian
-        #where there's zero thickness should be diagnoal.
-        
-        mu = 1-d
+        p_W = 1.027 * jnp.maximum(0, h-s)
+        p_I = 0.917 * h
+        phi = 1 - (p_W / p_I)
+        C = 300 * phi
+        C = jnp.where(s_gnd>s_flt, C, 0)
 
-        #I'm thinking maybe with the co-located stuff, perhaps it's easiest
-        #to just imagine every point is in the centre of a cell and define
-        #face-centred variables for each possible face? I don't really understand
-        #anything still.
 
-        #face-centred:
+
+        mu_longer = jnp.zeros((n+1,))
+        mu_longer = mu_longer.at[:n].set(mu)
+
         dudx = jnp.zeros((n+1,))
-        dudx = dudx.at[1:n-1].set((u[1:n-1] - u[:n-2])/dx) #remember, the final point has no thickness so we shouldn't treat it the same
-        dudx = dudx.at[-2].set(dudx[-3].copy())
-        dudx = dudx.at[0].set(dudx[1]) #Not sure what kind of boundary condition this is...
-        #dudx = dudx.at[-1].set(dudx[-2]) #not sure really?
+        dudx = dudx.at[1:n].set((u[1:n] - u[:n-1])/dx)
+        #set reflection boundary condition
+        dudx = dudx.at[0].set(2*u[0]/dx)
 
-        mu_face = jnp.zeros((n+1,))
-        mu_face = mu_face.at[1:n-1].set(0.5*(mu[:n-2] + mu[1:n-1]))
-        mu_face = mu_face.at[-2].set(mu_face[-3].copy())
-        mu_face = mu_face.at[0].set(mu_face[1])
-        #mu_face = mu_face.at[-1].set(mu_face[-2])
+        mu_nl = mu_longer * (jnp.abs(dudx)+epsilon)**(-2/3)
+        # mu_nl = mu_longer.copy()
 
 
-#        # calculate mu_nl on cell centres then interpolate to face centres:
-#        dudx_centres = jnp.zeros((n,))
-#        dudx_centres = dudx_centres.at[1:n-1].set((u[2:n] - u[:n-2])/(2*dx))
-#        dudx_centres = dudx_centres.at[0].set((u[1] - u[0])/dx)
-#        dudx_centres = dudx_centres.at[-1].set((u[-1] - u[-2])/dx)
-#
-#        mu_nl_centres = mu * (jnp.abs(dudx_centres)+epsilon)**(-2/3)
-#
-#        mu_nl_faces = jnp.zeros((n+1,))
-#        mu_nl_faces = mu_nl_faces.at[1:n].set(0.5*(mu_nl_centres[:n-1] + mu_nl_centres[1:n]))
-#        mu_nl_faces = mu_nl_faces.at[0].set(mu_nl_faces[1])
-#        mu_nl_faces = mu_nl_faces.at[-1].set(mu_nl_faces[-2])
+        sliding = 0.5 * (C[1:(n+1)] + C[:n]) * u[:n] * dx
 
-        #alternative is to calculate based on values already at face centres
-        mu_nl_faces = mu_face * (jnp.abs(dudx)+epsilon)**(-2/3)
-        #neither work at the moment
 
-        sliding = C * u * dx
+        flux = h * mu_nl * dudx
 
-        flux = h_face * mu_nl_faces * dudx
-        flux_diff = flux[1:] - flux[:-1]
-        flux_diff = flux_diff.at[-1].set(0)
+        h_grad_s = 0.917 * 0.5 * (h[1:(n+1)] + h[:n]) * (s[1:(n+1)] - s[:n])
+        # h_grad_s = 0.5 * (h[1:(n+1)] + h[:n]) * (s[1:(n+1)] - s[:n]) / dx
 
-        #flux = h_face * mu_face * dudx #This works fine.
-        #print(flux)
-        #raise
-        
-        return flux_diff - h_grad_s - sliding
-    
+        # plt.plot(h_grad_s)
+        # plt.show()
+
+        # sgrad = jnp.zeros((n,))
+        # sgrad = sgrad.at[-1].set(-s)
+
+        return flux[1:(n+1)] - flux[:n] - h_grad_s - sliding
+
     return vto
-
-
-
-def make_solver_u_only(u_trial, intermediates=False):
-
-    def newton_solve(d):
-        vto = make_vto(h)
-
-        #for plotting, printing and debugging:
-        #vto(u_trial, d)
-        #raise
-
-        vto_jac = jacfwd(vto, argnums=0)
-
-        u = u_trial.copy()
-
-        if intermediates:
-            us = [u]
-
-        for i in range(9):
-            jac = vto_jac(u, d)
-            #print(jac)
-
-            rhs = -vto(u, d)
-            
-            du = lalg.solve(jac, rhs)
-            #du = solve_petsc_dense(jac, rhs, preconditioner='hypre')
-            # du = linear_solve(jac, rhs) #making this change alone makes no difference to the hessian computation
-
-            u = u.at[:].set(u+du)
-            if intermediates:
-                us.append(u)
-
-        if intermediates:
-            return u, us
-        else:
-            return u
-
-    return newton_solve
 
 
 def make_advo_linear_differencing(dt):
@@ -341,6 +266,8 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
 
         vto = make_vto(mu)
 
+        print(np.array(vto(u_trial, h_trial)))
+        print(np.array(vto(u_trial, h_trial)).shape)
 
         #advo = make_advo_first_order_upwind(dt) #more stable under larger dt
         advo = make_advo_linear_differencing(dt) #more stable under larger dx
@@ -360,6 +287,7 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
 
 
         for j in range(num_timesteps):
+            print(j)
             for i in range(num_iterations):
 
                 vto_jac = vto_jac_fn(u, h)
@@ -370,8 +298,8 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
                                           [[vto_jac[0], vto_jac[1]],
                                           [advo_jac[0], advo_jac[1]]]
                                 )
-            #    print(full_jacobian)
-            #    raise
+                print(full_jacobian)
+                raise
 
                 #print(np.array(vto_jac[0]))
                 #print("-------------------")
@@ -437,7 +365,7 @@ def make_solver(u_trial, h_trial, dt, num_iterations, num_timesteps, intermediat
 
 
 lx = 1
-n = 100
+n = 8
 dx = lx/n
 x = jnp.linspace(0,lx,n)
 
@@ -448,8 +376,9 @@ mu = mu.at[:].set(mu*mu_base)
 
 
 
-#accumulation = jnp.zeros((n+1,))
-#accumulation = accumulation.at[:n].set(500)
+accumulation = jnp.zeros((n+1,))
+# accumulation = accumulation.at[:n].set(100*(1-(2*(x-0.3))**2))
+accumulation = accumulation.at[:n].set(500)
 
 
 
@@ -458,11 +387,13 @@ mu = mu.at[:].set(mu*mu_base)
 #OVERDEEPENED BED
 
 
-h = 20*jnp.exp(-0.5*x*x*x*x)
+h = jnp.zeros((n+1,))
+# h = h.at[:n].set(20*jnp.exp(-2*x*x*x*x))
+h = h.at[:n].set(20*jnp.exp(-0.5*x*x*x*x))
 h = h.at[-1].set(0)
 
 
-b_intermediate = jnp.zeros((n,))-12
+b_intermediate = jnp.zeros((n+1,))-12
 # b = b.at[:n].set(b[:n] - 4*jnp.exp(-(5*x-2)**2))
 
 s_gnd = b_intermediate + h
@@ -470,10 +401,10 @@ s_flt = h*(1-0.917/1.027)
 s = jnp.maximum(s_gnd, s_flt)
 s = s.at[-1].set(0)
 
-b = jnp.zeros((n,))-12
+b = jnp.zeros((n+1,))-12
 # b = b.at[:n].set(b[:n] - 4*jnp.exp(-(5*x-2)**2))
 # b = b.at[:n].set(b[:n] - 4*jnp.exp(-(5*x-3)**2))
-b = b.at[:].set((x**0.5)*(b - 5*jnp.exp(-(5*x-3)**2)))
+b = b.at[:n].set((x**0.5)*(b[:n] - 5*jnp.exp(-(5*x-3)**2)))
 
 h = jnp.minimum(s-b, s/(1-0.917/1.027))
 h = h.at[-1].set(0)
@@ -496,15 +427,41 @@ C = jnp.where(s_gnd>s_flt, C, 0)
 base = s - h
 
 effective_base = s.copy()
-effective_base = effective_base.at[:].set(s -h*mu/mu_base)
+effective_base = effective_base.at[:n].set(s[:n] - h[:n]*mu/mu_base)
 
 epsilon = 1e-10
 
 
 
 
-#plotgeom(h)
-#raise
+
+##plot b, s and base on lhs y axis, and C on rhs y axis
+#fig, ax1 = plt.subplots(figsize=(10,5))
+#ax2 = ax1.twinx()
+#
+#ax1.plot(s, label="surface")
+## ax1.plot(base, label="base")
+#ax1.plot(effective_base, label="base")
+#ax1.plot(b, label="bed")
+#
+#ax2.plot(C, color='k', marker=".", linewidth=0, label="sliding coefficient")
+#
+##legend
+#ax1.legend(loc='upper right')
+##slightly lower
+#ax2.legend(loc='center')
+##stop legends overlapping
+#
+##axis labels
+#ax1.set_xlabel("x")
+#ax1.set_ylabel("elevation")
+#ax2.set_ylabel("sliding coefficient")
+#
+#plt.show()
+
+
+
+
 
 
 
@@ -512,17 +469,13 @@ u_trial = jnp.exp(x)-1
 h_trial = h.copy()
 
 
-newton_speed_solve = make_solver_u_only(u_trial, intermediates=True)
+#newton_solve = make_solver(u_trial, h_trial, 2e-4, 10, 20, intermediates=False)
+newton_solve = make_solver(u_trial, h_trial, 2e-3, 10, 20, intermediates=False)
 
-u_end, u_ints = newton_speed_solve(1-mu)
 
 
-h_nonzero_mask = np.where(jnp.abs(h)>0+1e-5, 1, np.nan)
 
-plt.figure()
-for u in u_ints:
-    plt.plot(np.array(u*h_nonzero_mask))
-plt.show()
+u_end, h_end, hus = newton_solve(mu)
 
 
 
