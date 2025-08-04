@@ -166,6 +166,99 @@ def make_sparse_jacrev_fct_new(basis_vectors, i_coord_sets, j_coord_sets, mask):
     return sparse_jacrev, densify_sparse_jac
 
 
+def make_sparse_jacrev_fct_shared_basis(basis_vectors, i_coord_sets, j_coord_sets,\
+                                        mask, n_outputs, active_indices=None):
+
+
+    if active_indices is None:
+        active_indices = list(range(n_primals))
+    else:
+        active_indices = list(active_indices)
+
+    n_primals = len(active_indices)
+
+    def sparse_jacrev(fun_, primals):
+        #unfortunately, there is no way to avoid retracing fun_ each
+        #time you apply sparse_jacrev. It's a load of bullshit but
+        #oh well. If it turns out to be really expensive, it might be
+        #worth trying to add  a custom sparse Jacobian transform or
+        #use JAX internals like jax.make_jaxpr or jax.interpreters.ad 
+        #to extract Jacobian structure directly.
+
+        #This is incredibly simple and can be so due to the fact that
+        #it assumes the basis vectors are shared by the primals. This
+        #will be the case for u and v, but might not be the case for h
+        #for example. Can certainly accomodate this, but maybe another
+        #time.
+    
+
+        #You can't specify which arguments vjp_fun will differentiate
+        #with respect to, so this is a little wrapper that ensures "inactive"
+        #arguments are static in the function definition:
+        def wrapped_function(*active_arguments):
+            all_arguments = list(primals)
+            for i, idx in enumerate(active_indices):
+                all_arguments[idx] = active_arguments[i]
+            return fun_(*all_arguments)
+
+        _, vjp_fun = jax.vjp(wrapped_function, *[primals[k] for k in active_indices])
+        #vjp_fun takes a tuple of shape (output_0, output_1, ...)
+
+        
+        basis = jnp.stack(basis_vectors).astype(jnp.float32) #int8 won't cut it apparently...
+        
+        #def apply_basis_for_output(out_index):
+        #    return lambda bv: vjp_fun(
+        #            tuple(
+        #                tuple([bv] * n_primals) if i==out_index\
+        #                else tuple([jnp.zeros_like(bv)] * n_primals)\
+        #                for i in range(n_outputs)
+        #                                     )
+        #          )
+        def apply_basis_for_output(out_index):
+            return lambda bv: vjp_fun(
+                    tuple(
+                        [bv if i==out_index\
+                        else jnp.zeros_like(bv)\
+                        for i in range(n_outputs)]
+                                             )
+                  )
+
+        rows_for_output = []
+        for i in range(n_outputs):
+            rows_for_output.append(
+                    jax.vmap(apply_basis_for_output(i))(basis)
+                                  )
+
+        #rows_for_output looks like [(d_output0/d_primal0, d_output0/d_primal1, ...),\
+        #                            (d_output1/d_primal0, d_output1/d_primal1, ...)]
+        #... I think
+        #and each d_outputi/d_primalj has shape (n_basis_vectors,nr*nc)
+
+
+        #want to return d_output0/d_primal0, d_output0/d_primal1, ..., 
+        # d_output1/d_primal0, d_output1/d_primal1, ...
+
+        return [rows_for_output[i][j].flatten()
+                for j in range(n_primals)
+                for i in range(n_outputs)
+               ]
+
+
+    #def densify_sparse_jac(jacrows_vec, n):
+    #    jac = jnp.zeros((n, n))
+
+    #    ics = i_coord_sets[mask].astype(jnp.int32)
+    #    jcs = j_coord_sets[mask].astype(jnp.int32)
+    #    jac_vec  = jacrows_vec[mask]
+
+    #    jac = jac.at[ics, jcs].set(jac_vec)
+
+    #    return jac
+
+    return sparse_jacrev#, densify_sparse_jac
+
+
 def basis_vectors_and_coords_2d_square_stencil(nr, nc, r=2):
     #NOTE: Need to think about speed and memory efficiency in this function.
     #E.g. defining intermediate functions to limit the scope of intermediate

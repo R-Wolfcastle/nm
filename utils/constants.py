@@ -2,7 +2,7 @@
 # Physical constants for ice sheet modeling (SI units)
 
 # Fundamental constants
-G = 9.80665                    # Gravity (m/s^2)
+g = 9.80665                    # Gravity (m/s^2)
 S_PER_YEAR = 31_557_600        # Seconds in a year (365.25 days)
 
 # Densities
@@ -27,7 +27,7 @@ THERMAL_CONDUCTIVITY_ICE = 2.1 # W/(m·K)
 LATENT_HEAT_FUSION = 3.34e5    # Latent heat of fusion for ice (J/kg)
 
 # Useful reference values
-ICE_PRESSURE_MPA_PER_KM = RHO_ICE * G / 1e6  # ~9.0 MPa per km of ice
+ICE_PRESSURE_MPA_PER_KM = RHO_I * g / 1e6  # ~9.0 MPa per km of ice
 
 # Conversion factors
 PA_PER_BAR = 1.0e5             # Pascal per bar

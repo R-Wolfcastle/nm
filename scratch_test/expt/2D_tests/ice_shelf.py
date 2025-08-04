@@ -8,7 +8,8 @@ import time
 sys.path.insert(1, "../../../utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
-                           make_sparse_jacrev_fct_new
+                           make_sparse_jacrev_fct_new,\
+                           make_sparse_jacrev_fct_shared_basis
 import constants as c
 
 
@@ -36,6 +37,68 @@ np.set_printoptions(precision=1, suppress=False, linewidth=np.inf, threshold=np.
 
 
 
+def solve_petsc_sparse(values, coordinates, jac_shape,\
+                       b, ksp_type='gmres', preconditioner='hypre',\
+                       precondition_only=False):
+    
+    comm = PETSc.COMM_WORLD
+    size = comm.Get_size()
+
+    iptr, j, values = scipy_coo_to_csr(values, coordinates, jac_shape, return_decomposition=True)
+
+    #rows_local = int(jac_shape[0] / size)
+
+    #A = PETSc.Mat().createAIJ(size=jac_shape, csr=(iptr, j, values), bsize=[rows_local, jac_shape], comm=comm)
+    A = PETSc.Mat().createAIJ(size=jac_shape, csr=(iptr.astype(np.int32), j.astype(np.int32), values), comm=comm)
+    
+    b = PETSc.Vec().createWithArray(b, comm=comm)
+    
+    x = b.duplicate()
+    
+    #set ksp iterations
+    opts = PETSc.Options()
+    opts['ksp_max_it'] = 20
+    opts['ksp_monitor'] = None
+    opts['ksp_rtol'] = 1e-10
+    
+    # Create a linear solver
+    ksp = PETSc.KSP().create()
+    ksp.setType(ksp_type)
+
+    ksp.setOperators(A)
+    ksp.setFromOptions()
+    
+    if preconditioner is not None:
+        #assessing if preconditioner is doing anything:
+        #print((A*x - b).norm())
+
+        if preconditioner == 'hypre':
+            pc = ksp.getPC()
+            pc.setType('hypre')
+            pc.setHYPREType('boomeramg')
+        else:
+            pc = ksp.getPC()
+            pc.setType(preconditioner)
+
+        #pc.apply(b, x)
+        #print((A*x - b).norm())
+        #raise
+
+
+    if precondition_only:
+        pc.apply(b, x)
+    else:
+        ksp.solve(b, x)
+    
+    # Print the solution
+    #x.view()
+    
+
+    x_jnp = jnp.array(x.getArray())
+
+    return x_jnp
+
+
 def interp_cc_to_fc_function(ny, nx):
 
     def interp_cc_to_fc(var):
@@ -53,10 +116,6 @@ def interp_cc_to_fc_function(ny, nx):
         return var_ew, var_ns
 
     return interp_cc_to_fc
-
-
-def cc_gradient_function(ny, nx):
-    pass
 
 
 def cc_gradient_function(ny, nx, dy, dx):
@@ -91,10 +150,10 @@ def fc_gradient_functions(ny, nx, dy, dx):
         dvar_dx_ew = dvar_dx_ew.at[:,-1].set(2*var[:,-1]/dx)
 
         
-        dvar_dy_ew = dvar_dy_ew.at[1:-1, 1:-1].set((var[:-1, :-1] +\
-                                                    var[:-1, 1:]  -\
-                                                    var[1:, :-1]  -\
-                                                    var[1:, 1:]
+        dvar_dy_ew = dvar_dy_ew.at[1:-1, 1:-1].set((var[:-2, 1:]  +\
+                                                    var[:-2, :-1] -\
+                                                    var[2:, :-1]  -\
+                                                    var[2:, 1:]
                                                    )/(4*dx))
         dvar_dy_ew = dvar_dy_ew.at[0, 1:-1].set(  -(var[0, 1:]  +\
                                                     var[0, :-1] +\
@@ -148,6 +207,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx):
     ew_gradient, ns_gradient = fc_gradient_functions(ny, nx, dy, dx)
     cc_gradient = cc_gradient_function(ny, nx, dy, dx)
 
+
     def compute_u_v_residuals(u_1d, v_1d, h_1d, mu_bar):
 
         u = u_1d.reshape((ny, nx))
@@ -155,14 +215,14 @@ def compute_u_v_residuals_function(ny, nx, dy, dx):
         h = h_1d.reshape((ny, nx))
 
         s_gnd = h + b #b is globally defined
-        s_flt = h*(1-rho/rho_w)
+        s_flt = h*(1-c.RHO_I/c.RHO_W)
         s = jnp.maximum(s_gnd, s_flt)
 
 
         #volume_term
         dsdx, dsdy = cc_gradient(s)
-        volume_x = -rho * g * h * dsdx
-        volume_y = -rho * g * h * dsdy
+        volume_x = -c.RHO_I * c.g * h * dsdx
+        volume_y = -c.RHO_I * c.g * h * dsdy
 
 
         #momentum_term
@@ -181,10 +241,16 @@ def compute_u_v_residuals_function(ny, nx, dy, dx):
         h_ew, h_ns = interp_cc_to_fc(h)
 
 
+        #to account for calving front boundary condition:
+        #NOTE: this is after driving term has been calculated
+        mu_ew = mu_ew.at[:, -1].set(0)
+
+
         visc_x = mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
                  mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
                  mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
                  mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx
+
 
         visc_y = mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
                  mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
@@ -196,13 +262,14 @@ def compute_u_v_residuals_function(ny, nx, dy, dx):
         y_mom_residual = visc_y + volume_y
 
 
-        return x_mom_residual, y_mom_residual
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
 
     return compute_u_v_residuals
 
 
 
-def qn_velocity_solver_function(ny, nx, dy, dx):
+def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, n_iterations):
+    cc_gradient = cc_gradient_function(ny, nx, dy, dx)
     
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx)
 
@@ -215,35 +282,73 @@ def qn_velocity_solver_function(ny, nx, dy, dx):
     j_coordinate_sets = jnp.tile(jnp.arange(nr*nc), len(basis_vectors))
     mask = (i_coordinate_sets>=0)
 
-    sparse_jacrev_func, _ = make_sparse_jacrev_fct_new(basis_vectors,\
-                                             i_coordinate_sets,\
-                                             j_coordinate_sets,\
-                                             mask)
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                          )
 
 
     i_coordinate_sets = i_coordinate_sets[mask]
     j_coordinate_sets = j_coordinate_sets[mask]
-    coords = jnp.stack([i_coordinate_sets, j_coordinate_sets])
     #############
 
-    
-    def new_viscosity(u, v, h):
-        dudx, dudy = cc_gradient(u)
-        dvdx, dvdy = cc_gradient(v)
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,    i_coordinate_sets,\
+                                 i_coordinate_sets+nr, i_coordinate_sets+nr]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+nc,\
+                                 j_coordinate_sets, j_coordinate_sets+nc]
+                                   )
+                       ])
 
-        return B * (dudx**2 + dvdy**2 + dudx*dvdy +\
+    
+    def new_viscosity(u, v):
+        #all these things are 2d and returns a 2d array
+        
+        dudx, dudy = cc_gradient(u.reshape((ny, nx)))
+        dvdx, dvdy = cc_gradient(v.reshape((ny, nx)))
+
+        return B * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
                     0.25*(dudy+dvdx)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
 
 
-    def solver(u_trial, v_trial):
-        u = u_trial.copy()
-        v = v_trial.copy()
+    def solver(u_trial, v_trial, h):
+        u_1d = u_trial.copy().flatten()
+        v_1d = v_trial.copy().flatten()
+        h_1d = h.flatten()
 
         for i in range(n_iterations):
 
+            mu = new_viscosity(u_1d, v_1d)
 
+            dJu_du, dJu_dv, dJv_du, dJv_dv = sparse_jacrev(get_u_v_residuals, (u_1d, v_1d, h_1d, mu))
 
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
 
+            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu))
+            
+            du = solve_petsc_sparse(nz_jac_values,\
+                                    coords,\
+                                    (nr*nc*2, nr*nc*2),\
+                                    rhs,\
+                                    ksp_type="bcgs",\
+                                    preconditioner="hypre",\
+                                    precondition_only=False)
+
+            u_1d = u_1d+du[:(ny*nx)]
+            v_1d = v_1d+du[(ny*nx+1):]
+
+        return u.reshape((ny, nx)), v.reshape((ny, nx))
+
+    return solver
 
 
 
@@ -262,13 +367,32 @@ B = 2 * (A**(-1/3))
 #epsilon_visc = 1e-5/(3.15e7)
 epsilon_visc = 3e-13
 
+lx = 100_000
+ly = 200_000
 
-nr, nc = 64, 64
-mucoef = jnp.ones((nr, nc))
-
-cr_func = make_compute_u_v_residuals_function(mucoef)
-
-cr_func()
+#nr, nc = 64, 64
+nr, nc = 12, 6
 
 
+x = jnp.linspace(0, lx, nc)
+y = jnp.linspace(0, ly, nr)
+
+delta_x = x[1]-x[0]
+delta_y = y[1]-y[0]
+
+
+thk = jnp.zeros((nr, nc))+500
+
+b = jnp.zeros_like(thk)-600
+
+mucoef = jnp.ones_like(thk)
+
+u_init = jnp.zeros_like(thk)
+v_init = jnp.zeros_like(thk)
+
+n_iterations = 5
+
+solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, n_iterations)
+
+u_out, v_out = solver(u_init, v_init, thk)
 
