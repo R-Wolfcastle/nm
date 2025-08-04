@@ -9,6 +9,7 @@ sys.path.insert(1, "../../../utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new
+import constants as c
 
 
 #3rd party
@@ -35,145 +36,235 @@ np.set_printoptions(precision=1, suppress=False, linewidth=np.inf, threshold=np.
 
 
 
+def interp_cc_to_fc_function(ny, nx):
 
-def make_compute_u_v_residuals_function(mu_coef):
+    def interp_cc_to_fc(var):
+        
+        var_ew = jnp.zeros((ny, nx+1))
+        var_ew = var_ew.at[:, 1:-1].set(0.5*(var[:, 1:]+var[:, -1:]))
+        var_ew = var_ew.at[:, 0].set(var[:, 0])
+        var_ew = var_ew.at[:, -1].set(var[:, -1])
 
-    ny, nx = mu_coef.shape
+        var_ns = jnp.zeros((ny+1, nx))
+        var_ns = var_ns.at[1:-1, :].set(0.5*(var[:-1, :]+var[1:, :]))
+        var_ns = var_ns.at[0, :].set(var[0, :])
+        var_ns = var_ns.at[-1, :].set(var[-1, :])
 
-    def compute_u_v_residuals(u, v, h):
+        return var_ew, var_ns
 
-        u_2d = u.reshape((ny, nx))
-        v_2d = v.reshape((ny, nx))
-        h_2d = h.reshape((ny, nx))
+    return interp_cc_to_fc
+
+
+def cc_gradient_function(ny, nx):
+    pass
+
+
+def cc_gradient_function(ny, nx, dy, dx):
+
+    def cc_gradient(var):
+        dvar_dx = jnp.zeros((ny, nx))
+        dvar_dy = jnp.zeros((ny, nx))
+        
+        dvar_dx = dvar_dx.at[:, 1:-1].set((0.5/dx) * (var[:,2:] - var[:,:-2]))
+        dvar_dx = dvar_dx.at[:, 0].set((0.5/dx) * (var[:, 1] - var[:, 0])) #using reflection bc
+        dvar_dx = dvar_dx.at[:,-1].set((0.5/dx) * (-var[:,-2]))
+        
+        dvar_dy = dvar_dy.at[1:-1, :].set((0.5/dy) * (var[:-2,:] - var[2:,:]))
+        dvar_dy = dvar_dy.at[0, :].set((0.5/dy) * (var[0, :] - var[1, :]))
+        dvar_dy = dvar_dy.at[-1,:].set((0.5/dy) * (2*var[-2,:]))
+
+        return dvar_dx, dvar_dy
+
+    return cc_gradient
+
+
+
+def fc_gradient_functions(ny, nx, dy, dx):
+
+    def ew_face_gradient(var):
+        dvar_dx_ew = jnp.zeros((ny, nx+1))
+        dvar_dy_ew = jnp.zeros((ny, nx+1))
+
+
+        dvar_dx_ew = dvar_dx_ew.at[:, 1:-1].set((var[:,1:]-var[:,:-1])/dx)
+        dvar_dx_ew = dvar_dx_ew.at[:,0].set(2*var[:,0]/dx)
+        dvar_dx_ew = dvar_dx_ew.at[:,-1].set(2*var[:,-1]/dx)
+
+        
+        dvar_dy_ew = dvar_dy_ew.at[1:-1, 1:-1].set((var[:-1, :-1] +\
+                                                    var[:-1, 1:]  -\
+                                                    var[1:, :-1]  -\
+                                                    var[1:, 1:]
+                                                   )/(4*dx))
+        dvar_dy_ew = dvar_dy_ew.at[0, 1:-1].set(  -(var[0, 1:]  +\
+                                                    var[0, :-1] +\
+                                                    var[1, 1:]  +\
+                                                    var[1, :-1]
+                                                   )/(4*dx))
+        dvar_dy_ew = dvar_dy_ew.at[-1, 1:-1].set(  (var[-2, 1:]  +\
+                                                    var[-2, :-1] +\
+                                                    var[-1, 1:]  +\
+                                                    var[-1, :-1]
+                                                   )/(4*dx))
+        #due to reflection bcs, dudy_ew is 0 on left and right boundaries
+
+        return dvar_dx_ew, dvar_dy_ew
+
+    def ns_face_gradient(var):
+        dvar_dx_ns = jnp.zeros((ny+1, nx))
+        dvar_dy_ns = jnp.zeros((ny+1, nx))
+
+        dvar_dy_ns = dvar_dy_ns.at[1:-1,:].set((var[:-1,:]-var[1:,:])/dy)
+        dvar_dy_ns = dvar_dy_ns.at[0,:].set(-2*var[0,:]/dy)
+        dvar_dy_ns = dvar_dy_ns.at[-1,:].set(2*var[-1,:]/dy)
+
+
+        dvar_dx_ns = dvar_dx_ns.at[1:-1, 1:-1].set((var[:-1, 2:] +\
+                                                    var[1:, 2:]  -\
+                                                    var[:-1,:-2] -\
+                                                    var[1:, :-2]
+                                                   )/(4*dx))
+        dvar_dx_ns = dvar_dx_ns.at[1:-1, 0].set(   (var[:-1, 1] +\
+                                                    var[1:, 1]  +\
+                                                    var[:-1, 0] +\
+                                                    var[1:, 0]
+                                                   )/(4*dx))
+        dvar_dx_ns = dvar_dx_ns.at[1:-1, -1].set( -(var[:-1, -1] +\
+                                                    var[1:, -1]  +\
+                                                    var[:-1, -2] +\
+                                                    var[1:, -2]
+                                                   )/(4*dx))
+        #due to rbcs, ddx_ns is 0 on upper and lower boundaries
+
+        return dvar_dx_ns, dvar_dy_ns
+
+    
+    return ew_face_gradient, ns_face_gradient
+
+
+def compute_u_v_residuals_function(ny, nx, dy, dx):
+
+    interp_cc_to_fc = interp_cc_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient = fc_gradient_functions(ny, nx, dy, dx)
+    cc_gradient = cc_gradient_function(ny, nx, dy, dx)
+
+    def compute_u_v_residuals(u_1d, v_1d, h_1d, mu_bar):
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
 
         s_gnd = h + b #b is globally defined
         s_flt = h*(1-rho/rho_w)
         s = jnp.maximum(s_gnd, s_flt)
 
 
-
-
         #volume_term
-        dsdx = jnp.zeros((ny, nx))
-        dsdx = dsdx.at[:, 1:-1].set((0.5/dx) * (s_2d[:,2:] - s_2d[:,:-2]))
-        dsdx = dsdx.at[:, 0].set((0.5/dx) * (s_2d[:, 1] - s_2d[:, 0])) #using reflection bc
-        dsdx = dsdx.at[:,-1].set((0.5/dx) * (-s_2d[:,-2]))
-        
-        dsdy = jnp.zeros((ny, nx))
-        dsdy = dsdy.at[1:-1, :].set((0.5/dy) * (s_2d[:-2,:] - s_2d[2:,:]))
-        dsdy = dsdy.at[0, :].set((0.5/dy) * (s_2d[0, :] - s_2d[1, :]))
-        dsdy = dsdy.at[-1,:].set((0.5/dy) * (2*s_2d[-2,:]))
-
+        dsdx, dsdy = cc_gradient(s)
         volume_x = -rho * g * h * dsdx
         volume_y = -rho * g * h * dsdy
 
 
-
-
         #momentum_term
         #various face-centred derivatives
-        dudx_ew = jnp.zeros((ny, nx+1))
-        dudy_ew = jnp.zeros((ny, nx+1))
-        dvdx_ew = jnp.zeros((ny, nx+1))
-        dvdy_ew = jnp.zeros((ny, nx+1))
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
 
-        dudx_ns = jnp.zeros((ny+1, nx))
-        dudy_ns = jnp.zeros((ny+1, nx))
-        dvdx_ns = jnp.zeros((ny+1, nx))
-        dvdy_ns = jnp.zeros((ny+1, nx))
+        ##cc_derivatives, e.g. for viscosity calculation
+        #dudx_cc, dudy_cc = cc_gradient(u)
+        #dvdx_cc, dvdy_cc = cc_gradient(v)
 
-
-        #1
-        dudx_ew = dudx_ew.at[:, 1:-1].set((u[:,1:]-u[:,:-1])/dx)
-        dudx_ew = dudx_ew.at[:,0].set(2*u[:,0]/dx)
-        dudx_ew = dudx_ew.at[:,-1].set(2*u[:,-1]/dx) #doesn't matter \
-        #as won't enter flux on this face as it's where the cf will be
-        
-        #2
-        #order in brackets is: north, northeast, south, southeast
-        dudy_ew = dudy_ew.at[1:-1, 1:-1].set((u[:-1, :-1] +
-                                              u[:-1, 1:]  -
-                                              u[1:, :-1]  -
-                                              u[1:, 1:]
-                                             )/(4*dx))
-        dudy_ew = dudy_ew.at[0, 1:-1].set(  -(u[0, 1:]  +
-                                              u[0, :-1] +
-                                              u[1, 1:] +
-                                              u[1, :-1]
-                                             )/(4*dx))
-        dudy_ew = dudy_ew.at[-1, 1:-1].set(  (u[-2, 1:]  +
-                                              u[-2, :-1] +
-                                              u[-1, 1:] +
-                                              u[-1, :-1]
-                                             )/(4*dx))
-        #due to reflection bcs, dudy_ew is 0 on left and right boundaries
-        
-        #3
-        dvdx_ew = dvdx_ew.at[:, 1:-1].set((v[:,1:]-v[:,:-1])/dx)
-        dudx_ew = dudx_ew.at[:,0].set(2*v[:,0]/dx)
-        dudx_ew = dudx_ew.at[:,-1].set(2*v[:,-1]/dx)
-
-        #4
-        dvdy_ew = dvdy_ew.at[1:-1, 1:-1].set((v[:-1, :-1] +
-                                              v[:-1, 1:]  -
-                                              v[1:, :-1]  -
-                                              v[1:, 1:]
-                                             )/(4*dx))
-        dvdy_ew = dvdy_ew.at[0, 1:-1].set(  -(v[0, 1:]  +
-                                              v[0, :-1] +
-                                              v[1, 1:] +
-                                              v[1, :-1]
-                                             )/(4*dx))
-        dvdy_ew = dvdy_ew.at[-1, 1:-1].set(  (v[-2, 1:]  +
-                                              v[-2, :-1] +
-                                              v[-1, 1:] +
-                                              v[-1, :-1]
-                                             )/(4*dx))
-        #due to reflection bcs, dvdy_ew is 0 on right and left boundaries
-
-        #5
-        dudx_ns = dudx_ns.at[1:-1, 1:-1].set((u[] +\
-                                              u[] -\
-                                              u[] -\
-                                              u[]
-                                             )/(4*dx))
+        #interpolate things onto face-cenres
+        mu_ew, mu_ns = interp_cc_to_fc(mu_bar)
+        h_ew, h_ns = interp_cc_to_fc(h)
 
 
-        #6
-        dudy_ns = dudy_ns.at[1:-1, :].set((u[:-1, :]-u[1:, :])/dy)
-        dudy_ns = dudy_ns.at[0,:].set(-2*u[0,:]/dy)
-        dudy_ns = dudy_ns.at[-1,:].set(2*u[-1,:]/dy)
+        visc_x = mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx
 
-        #7
-        dvdy_ns = dvdy_ns.at[1:-1, :].set((v[:-1, :]-v[1:, :])/dy)
-        dudy_ns = dudy_ns.at[0,:].set(-2*v[0,:]/dy)
-        dudy_ns = dudy_ns.at[-1,:].set(2*v[-1,:]/dy)
+        visc_y = mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
 
 
-        #8
-        dvdx_ns = dvdx_ns.at[1:-1, 1:-1].set(()/(4*dx))
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+
+        return x_mom_residual, y_mom_residual
+
+    return compute_u_v_residuals
 
 
 
-        #cc derivatives
-        dudx = jnp.zeros((ny, nx))
-        dudx = dudx.at[:, 1:-1].set((u[:,1:]-u[:,:-1])/dx)
-        dudx = dudx.at[:, 0].set((2*u[:,0])/dx)
-        dudx = dudx.at[:, -1].set((2*u[:,-1])/dx)
+def qn_velocity_solver_function(ny, nx, dy, dx):
+    
+    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx)
 
-        dudy = dudy.at[:, 1:-1].set((u[:,1:]-u[:,:-1])/dy)
-        dudy = dudy.at[:, 0].set((2*u[:,0])/dy)
-        dudy = dudy.at[:, -1].set((2*u[:,-1])/dy)
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(nr*nc), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+    sparse_jacrev_func, _ = make_sparse_jacrev_fct_new(basis_vectors,\
+                                             i_coordinate_sets,\
+                                             j_coordinate_sets,\
+                                             mask)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    coords = jnp.stack([i_coordinate_sets, j_coordinate_sets])
+    #############
+
+    
+    def new_viscosity(u, v, h):
+        dudx, dudy = cc_gradient(u)
+        dvdx, dvdy = cc_gradient(v)
+
+        return B * (dudx**2 + dvdy**2 + dudx*dvdy +\
+                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
+
+
+    def solver(u_trial, v_trial):
+        u = u_trial.copy()
+        v = v_trial.copy()
+
+        for i in range(n_iterations):
 
 
 
 
-        return volume_term
 
 
 
-ny, nx = 64, 64
-mucoef = jnp.ones((ny, nx))
+
+
+
+
+
+
+
+
+
+A = 5e-25
+B = 2 * (A**(-1/3))
+
+#epsilon_visc = 1e-5/(3.15e7)
+epsilon_visc = 3e-13
+
+
+nr, nc = 64, 64
+mucoef = jnp.ones((nr, nc))
 
 cr_func = make_compute_u_v_residuals_function(mucoef)
 
