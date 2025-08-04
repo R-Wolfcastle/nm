@@ -149,12 +149,13 @@ def fc_gradient_functions(ny, nx, dy, dx):
         dvar_dx_ew = dvar_dx_ew.at[:,0].set(2*var[:,0]/dx)
         dvar_dx_ew = dvar_dx_ew.at[:,-1].set(2*var[:,-1]/dx)
 
-        
+        #internals
         dvar_dy_ew = dvar_dy_ew.at[1:-1, 1:-1].set((var[:-2, 1:]  +\
                                                     var[:-2, :-1] -\
                                                     var[2:, :-1]  -\
                                                     var[2:, 1:]
                                                    )/(4*dx))
+        #upper and lower boundaries
         dvar_dy_ew = dvar_dy_ew.at[0, 1:-1].set(  -(var[0, 1:]  +\
                                                     var[0, :-1] +\
                                                     var[1, 1:]  +\
@@ -165,9 +166,16 @@ def fc_gradient_functions(ny, nx, dy, dx):
                                                     var[-1, 1:]  +\
                                                     var[-1, :-1]
                                                    )/(4*dx))
-        #due to reflection bcs, dudy_ew is 0 on left and right boundaries
+        #corner points
+        dvar_dy_ew = dvar_dy_ew.at[0,  0].set(-2*var[0,  0]/(4*dx))
+        dvar_dy_ew = dvar_dy_ew.at[0, -1].set(-2*var[0, -1]/(4*dx))
+        dvar_dy_ew = dvar_dy_ew.at[-1, 0].set( 2*var[-1, 0]/(4*dx))
+        dvar_dy_ew = dvar_dy_ew.at[-1,-1].set( 2*var[-1,-1]/(4*dx))
+    
+        #due to reflection bcs, dvar_dy_ew is 0 on left and right boundaries
 
         return dvar_dx_ew, dvar_dy_ew
+
 
     def ns_face_gradient(var):
         dvar_dx_ns = jnp.zeros((ny+1, nx))
@@ -177,12 +185,13 @@ def fc_gradient_functions(ny, nx, dy, dx):
         dvar_dy_ns = dvar_dy_ns.at[0,:].set(-2*var[0,:]/dy)
         dvar_dy_ns = dvar_dy_ns.at[-1,:].set(2*var[-1,:]/dy)
 
-
+        #internals
         dvar_dx_ns = dvar_dx_ns.at[1:-1, 1:-1].set((var[:-1, 2:] +\
                                                     var[1:, 2:]  -\
                                                     var[:-1,:-2] -\
                                                     var[1:, :-2]
                                                    )/(4*dx))
+        #left and right boundaries
         dvar_dx_ns = dvar_dx_ns.at[1:-1, 0].set(   (var[:-1, 1] +\
                                                     var[1:, 1]  +\
                                                     var[:-1, 0] +\
@@ -193,6 +202,12 @@ def fc_gradient_functions(ny, nx, dy, dx):
                                                     var[:-1, -2] +\
                                                     var[1:, -2]
                                                    )/(4*dx))
+        #corner points
+        dvar_dx_ns = dvar_dx_ns.at[0,  0].set(( 2*var[0,  0])/(4*dx))
+        dvar_dx_ns = dvar_dx_ns.at[-1, 0].set(( 2*var[-1, 0])/(4*dx))
+        dvar_dx_ns = dvar_dx_ns.at[0, -1].set((-2*var[0, -1])/(4*dx))
+        dvar_dx_ns = dvar_dx_ns.at[-1,-1].set((-2*var[-1,-1])/(4*dx))
+        
         #due to rbcs, ddx_ns is 0 on upper and lower boundaries
 
         return dvar_dx_ns, dvar_dy_ns
@@ -299,12 +314,12 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, n_iterations):
 
     coords = jnp.stack([
                     jnp.concatenate(
-                                [i_coordinate_sets,    i_coordinate_sets,\
-                                 i_coordinate_sets+nr, i_coordinate_sets+nr]
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
                                    ),\
                     jnp.concatenate(
-                                [j_coordinate_sets, j_coordinate_sets+nc,\
-                                 j_coordinate_sets, j_coordinate_sets+nc]
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
                                    )
                        ])
 
@@ -324,6 +339,8 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, n_iterations):
         v_1d = v_trial.copy().flatten()
         h_1d = h.flatten()
 
+        residual = jnp.inf
+
         for i in range(n_iterations):
 
             mu = new_viscosity(u_1d, v_1d)
@@ -333,8 +350,25 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, n_iterations):
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
+            jac = jnp.zeros((2*ny*nx, 2*ny*nx))
+            jac = jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            #t = 2*nr*nc
+            #print(jac[:int(t/2), :int(t/2)])
+            #print(jac[int(t/2+1):t :int(t/2)])
+            #print(jac[:int(t/2), int(t/2+1):int(t)])
+            #print(jac[int(t/2+1):int(t), int(t/2+1):int(t)])
+            #raise
+            #print(nz_jac_values.shape)
+            #print(jac)
+            #raise
+
             rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu))
-            
+      
+            old_residual = residual
+            residual = jnp.max(jnp.abs(-rhs))
+
+            print(old_residual/residual)
+
             du = solve_petsc_sparse(nz_jac_values,\
                                     coords,\
                                     (nr*nc*2, nr*nc*2),\
@@ -344,9 +378,9 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, n_iterations):
                                     precondition_only=False)
 
             u_1d = u_1d+du[:(ny*nx)]
-            v_1d = v_1d+du[(ny*nx+1):]
+            v_1d = v_1d+du[(ny*nx):]
 
-        return u.reshape((ny, nx)), v.reshape((ny, nx))
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
     return solver
 
@@ -371,7 +405,7 @@ lx = 100_000
 ly = 200_000
 
 #nr, nc = 64, 64
-nr, nc = 12, 6
+nr, nc = 100, 50
 
 
 x = jnp.linspace(0, lx, nc)
@@ -390,9 +424,19 @@ mucoef = jnp.ones_like(thk)
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
-n_iterations = 5
+n_iterations = 30
 
 solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, n_iterations)
 
 u_out, v_out = solver(u_init, v_init, thk)
+
+
+plt.imshow(u_out*c.S_PER_YEAR)
+plt.colorbar()
+plt.show()
+
+plt.plot((u_out*c.S_PER_YEAR)[:,25])
+plt.show()
+
+
 
