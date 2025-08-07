@@ -34,8 +34,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
-np.set_printoptions(precision=1, suppress=False, linewidth=np.inf, threshold=np.inf)
-
+np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
 
 
 def solve_petsc_sparse(values, coordinates, jac_shape,\
@@ -60,7 +59,7 @@ def solve_petsc_sparse(values, coordinates, jac_shape,\
     opts = PETSc.Options()
     opts['ksp_max_it'] = 20
     opts['ksp_monitor'] = None
-    opts['ksp_rtol'] = 1e-10
+    opts['ksp_rtol'] = 1e-20
     
     # Create a linear solver
     ksp = PETSc.KSP().create()
@@ -119,150 +118,120 @@ def interp_cc_to_fc_function(ny, nx):
     return interp_cc_to_fc
 
 
-def cc_vel_gradient_function(ny, nx, dy, dx):
+def cc_gradient_function(dy, dx):
 
-    def cc_vel_gradient(var, bcs="dirichlet"):
-        dvar_dx = jnp.zeros((ny, nx))
-        dvar_dy = jnp.zeros((ny, nx))
-        
-        dvar_dx = dvar_dx.at[:, 1:-1].set((0.5/dx) * (var[:,2:] - var[:,:-2]))
-        dvar_dx = dvar_dx.at[:, 0].set((0.5/dx) * (var[:, 1] + var[:, 0])) #using dirichlet bc
-        dvar_dx = dvar_dx.at[:,-1].set((0.5/dx) * (var[:,-1] - var[:,-2])) #extrapolating u over cf
-        
-        dvar_dy = dvar_dy.at[1:-1, :].set((0.5/dy) * (var[:-2,:] - var[2:,:]))
-        dvar_dy = dvar_dy.at[0, :].set((0.5/dy) * (-var[0, :] - var[1, :]))
-        dvar_dy = dvar_dy.at[-1,:].set((0.5/dy) * (var[-2, :] + var[-1,:]))
+    def cc_gradient(var):
+
+        dvar_dx = (0.5/dx) * (var[1:-1,2:] - var[1:-1,:-2])
+        dvar_dy = (0.5/dy) * (var[:-2,1:-1] - var[2:,1:-1])
 
         return dvar_dx, dvar_dy
 
-    return cc_vel_gradient
-
-def cc_s_gradient_function(ny, nx, dy, dx):
-
-    def cc_s_gradient(var, bcs="neuman"):
-        dvar_dx = jnp.zeros((ny, nx))
-        dvar_dy = jnp.zeros((ny, nx))
-        
-        dvar_dx = dvar_dx.at[:, 1:-1].set((0.5/dx) * (var[:,2:] - var[:,:-2]))
-        dvar_dx = dvar_dx.at[:, 0].set((0.5/dx) * (var[:, 1] - var[:, 0])) #using neuman bc
-        dvar_dx = dvar_dx.at[:,-1].set((0.5/dx) * (-var[:,-2]))
-        
-        dvar_dy = dvar_dy.at[1:-1, :].set((0.5/dy) * (var[:-2,:] - var[2:,:]))
-        dvar_dy = dvar_dy.at[0, :].set((0.5/dy) * (var[0, :] - var[1, :])) #using neuman bc
-        dvar_dy = dvar_dy.at[-1,:].set((0.5/dy) * (var[-2,:] - var[-1,:])) #using neuman bc
-
-        return dvar_dx, dvar_dy
-
-    return cc_s_gradient
+    return cc_gradient
 
 
-def fc_gradient_functions(ny, nx, dy, dx):
+def fc_gradient_functions(dy, dx):
 
     def ew_face_gradient(var):
-        dvar_dx_ew = jnp.zeros((ny, nx+1))
-        dvar_dy_ew = jnp.zeros((ny, nx+1))
-
-
-        dvar_dx_ew = dvar_dx_ew.at[:, 1:-1].set((var[:,1:]-var[:,:-1])/dx)
-        dvar_dx_ew = dvar_dx_ew.at[:, 0].set( 2*var[:, 0]/dx)
-        dvar_dx_ew = dvar_dx_ew.at[:,-1].set(-2*var[:,-1]/dx)
-
-        #internals
-        dvar_dy_ew = dvar_dy_ew.at[1:-1, 1:-1].set((var[:-2, 1:]  +\
-                                                    var[:-2, :-1] -\
-                                                    var[2:, :-1]  -\
-                                                    var[2:, 1:]
-                                                   )/(4*dy))
-        #upper and lower boundaries
-        dvar_dy_ew = dvar_dy_ew.at[0, 1:-1].set(  -(var[0, 1:]  +\
-                                                    var[0, :-1] +\
-                                                    var[1, 1:]  +\
-                                                    var[1, :-1]
-                                                   )/(4*dy))
-        dvar_dy_ew = dvar_dy_ew.at[-1, 1:-1].set(  (var[-2, 1:]  +\
-                                                    var[-2, :-1] +\
-                                                    var[-1, 1:]  +\
-                                                    var[-1, :-1]
-                                                   )/(4*dy))
-        #corner points
-        dvar_dy_ew = dvar_dy_ew.at[0,  0].set(-2*var[0,  0]/(4*dy))
-        dvar_dy_ew = dvar_dy_ew.at[0, -1].set(-2*var[0, -1]/(4*dy))
-        dvar_dy_ew = dvar_dy_ew.at[-1, 0].set( 2*var[-1, 0]/(4*dy))
-        dvar_dy_ew = dvar_dy_ew.at[-1,-1].set( 2*var[-1,-1]/(4*dy))
-    
-        #due to dirichlet bcs, dvar_dy_ew is 0 on left and right boundaries
-
-        return dvar_dx_ew, dvar_dy_ew
-
-
-    def ns_face_gradient(var):
-        dvar_dx_ns = jnp.zeros((ny+1, nx))
-        dvar_dy_ns = jnp.zeros((ny+1, nx))
-
-        dvar_dy_ns = dvar_dy_ns.at[1:-1,:].set((var[:-1,:]-var[1:,:])/dy)
-        dvar_dy_ns = dvar_dy_ns.at[0, :].set(-2*var[0, :]/dy)
-        dvar_dy_ns = dvar_dy_ns.at[-1,:].set( 2*var[-1,:]/dy)
-
-        #internals
-        dvar_dx_ns = dvar_dx_ns.at[1:-1, 1:-1].set((var[:-1, 2:] +\
-                                                    var[1:,  2:] -\
-                                                    var[:-1,:-2] -\
-                                                    var[1:, :-2]
-                                                   )/(4*dx))
-        #left and right boundaries
-        dvar_dx_ns = dvar_dx_ns.at[1:-1, 0].set(   (var[:-1, 1]  +\
-                                                    var[1:,  1]  +\
-                                                    var[:-1, 0]  +\
-                                                    var[1:,  0]
-                                                   )/(4*dx))
-        dvar_dx_ns = dvar_dx_ns.at[1:-1, -1].set( -(var[:-1, -1] +\
-                                                    var[1:,  -1] +\
-                                                    var[:-1, -2] +\
-                                                    var[1:,  -2]
-                                                   )/(4*dx))
-        #dvar_dx_ns = dvar_dx_ns.at[1:-1, -1].set(  (var[:-1, -1] +\
-        #                                            var[1:,  -1] -\
-        #                                            var[:-1, -2] -\
-        #                                            var[1:,  -2]
-        #                                           )/(4*dx))
-        #corner points
-        dvar_dx_ns = dvar_dx_ns.at[0,  0].set(( 2*var[0,  0])/(4*dx))
-        dvar_dx_ns = dvar_dx_ns.at[-1, 0].set(( 2*var[-1, 0])/(4*dx))
-        dvar_dx_ns = dvar_dx_ns.at[0, -1].set((-2*var[0, -1])/(4*dx))
-        dvar_dx_ns = dvar_dx_ns.at[-1,-1].set((-2*var[-1,-1])/(4*dx))
-        #dvar_dx_ns = dvar_dx_ns.at[0, -1].set((0)/(4*dx))
-        #dvar_dx_ns = dvar_dx_ns.at[-1,-1].set((0)/(4*dx)) #I'm not sure how it could be any different!
         
-        #due to dbcs, ddx_ns is 0 on upper and lower boundaries
+        dvar_dx_ew = (var[1:-1, 1:]-var[1:-1, :-1])/dx
 
+        dvar_dy_ew = (var[:-2, 1:] + var[:-2, :-1] - var[2:, 1:] - var[2:, :-1])/(4*dy)
+        
+        return dvar_dx_ew, dvar_dy_ew
+    
+    def ns_face_gradient(var):
+        
+        dvar_dy_ns = (var[1:, 1:-1]-var[:-1, 1:-1])/dy
+
+        dvar_dx_ns = (var[:-1, 2:] + var[1:, 2:] - var[:-1, :-2] - var[1:, :-2])/(4*dx)
+        
         return dvar_dx_ns, dvar_dy_ns
-
     
     return ew_face_gradient, ns_face_gradient
 
 
-def compute_u_v_residuals_function(ny, nx, dy, dx):
+def add_ghost_cells_fcts(ny, nx):
 
-    interp_cc_to_fc = interp_cc_to_fc_function(ny, nx)
-    ew_gradient, ns_gradient = fc_gradient_functions(ny, nx, dy, dx)
-    cc_s_gradient = cc_s_gradient_function(ny, nx, dy, dx)
+    def add_reflection_ghost_cells(u_int, v_int):
+
+        u = jnp.zeros((ny+2, nx+2))
+        u = u.at[1:-1,1:-1].set(u_int)
+        #edges
+        u = u.at[0, 1:-1].set( u[1, 1:-1])
+        u = u.at[-1,1:-1].set( u[-2,1:-1])
+        u = u.at[1:-1, 0].set(-u[1:-1, 1])
+        u = u.at[1:-1,-1].set(-u[1:-1,-2])
+        #corner points
+        u = u.at[0,0].set(-u[1,1])
+        u = u.at[-1,-1].set(-u[-2,-2])
+        u = u.at[-1,0].set(-u[-2,1])
+        u = u.at[0,-1].set(-u[1,-2])
+
+        
+        v = jnp.zeros((ny+2, nx+2))
+        v = v.at[1:-1,1:-1].set(v_int)
+        #edges
+        v = v.at[0, 1:-1].set(-v[1, 1:-1])
+        v = v.at[-1,1:-1].set(-v[-2,1:-1])
+        v = v.at[1:-1, 0].set( v[1:-1, 1])
+        v = v.at[1:-1,-1].set( v[1:-1,-2])
+        #corner points
+        v = v.at[0,0].set(-v[1,1])
+        v = v.at[-1,-1].set(-v[-2,-2])
+        v = v.at[-1,0].set(-v[-2,1])
+        v = v.at[0,-1].set(-v[1,-2])
+
+        return u, v
+
+    def add_continuation_ghost_cells(h_int):
+
+        h = jnp.zeros((ny+2, nx+2))
+        h = h.at[1:-1,1:-1].set(h_int)
+        #edges
+        h = h.at[0, 1:-1].set(h[1, 1:-1])
+        h = h.at[-1,1:-1].set(h[-2,1:-1])
+        h = h.at[1:-1, 0].set(h[1:-1, 1])
+        h = h.at[1:-1,-1].set(h[1:-1,-2])
+        #corner points
+        h = h.at[0,0].set(h[1,1])
+        h = h.at[-1,0].set(h[-2,1])
+        h = h.at[0,-1].set(h[1,-2])
+        h = h.at[-1,-1].set(h[-2,-2])
+
+        return h
+
+    return add_reflection_ghost_cells, add_continuation_ghost_cells
 
 
-    def compute_u_v_residuals(u_1d, v_1d, h_1d, mu_bar):
 
-        u = u_1d.reshape((ny, nx))
-        v = v_1d.reshape((ny, nx))
+def compute_u_v_residuals_function(ny, nx, dy, dx, \
+                                   interp_cc_to_fc,\
+                                   ew_gradient,\
+                                   ns_gradient,\
+                                   cc_gradient,\
+                                   add_rflc_ghost_cells,\
+                                   add_cont_ghost_cells):
+
+    def compute_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta):
+
+        u, v = add_rflc_ghost_cells(u_1d.reshape((ny,nx)),\
+                                    v_1d.reshape((ny,nx)))
+
+        u_alive = u[1:-1, 1:-1]
+        v_alive = v[1:-1, 1:-1]
         h = h_1d.reshape((ny, nx))
 
         s_gnd = h + b #b is globally defined
-        s_flt = h*(1-c.RHO_I/c.RHO_W)
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
         s = jnp.maximum(s_gnd, s_flt)
 
+        s = add_cont_ghost_cells(s)
 
         #volume_term
-        dsdx, dsdy = cc_s_gradient(s)
-        volume_x = -c.RHO_I * c.g * h * dsdx
-        volume_y = -c.RHO_I * c.g * h * dsdy
+        dsdx, dsdy = cc_gradient(s)
+        volume_x = -beta * u_alive - c.RHO_I * c.g * h * dsdx
+        volume_y = -beta * v_alive - c.RHO_I * c.g * h * dsdy
 
 
         #momentum_term
@@ -277,22 +246,22 @@ def compute_u_v_residuals_function(ny, nx, dy, dx):
         #dvdx_cc, dvdy_cc = cc_gradient(v)
 
         #interpolate things onto face-cenres
-        mu_ew, mu_ns = interp_cc_to_fc(mu_bar)
-        #the only reason for doing the above rather than having mu on cell centres is
-        #that it makes DIVA a little easier when we come to it. Should only incur a
-        #second-order error.
         h_ew, h_ns = interp_cc_to_fc(h)
 
 
-        #to account for calving front boundary condition:
-        #NOTE: this is after driving term has been calculated
-        mu_ew = mu_ew.at[:, -1].set(0)
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
-
+        #mu_ns = mu_ns*0
+        
         visc_x = mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
                  mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
                  mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
-                 mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx
+                 mu_ns[1:,:]*h_ns[1:,:]*(dudy_ns[1:,:] + dvdx_ns[1:,:])*0.5*dx
 
 
         visc_y = mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
@@ -311,11 +280,22 @@ def compute_u_v_residuals_function(ny, nx, dy, dx):
 
 
 
-def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, n_iterations):
-    cc_vel_gradient = cc_vel_gradient_function(ny, nx, dy, dx)
-    
-    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx)
+def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
 
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+
+    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells)
+
+    mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
 
     #############
     #setting up bvs and coords for a single block of the jacobian
@@ -352,45 +332,76 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, n_iterations):
                        ])
 
     
+    def new_viscosity_fc(u, v):
+        u, v = add_rflc_ghost_cells(u.reshape((ny, nx)), v.reshape((ny, nx)))
+
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1)),\
+               B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
+
+
     def new_viscosity(u, v):
-        #all these things are 2d and returns a 2d array
-        
-        dudx, dudy = cc_vel_gradient(u.reshape((ny, nx)))
-        dvdx, dvdy = cc_vel_gradient(v.reshape((ny, nx)))
+        dudx, dudy = cc_gradient(u)
+        dvdx, dvdy = cc_gradient(v)
 
         return B * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
                     0.25*(dudy+dvdx)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
 
 
+    def new_beta(u, v):
+        return C.copy()
+
+
     def solver(u_trial, v_trial, h):
-        u_1d = u_trial.copy().flatten()
-        v_1d = v_trial.copy().flatten()
-        h_1d = h.flatten()
+        u_1d = u_trial.copy().reshape(-1)
+        v_1d = v_trial.copy().reshape(-1)
+        h_1d = h.reshape(-1)
 
         residual = jnp.inf
 
         for i in range(n_iterations):
 
-            mu = new_viscosity(u_1d, v_1d)
+            mu_ew, mu_ns = new_viscosity_fc(u_1d, v_1d)
 
-            dJu_du, dJu_dv, dJv_du, dJv_dv = sparse_jacrev(get_u_v_residuals, (u_1d, v_1d, h_1d, mu))
+            beta_eff = new_beta(u_1d, v_1d)
+
+            dJu_du, dJu_dv, dJv_du, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+                                            (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
 
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
-            jac = jnp.zeros((2*ny*nx, 2*ny*nx))
-            jac = jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            
+            ###FOR DEBUGGING
+            #jac = jnp.zeros((2*ny*nx, 2*ny*nx))
+            #jac = jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
             #t = 2*nr*nc
-            #print(jac[:int(t/2), :int(t/2)])
-            #print(jac[int(t/2+1):t :int(t/2)])
-            #print(jac[:int(t/2), int(t/2+1):int(t)])
-            #print(jac[int(t/2+1):int(t), int(t/2+1):int(t)])
+            #np.set_printoptions(suppress=True)
+            #print("dJ_u/du")
+            #print(np.array(jac[:int(t/2), :int(t/2)]))
+            #print("-----")
+            #print("dJ_u/dv")
+            #print(np.array(jac[int(t/2+1):, :int(t/2)]))
+            #print("-----")
+            #print("dJ_v/du")
+            #print(np.array(jac[:int(t/2), int(t/2+1):int(t)]))
+            #print("-----")
+            #print("dJ_v/dv")
+            #print(np.array(jac[int(t/2+1):int(t), int(t/2+1):int(t)]))
+            #print("-----")
+            #print("-----")
             #raise
-            #print(nz_jac_values.shape)
-            #print(jac)
-            #raise
+            ##print(nz_jac_values.shape)
+            ##print(jac)
+            ##################
 
-            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu))
+            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
       
             old_residual = residual
             residual = jnp.max(jnp.abs(-rhs))
@@ -431,10 +442,10 @@ B = 2 * (A**(-1/3))
 epsilon_visc = 3e-13
 
 lx = 100_000
-ly = 150_000
+ly = 100_000
 
 #nr, nc = 64, 64
-nr, nc = 90, 60
+nr, nc = 5, 5
 
 
 x = jnp.linspace(0, lx, nc)
@@ -445,17 +456,30 @@ delta_y = y[1]-y[0]
 
 
 thk = jnp.zeros((nr, nc))+500
+thk = thk.at[:, -1:].set(0)
+
 
 b = jnp.zeros_like(thk)-600
 
 mucoef = jnp.ones_like(thk)
 
+C = jnp.zeros_like(thk)
+C = C.at[:1, :].set(1e16)
+C = C.at[:, :1].set(1e16)
+C = C.at[-1:,:].set(1e16)
+C = jnp.where(thk==0, 1, C)
+
+
+#plt.imshow(jnp.log10(C))
+#plt.show()
+
+
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
-n_iterations = 5
+n_iterations = 10
 
-solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, n_iterations)
+solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, C, n_iterations)
 
 u_out, v_out = solver(u_init, v_init, thk)
 
@@ -469,8 +493,8 @@ plt.imshow(u_out*c.S_PER_YEAR)
 plt.colorbar()
 plt.show()
 
-plt.plot((u_out*c.S_PER_YEAR)[:,40])
-plt.show()
+#plt.plot((u_out*c.S_PER_YEAR)[:,40])
+#plt.show()
 
 
 

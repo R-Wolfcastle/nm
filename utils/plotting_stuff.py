@@ -26,7 +26,10 @@ def show_vel_field(u, v, spacing=1, cmap='Spectral_r'):
         cmap (str): colormap to use for magnitude.
     """
     assert u.shape == v.shape, "u and v must have the same shape"
-    
+   
+    u = jnp.flipud(u)
+    v = jnp.flipud(v)
+
     magnitude = np.sqrt(u**2 + v**2)
     ny, nx = u.shape
 
