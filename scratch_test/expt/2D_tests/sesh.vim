@@ -2,19 +2,19 @@ let SessionLoad = 1
 if &cp | set nocp | endif
 let s:cpo_save=&cpo
 set cpo&vim
-inoremap <silent> <Plug>(table-mode-tableize) |:call tablemode#TableizeInsertMode()a
-imap <M-Bslash> <Plug>(codeium-complete)
-imap <M-[> <Plug>(codeium-previous)
-imap <M-]> <Plug>(codeium-next-or-complete)
-imap <Plug>(codeium-complete) <Cmd>call codeium#Complete()
-imap <Plug>(codeium-previous) <Cmd>call codeium#CycleCompletions(-1)
-imap <Plug>(codeium-next-or-complete) <Cmd>call codeium#CycleOrComplete()
-imap <Plug>(codeium-next) <Cmd>call codeium#CycleCompletions(1)
 imap <Plug>(codeium-dismiss) <Cmd>call codeium#Clear()
+imap <Plug>(codeium-next) <Cmd>call codeium#CycleCompletions(1)
+imap <Plug>(codeium-next-or-complete) <Cmd>call codeium#CycleOrComplete()
+imap <Plug>(codeium-previous) <Cmd>call codeium#CycleCompletions(-1)
+imap <Plug>(codeium-complete) <Cmd>call codeium#Complete()
+imap <M-]> <Plug>(codeium-next-or-complete)
+imap <M-[> <Plug>(codeium-previous)
+imap <M-Bslash> <Plug>(codeium-complete)
+inoremap <silent> <Plug>(table-mode-tableize) |:call tablemode#TableizeInsertMode()a
 map! <D-v> *
-imap Ü <Plug>(codeium-complete)
-imap Û <Plug>(codeium-previous)
 imap Ý <Plug>(codeium-next-or-complete)
+imap Û <Plug>(codeium-previous)
+imap Ü <Plug>(codeium-complete)
 xmap \T <Plug>(table-mode-tableize-delimiter)
 xmap \tt <Plug>(table-mode-tableize)
 nmap \tt <Plug>(table-mode-tableize)
@@ -75,14 +75,15 @@ if &shortmess =~ 'A'
 else
   set shortmess=aoO
 endif
-badd +1 ice_shelf.py
+badd +87 ice_shelf.py
 badd +75 sparse_poisson.py
-badd +0 ../DIVA/mom_only.py
+badd +1 ../DIVA/mom_only.py
+badd +0 ice_shelf_si_units.py
 argglobal
 %argdel
 $argadd ice_shelf.py
 $argadd sparse_poisson.py
-edit ice_shelf.py
+edit ice_shelf_si_units.py
 let s:save_splitbelow = &splitbelow
 let s:save_splitright = &splitright
 set splitbelow splitright
@@ -104,11 +105,13 @@ set winheight=1
 set winminwidth=0
 set winwidth=1
 exe 'vert 1resize ' . ((&columns * 79 + 79) / 158)
-exe '2resize ' . ((&lines * 21 + 22) / 45)
+exe '2resize ' . ((&lines * 23 + 24) / 48)
 exe 'vert 2resize ' . ((&columns * 78 + 79) / 158)
-exe '3resize ' . ((&lines * 21 + 22) / 45)
+exe '3resize ' . ((&lines * 22 + 24) / 48)
 exe 'vert 3resize ' . ((&columns * 78 + 79) / 158)
 argglobal
+if bufexists(fnamemodify("ice_shelf_si_units.py", ":p")) | buffer ice_shelf_si_units.py | else | edit ice_shelf_si_units.py | endif
+balt ice_shelf.py
 setlocal autoindent
 setlocal backupcopy=
 setlocal nobinary
@@ -234,12 +237,12 @@ setlocal wrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 87 - ((26 * winheight(0) + 21) / 43)
+let s:l = 1 - ((0 * winheight(0) + 23) / 46)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 87
-normal! 046|
+keepjumps 1
+normal! 0
 wincmd w
 argglobal
 2argu
@@ -370,7 +373,7 @@ setlocal wrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 47 - ((7 * winheight(0) + 10) / 21)
+let s:l = 47 - ((8 * winheight(0) + 11) / 23)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
@@ -505,7 +508,7 @@ setlocal wrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 75 - ((0 * winheight(0) + 10) / 21)
+let s:l = 75 - ((9 * winheight(0) + 11) / 22)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
@@ -513,9 +516,9 @@ keepjumps 75
 normal! 0
 wincmd w
 exe 'vert 1resize ' . ((&columns * 79 + 79) / 158)
-exe '2resize ' . ((&lines * 21 + 22) / 45)
+exe '2resize ' . ((&lines * 23 + 24) / 48)
 exe 'vert 2resize ' . ((&columns * 78 + 79) / 158)
-exe '3resize ' . ((&lines * 21 + 22) / 45)
+exe '3resize ' . ((&lines * 22 + 24) / 48)
 exe 'vert 3resize ' . ((&columns * 78 + 79) / 158)
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0

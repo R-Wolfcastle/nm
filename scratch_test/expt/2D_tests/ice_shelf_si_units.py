@@ -104,7 +104,7 @@ def interp_cc_to_fc_function(ny, nx):
     def interp_cc_to_fc(var):
         
         var_ew = jnp.zeros((ny, nx+1))
-        var_ew = var_ew.at[:, 1:-1].set(0.5*(var[:, 1:]+var[:, -1:]))
+        var_ew = var_ew.at[:, 1:-1].set(0.5*(var[:, 1:]+var[:, :-1]))
         var_ew = var_ew.at[:, 0].set(var[:, 0])
         var_ew = var_ew.at[:, -1].set(var[:, -1])
 
@@ -142,7 +142,7 @@ def fc_gradient_functions(dy, dx):
     
     def ns_face_gradient(var):
         
-        dvar_dy_ns = (var[1:, 1:-1]-var[:-1, 1:-1])/dy
+        dvar_dy_ns = (var[:-1, 1:-1]-var[1:, 1:-1])/dy
 
         dvar_dx_ns = (var[:-1, 2:] + var[1:, 2:] - var[:-1, :-2] - var[1:, :-2])/(4*dx)
         
@@ -268,6 +268,19 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
                  mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
                  mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
                  mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        
+        ##removing the thickness makes speeds look better!
+        #visc_x = mu_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+        #         mu_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+        #         mu_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+        #         mu_ns[1:, :]*(dudy_ns[1:,:] + dvdx_ns[1:,:])*0.5*dx
+
+
+        #visc_y = mu_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+        #         mu_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+        #         mu_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+        #         mu_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
 
 
         x_mom_residual = visc_x + volume_x
@@ -302,7 +315,7 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
-    j_coordinate_sets = jnp.tile(jnp.arange(nr*nc), len(basis_vectors))
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
     mask = (i_coordinate_sets>=0)
 
 
@@ -411,11 +424,11 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
 
             du = solve_petsc_sparse(nz_jac_values,\
                                     coords,\
-                                    (nr*nc*2, nr*nc*2),\
+                                    (ny*nx*2, ny*nx*2),\
                                     rhs,\
                                     ksp_type="bcgs",\
                                     preconditioner="hypre",\
-                                    precondition_only=True)
+                                    precondition_only=False)
 
             u_1d = u_1d+du[:(ny*nx)]
             v_1d = v_1d+du[(ny*nx):]
@@ -435,17 +448,18 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
 
 
 
-A = 5e-25
+#A = 5e-25
+A = c.A_COLD
 B = 2 * (A**(-1/3))
 
 #epsilon_visc = 1e-5/(3.15e7)
 epsilon_visc = 3e-13
 
 lx = 100_000
-ly = 100_000
+ly = 180_000
 
 #nr, nc = 64, 64
-nr, nc = 5, 5
+nr, nc = 90, 50
 
 
 x = jnp.linspace(0, lx, nc)
@@ -455,7 +469,7 @@ delta_x = x[1]-x[0]
 delta_y = y[1]-y[0]
 
 
-thk = jnp.zeros((nr, nc))+500
+thk = jnp.zeros((nr, nc))+1000
 thk = thk.at[:, -1:].set(0)
 
 
@@ -477,7 +491,7 @@ C = jnp.where(thk==0, 1, C)
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
-n_iterations = 2
+n_iterations = 7
 
 solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, C, n_iterations)
 
