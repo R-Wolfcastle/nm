@@ -122,8 +122,8 @@ def cc_gradient_function(dy, dx):
 
     def cc_gradient(var):
 
-        dvar_dx = (0.5/dx) * (var[1:-1,2:] - var[1:-1,:-2])
-        dvar_dy = (0.5/dy) * (var[:-2,1:-1] - var[2:,1:-1])
+        dvar_dx = (0.5/dx) * (var[1:-1, 2:] - var[1:-1,:-2])
+        dvar_dy = (0.5/dy) * (var[:-2,1:-1] - var[2:, 1:-1])
 
         return dvar_dx, dvar_dy
 
@@ -134,7 +134,7 @@ def fc_gradient_functions(dy, dx):
 
     def ew_face_gradient(var):
         
-        dvar_dx_ew = (var[1:-1, 1:]-var[1:-1, :-1])/dx
+        dvar_dx_ew = (var[1:-1, 1:] - var[1:-1, :-1])/dx
 
         dvar_dy_ew = (var[:-2, 1:] + var[:-2, :-1] - var[2:, 1:] - var[2:, :-1])/(4*dy)
         
@@ -203,6 +203,13 @@ def add_ghost_cells_fcts(ny, nx):
 
     return add_reflection_ghost_cells, add_continuation_ghost_cells
 
+def extrapolate_over_cf_function():
+
+    def extrapolate_over_cf():
+
+        return u, v
+
+    return add_caving_front_ghosts
 
 
 def compute_u_v_residuals_function(ny, nx, dy, dx, \
@@ -213,6 +220,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
                                    add_rflc_ghost_cells,\
                                    add_cont_ghost_cells):
 
+    
     def compute_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta):
 
         u, v = add_rflc_ghost_cells(u_1d.reshape((ny,nx)),\
@@ -230,9 +238,14 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 
         #volume_term
         dsdx, dsdy = cc_gradient(s)
+
         volume_x = -beta * u_alive - c.RHO_I * c.g * h * dsdx
         volume_y = -beta * v_alive - c.RHO_I * c.g * h * dsdy
 
+        
+        #TODO: set bespoke conditions at the front for dvel_dx! otherwise
+        #over-estimating the viscosity on the faces near the front!
+        #u, v = extrapolate_over_cf(u, v)
 
         #momentum_term
         #various face-centred derivatives
@@ -256,18 +269,20 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
         mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
-        #mu_ns = mu_ns*0
-        
-        visc_x = mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
-                 mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
-                 mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
-                 mu_ns[1:,:]*h_ns[1:,:]*(dudy_ns[1:,:] + dvdx_ns[1:,:])*0.5*dx
+
+        #mu_ns = mu_ns.at[:, -2].set(0) #screws everything up for some reason!
 
 
-        visc_y = mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
-                 mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
-                 mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
-                 mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
         
         ##removing the thickness makes speeds look better!
         #visc_x = mu_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
@@ -353,10 +368,18 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
         dudx_ns, dudy_ns = ns_gradient(u)
         dvdx_ns, dvdy_ns = ns_gradient(v)
 
-        return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1)),\
-               B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
+        ##This is right I think, but I don't get convergence if i square epsilon_visc...
+        #return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+        #            0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)),\
+        #       B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+        #            0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+        #            0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1)),\
+        #       B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+        #            0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
+
+        return jnp.zeros_like(mucoef_ew) + 1e12, jnp.zeros_like(mucoef_ns) + 1e12
 
 
     def new_viscosity(u, v):
@@ -364,7 +387,7 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
         dvdx, dvdy = cc_gradient(v)
 
         return B * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
-                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
+                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
 
     def new_beta(u, v):
@@ -382,9 +405,34 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
 
             mu_ew, mu_ns = new_viscosity_fc(u_1d, v_1d)
 
+            ## --- DEBUG: Check magnitudes in SSA balance ---
+            ## Compute strain rates in cell centers
+            #dudx_cc, dudy_cc = cc_gradient(u_1d.reshape((ny, nx)))
+            #dvdx_cc, dvdy_cc = cc_gradient(v_1d.reshape((ny, nx)))
+            #eps_xx = dudx_cc
+            #eps_yy = dvdy_cc
+            #eps_xy = 0.5 * (dudy_cc + dvdx_cc)
+            #
+            ## Effective strain rate squared
+            #eps_sq = eps_xx**2 + eps_yy**2 + 2*eps_xy**2
+            #
+            #print("max strain rate [1/s]:", float(jnp.max(jnp.sqrt(eps_sq))))
+            #print("min strain rate [1/s]:", float(jnp.min(jnp.sqrt(eps_sq))))
+            #
+            ## Check viscosities (mu_ew and mu_ns from new_viscosity_fc)
+            #print("max mu_ew [Pa s]:", float(jnp.max(mu_ew)))
+            #print("min mu_ew [Pa s]:", float(jnp.min(mu_ew)))
+            #print("max mu_ns [Pa s]:", float(jnp.max(mu_ns)))
+            #print("min mu_ns [Pa s]:", float(jnp.min(mu_ns)))
+            
+
             beta_eff = new_beta(u_1d, v_1d)
 
-            dJu_du, dJu_dv, dJv_du, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+            #dJu_du, dJu_dv, dJv_du, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+            #                                (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
+            ##pooosssibly had these the wrong way round and the below is correct...
+            #TODO: CHECK!!!!!!!!!
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
                                             (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
 
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
@@ -410,8 +458,8 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
             #print("-----")
             #print("-----")
             #raise
-            ##print(nz_jac_values.shape)
-            ##print(jac)
+            ###print(nz_jac_values.shape)
+            ###print(jac)
             ##################
 
             rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
@@ -419,8 +467,12 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
             old_residual = residual
             residual = jnp.max(jnp.abs(-rhs))
             
-            print(residual)
-            print(old_residual/residual)
+            if i==0:
+                print("Initial residual: {}".format(residual))
+            else:
+                print("residual: {}".format(residual))
+                print("Residual reduction factor: {}".format(old_residual/residual))
+            print("------")
 
             du = solve_petsc_sparse(nz_jac_values,\
                                     coords,\
@@ -432,6 +484,10 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
 
             u_1d = u_1d+du[:(ny*nx)]
             v_1d = v_1d+du[(ny*nx):]
+
+        res_final = jnp.max(jnp.abs(jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))))
+        print("----------")
+        print("Final residual: {}".format(res_final))
 
         return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
@@ -450,16 +506,14 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
 
 #A = 5e-25
 A = c.A_COLD
-B = 2 * (A**(-1/3))
+B = 0.5 * (A**(-1/c.GLEN_N))
 
-#epsilon_visc = 1e-5/(3.15e7)
-epsilon_visc = 3e-13
 
 lx = 100_000
-ly = 180_000
+ly = 100_000
 
 #nr, nc = 64, 64
-nr, nc = 90, 50
+nr, nc = 32, 32
 
 
 x = jnp.linspace(0, lx, nc)
@@ -491,7 +545,7 @@ C = jnp.where(thk==0, 1, C)
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
-n_iterations = 7
+n_iterations = 1
 
 solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, C, n_iterations)
 

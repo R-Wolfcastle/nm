@@ -33,4 +33,5 @@ ICE_PRESSURE_MPA_PER_KM = RHO_I * g / 1e6  # ~9.0 MPa per km of ice
 PA_PER_BAR = 1.0e5             # Pascal per bar
 
 # Misc additions
-EPSILON_VISC = 1e-13
+EPSILON_VISC = 1e-5/S_PER_YEAR
+#EPSILON_VISC = 1e-13
