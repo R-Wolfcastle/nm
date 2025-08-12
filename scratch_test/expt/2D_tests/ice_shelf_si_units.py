@@ -239,10 +239,9 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         #volume_term
         dsdx, dsdy = cc_gradient(s)
 
-        volume_x = -beta * u_alive - c.RHO_I * c.g * h * dsdx
-        volume_y = -beta * v_alive - c.RHO_I * c.g * h * dsdy
+        volume_x = - (beta * u_alive + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v_alive + c.RHO_I * c.g * h * dsdy) * dy * dx
 
-        
         #TODO: set bespoke conditions at the front for dvel_dx! otherwise
         #over-estimating the viscosity on the faces near the front!
         #u, v = extrapolate_over_cf(u, v)
@@ -271,7 +270,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 
 
         #mu_ns = mu_ns.at[:, -2].set(0) #screws everything up for some reason!
-
+        #mu_ns = mu_ns*0
 
         visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
                  2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
@@ -304,7 +303,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 
         return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
 
-    return compute_u_v_residuals
+    return jax.jit(compute_u_v_residuals)
 
 
 
@@ -342,6 +341,7 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
                                                         2,
                                                         active_indices=(0,1)
                                                           )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
 
 
     i_coordinate_sets = i_coordinate_sets[mask]
@@ -368,20 +368,20 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
         dudx_ns, dudy_ns = ns_gradient(u)
         dvdx_ns, dvdy_ns = ns_gradient(v)
 
-        ##This is right I think, but I don't get convergence if i square epsilon_visc...
-        #return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-        #            0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)),\
-        #       B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-        #            0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        #This is right I think, but I don't get convergence if i square epsilon_visc...
+        return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)),\
+               B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         #return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
         #            0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1)),\
         #       B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
         #            0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
 
-        return jnp.zeros_like(mucoef_ew) + 1e12, jnp.zeros_like(mucoef_ns) + 1e12
+        #return jnp.zeros_like(mucoef_ew) + 1e12, jnp.zeros_like(mucoef_ns) + 1e12
 
-
+    @jax.jit
     def new_viscosity(u, v):
         dudx, dudy = cc_gradient(u)
         dvdx, dvdy = cc_gradient(v)
@@ -389,7 +389,7 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
         return B * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
                     0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-
+    @jax.jit
     def new_beta(u, v):
         return C.copy()
 
@@ -509,11 +509,20 @@ A = c.A_COLD
 B = 0.5 * (A**(-1/c.GLEN_N))
 
 
-lx = 100_000
-ly = 100_000
+lx = 150_000
+ly = 200_000
+
+resolution = 1000 #m
+
+nr = int(ly/resolution)
+nc = int(lx/resolution)
+
+lx = nr*resolution
+ly = nc*resolution
+
 
 #nr, nc = 64, 64
-nr, nc = 32, 32
+#nr, nc = 96*2, 64*2
 
 
 x = jnp.linspace(0, lx, nc)
@@ -522,10 +531,9 @@ y = jnp.linspace(0, ly, nr)
 delta_x = x[1]-x[0]
 delta_y = y[1]-y[0]
 
-
-thk = jnp.zeros((nr, nc))+1000
+thk_profile = 500# - 300*x/lx
+thk = jnp.zeros((nr, nc))+thk_profile
 thk = thk.at[:, -1:].set(0)
-
 
 b = jnp.zeros_like(thk)-600
 
@@ -545,7 +553,7 @@ C = jnp.where(thk==0, 1, C)
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
-n_iterations = 1
+n_iterations = 40
 
 solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, C, n_iterations)
 
