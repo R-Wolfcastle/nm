@@ -565,7 +565,7 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
 
 
 
-def make_misfit(u_obs, reg_param, solve_function):
+def make_misfit(u_obs, reg_param, solve):
 
     cc_gradient = cc_gradient_function(dy, dx)
 
