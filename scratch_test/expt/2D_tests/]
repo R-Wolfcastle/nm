@@ -628,9 +628,9 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
 
-def make_misfit_function(u_obs, v_obs, reg_param, solver):
+def make_misfit(u_obs, v_obs, reg_param, solver):
 
-    def misfit_function(mucoef_internal):
+    def misfit(mucoef_internal):
         u_mod, v_mod = solver(mucoef_internal)
 
         misfit = jnp.sum((u_obs-u_mod)**2 + (v_obs-v_mod)**2)
@@ -639,7 +639,7 @@ def make_misfit_function(u_obs, v_obs, reg_param, solver):
 
         return misfit + regularisation
 
-    return misfit_function
+    return misfit
 
 
 def gradient_descent_function(misfit_function, iterations=400, step_size=0.01):
@@ -709,33 +709,31 @@ v_init = jnp.zeros_like(thk)
 
 n_iterations = 10
 
+
+
 solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
                                                          C, n_iterations, u_init, v_init)
 
+u_out, v_out = solver(mucoef)
 
-misfit_fct = make_misfit_function(jnp.zeros_like(thk), jnp.zeros_like(thk), 0, solver)
-get_grad = jax.jacrev(misfit_fct)
-initial_guess = jnp.ones_like(thk)
-grad = get_grad(initial_guess)
-plt.imshow(grad)
 
-#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-#                                                         C, n_iterations, u_init, v_init)
-#
-#u_out, v_out = solver(mucoef)
-#
-#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
-#
-#plt.imshow(v_out*c.S_PER_YEAR)
-#plt.colorbar()
+
+
+
+
+
+show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+
+plt.imshow(v_out*c.S_PER_YEAR)
+plt.colorbar()
+plt.show()
+
+plt.imshow(u_out*c.S_PER_YEAR)
+plt.colorbar()
+plt.show()
+
+#plt.plot((u_out*c.S_PER_YEAR)[:,40])
 #plt.show()
-#
-#plt.imshow(u_out*c.S_PER_YEAR)
-#plt.colorbar()
-#plt.show()
-#
-##plt.plot((u_out*c.S_PER_YEAR)[:,40])
-##plt.show()
-#
-#
-#
+
+
+
