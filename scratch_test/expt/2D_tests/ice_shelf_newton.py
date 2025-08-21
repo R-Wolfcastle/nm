@@ -37,66 +37,100 @@ import matplotlib.cm as cm
 np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
 
 
-def solve_petsc_sparse(values, coordinates, jac_shape,\
-                       b, ksp_type='gmres', preconditioner='hypre',\
-                       precondition_only=False):
-    
+
+def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
+                                    ksp_type='gmres', preconditioner='hypre',\
+                                    precondition_only=False, monitor_ksp=False):
+
     comm = PETSc.COMM_WORLD
     size = comm.Get_size()
-
-    iptr, j, values = scipy_coo_to_csr(values, coordinates, jac_shape, return_decomposition=True)
-
-    #rows_local = int(jac_shape[0] / size)
-
-    #A = PETSc.Mat().createAIJ(size=jac_shape, csr=(iptr, j, values), bsize=[rows_local, jac_shape], comm=comm)
-    A = PETSc.Mat().createAIJ(size=jac_shape, csr=(iptr.astype(np.int32), j.astype(np.int32), values), comm=comm)
     
-    b = PETSc.Vec().createWithArray(b, comm=comm)
-    
-    x = b.duplicate()
-    
-    #set ksp iterations
-    opts = PETSc.Options()
-    opts['ksp_max_it'] = 20
-    opts['ksp_monitor'] = None
-    opts['ksp_rtol'] = 1e-20
-    
-    # Create a linear solver
-    ksp = PETSc.KSP().create()
-    ksp.setType(ksp_type)
+    def construct_ab(values, b, transpose):
+        if transpose:
+            coordinates= coordinates[::-1,:]
 
-    ksp.setOperators(A)
-    ksp.setFromOptions()
-    
-    if preconditioner is not None:
-        #assessing if preconditioner is doing anything:
-        #print((A*x - b).norm())
+        iptr, j, values = scipy_coo_to_csr(values, coordinates,\
+                                           jac_shape, return_decomposition=True)
+        #rows_local = int(jac_shape[0] / size)
 
-        if preconditioner == 'hypre':
-            pc = ksp.getPC()
-            pc.setType('hypre')
-            pc.setHYPREType('boomeramg')
+        A = PETSc.Mat().createAIJ(size=jac_shape, \
+                                  csr=(iptr.astype(np.int32), j.astype(np.int32), values),\
+                                  comm=comm)
+        
+        b = PETSc.Vec().createWithArray(b, comm=comm)
+        return A, b
+
+    
+    def create_solver_object(A):
+        
+        #set ksp iterations
+        opts = PETSc.Options()
+        opts['ksp_max_it'] = 20
+        if monitor_ksp:
+            opts['ksp_monitor'] = None
+        opts['ksp_rtol'] = 1e-20
+        
+        # Create a linear solver
+        ksp = PETSc.KSP().create()
+        ksp.setType(ksp_type)
+
+        ksp.setOperators(A)
+        ksp.setFromOptions()
+        
+        if preconditioner is not None:
+            #assessing if preconditioner is doing anything:
+            #print((A*x - b).norm())
+
+            if preconditioner == 'hypre':
+                pc = ksp.getPC()
+                pc.setType('hypre')
+                pc.setHYPREType('boomeramg')
+            else:
+                pc = ksp.getPC()
+                pc.setType(preconditioner)
+        
+            return ksp, pc
         else:
-            pc = ksp.getPC()
-            pc.setType(preconditioner)
-
-        #pc.apply(b, x)
-        #print((A*x - b).norm())
-        #raise
+            return ksp, None
 
 
-    if precondition_only:
-        pc.apply(b, x)
-    else:
-        ksp.solve(b, x)
+    @custom_vjp
+    def petsc_sparse_la_solver(values, b, transpose=False):
     
-    # Print the solution
-    #x.view()
-    
+        A, b = construct_ab(values, b, transpose)
+        x = b.duplicate()
+        
+        ksp, pc = create_solver_object(A)
 
-    x_jnp = jnp.array(x.getArray())
+        if precondition_only:
+            pc.apply(b, x)
+        else:
+            ksp.solve(b, x)
+        
+        x_jnp = jnp.array(x.getArray())
 
-    return x_jnp
+        return x_jnp
+
+    def la_solver_fwd(values, b):
+        solution = petsc_sparse_la_solver(values, b)
+        return solution, (values, b, solution)
+
+    def linear_solve_bwd(res, x_bar):
+        values, b, x = res
+
+        lambda_ = petsc_sparse_la_solver(values, -x_bar, transpose=True)
+
+        b_bar = -lambda_
+
+        #sparse version of jnp.outer(x,lambda_)
+        values_bar = x[coordinates[0]] * lambda_[coordinates[1]]
+
+        return values_bar, b_bar
+
+
+    return petsc_sparse_la_solver
+
+
 
 
 def interp_cc_to_fc_function(ny, nx):
@@ -213,6 +247,7 @@ def extrapolate_over_cf_function():
 
 
 def compute_u_v_residuals_function(ny, nx, dy, dx, \
+                                   mucoef_ew, mucoef_ns,\
                                    interp_cc_to_fc,\
                                    ew_gradient,\
                                    ns_gradient,\
@@ -221,7 +256,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
                                    add_cont_ghost_cells):
 
     
-    def compute_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta):
+    def compute_u_v_residuals(u_1d, v_1d, h_1d, beta):
 
         u, v = add_rflc_ghost_cells(u_1d.reshape((ny,nx)),\
                                     v_1d.reshape((ny,nx)))
@@ -260,6 +295,13 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         #interpolate things onto face-cenres
         h_ew, h_ns = interp_cc_to_fc(h)
 
+
+
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         #to account for calving front boundary condition, set effective viscosities
         #of faces of all cells with zero thickness to zero:
@@ -306,8 +348,23 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
     return jax.jit(compute_u_v_residuals)
 
 
+def print_residual_things(residual, rhs, init_residual, i):
+    old_residual = residual
+    residual = jnp.max(jnp.abs(-rhs))
 
-def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
+    if i==0:
+        init_residual = residual.copy()
+        print("Initial residual: {}".format(residual))
+    else:
+        print("residual: {}".format(residual))
+        print("Residual reduction factor: {}".format(old_residual/residual))
+    print("------")
+
+    return old_residual, residual, init_residual
+
+
+def newton_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
+
 
     #functions for various things:
     interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
@@ -315,14 +372,16 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
     cc_gradient                                = cc_gradient_function(dy, dx)
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
 
+    mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+                                                       mucoef_ew, mucoef_ns,\
                                                        interp_cc_to_fc,\
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_rflc_ghost_cells,\
                                                        add_cont_ghost_cells)
 
-    mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
 
     #############
     #setting up bvs and coords for a single block of the jacobian
@@ -340,7 +399,7 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
                                                         mask,\
                                                         2,
                                                         active_indices=(0,1)
-                                                          )
+                                                       )
     #sparse_jacrev = jax.jit(sparse_jacrev)
 
 
@@ -359,40 +418,14 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
                                    )
                        ])
 
-    
-    @jax.jit
-    def new_viscosity_fc(u, v):
-        u, v = add_rflc_ghost_cells(u.reshape((ny, nx)), v.reshape((ny, nx)))
+   
+    beta_eff = C.copy()
 
-        dudx_ew, dudy_ew = ew_gradient(u)
-        dvdx_ew, dvdy_ew = ew_gradient(v)
-        dudx_ns, dudy_ns = ns_gradient(u)
-        dvdx_ns, dvdy_ns = ns_gradient(v)
 
-        #This is right I think, but I don't get convergence if i square epsilon_visc...
-        return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)),\
-               B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-
-        #return B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-        #            0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1)),\
-        #       B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-        #            0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC)**(0.5*(1/c.GLEN_N - 1))
-
-        #return jnp.zeros_like(mucoef_ew) + 1e12, jnp.zeros_like(mucoef_ns) + 1e12
-
-    @jax.jit
-    def new_viscosity(u, v):
-        dudx, dudy = cc_gradient(u)
-        dvdx, dvdy = cc_gradient(v)
-
-        return B * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
-                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-
-    @jax.jit
-    def new_beta(u, v):
-        return C.copy()
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+                                                              ksp_type="bcgs",\
+                                                              preconditioner="hypre",\
+                                                              precondition_only=False)
 
 
     def solver(u_trial, v_trial, h):
@@ -401,103 +434,38 @@ def qn_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
         h_1d = h.reshape(-1)
 
         residual = jnp.inf
+        init_res = 0
 
         for i in range(n_iterations):
 
-            mu_ew, mu_ns = new_viscosity_fc(u_1d, v_1d)
-
-            ## --- DEBUG: Check magnitudes in SSA balance ---
-            ## Compute strain rates in cell centers
-            #dudx_cc, dudy_cc = cc_gradient(u_1d.reshape((ny, nx)))
-            #dvdx_cc, dvdy_cc = cc_gradient(v_1d.reshape((ny, nx)))
-            #eps_xx = dudx_cc
-            #eps_yy = dvdy_cc
-            #eps_xy = 0.5 * (dudy_cc + dvdx_cc)
-            #
-            ## Effective strain rate squared
-            #eps_sq = eps_xx**2 + eps_yy**2 + 2*eps_xy**2
-            #
-            #print("max strain rate [1/s]:", float(jnp.max(jnp.sqrt(eps_sq))))
-            #print("min strain rate [1/s]:", float(jnp.min(jnp.sqrt(eps_sq))))
-            #
-            ## Check viscosities (mu_ew and mu_ns from new_viscosity_fc)
-            #print("max mu_ew [Pa s]:", float(jnp.max(mu_ew)))
-            #print("min mu_ew [Pa s]:", float(jnp.min(mu_ew)))
-            #print("max mu_ns [Pa s]:", float(jnp.max(mu_ns)))
-            #print("min mu_ns [Pa s]:", float(jnp.min(mu_ns)))
-            
-
-            beta_eff = new_beta(u_1d, v_1d)
-
-            #dJu_du, dJu_dv, dJv_du, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-            #                                (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
-            ##pooosssibly had these the wrong way round and the below is correct...
-            #TODO: CHECK!!!!!!!!!
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                            (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
+                                                           (u_1d, v_1d, h_1d, beta_eff)
+                                                          )
 
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
-            
-            ###FOR DEBUGGING
-            #jac = jnp.zeros((2*ny*nx, 2*ny*nx))
-            #jac = jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
-            #t = 2*nr*nc
-            #np.set_printoptions(suppress=True)
-            #print("dJ_u/du")
-            #print(np.array(jac[:int(t/2), :int(t/2)]))
-            #print("-----")
-            #print("dJ_u/dv")
-            #print(np.array(jac[int(t/2+1):, :int(t/2)]))
-            #print("-----")
-            #print("dJ_v/du")
-            #print(np.array(jac[:int(t/2), int(t/2+1):int(t)]))
-            #print("-----")
-            #print("dJ_v/dv")
-            #print(np.array(jac[int(t/2+1):int(t), int(t/2+1):int(t)]))
-            #print("-----")
-            #print("-----")
-            #raise
-            ###print(nz_jac_values.shape)
-            ###print(jac)
-            ##################
+            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, beta_eff))
 
-            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))
-      
-            old_residual = residual
-            residual = jnp.max(jnp.abs(-rhs))
-            
-            if i==0:
-                print("Initial residual: {}".format(residual))
-            else:
-                print("residual: {}".format(residual))
-                print("Residual reduction factor: {}".format(old_residual/residual))
-            print("------")
 
-            du = solve_petsc_sparse(nz_jac_values,\
-                                    coords,\
-                                    (ny*nx*2, ny*nx*2),\
-                                    rhs,\
-                                    ksp_type="bcgs",\
-                                    preconditioner="hypre",\
-                                    precondition_only=False)
+            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
+
+
+            du = la_solver(nz_jac_values, rhs)
 
             u_1d = u_1d+du[:(ny*nx)]
             v_1d = v_1d+du[(ny*nx):]
 
-        res_final = jnp.max(jnp.abs(jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff))))
+
+        res_final = jnp.max(jnp.abs(jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, beta_eff))))
         print("----------")
         print("Final residual: {}".format(res_final))
+        print("Total residual reduction factor: {}".format(init_res/res_final))
+        print("----------")
 
         return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
     return solver
-
-
-
-
-
 
 
 
@@ -513,7 +481,7 @@ B = 0.5 * (A**(-1/c.GLEN_N))
 lx = 150_000
 ly = 200_000
 
-resolution = 1000 #m
+resolution = 4000 #m
 
 nr = int(ly/resolution)
 nc = int(lx/resolution)
@@ -538,8 +506,6 @@ thk = thk.at[:, -1:].set(0)
 
 b = jnp.zeros_like(thk)-600
 
-mucoef = jnp.ones_like(thk)
-
 C = jnp.zeros_like(thk)
 C = C.at[:1, :].set(1e16)
 C = C.at[:, :1].set(1e16)
@@ -550,13 +516,17 @@ C = jnp.where(thk==0, 1, C)
 #plt.imshow(jnp.log10(C))
 #plt.show()
 
+mucoef = jnp.ones_like(thk)
+mucoef = mucoef.at[10:-10,-8:-6].set(0.25)
+
+
 
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
-n_iterations = 40
+n_iterations = 10
 
-solver = qn_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, C, n_iterations)
+solver = newton_velocity_solver_function(nr, nc, delta_y, delta_x, mucoef, C, n_iterations)
 
 u_out, v_out = solver(u_init, v_init, thk)
 
