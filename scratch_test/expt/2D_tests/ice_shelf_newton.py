@@ -473,8 +473,7 @@ def print_residual_things(residual, rhs, init_residual, i):
 
 def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                     h, C,\
-                                                    n_iterations,\
-                                                    u_trial, v_trial):
+                                                    n_iterations):
 
     beta_eff = C.copy()
     h_1d = h.reshape(-1)
@@ -541,7 +540,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
     @custom_vjp
-    def solver(mucoef):
+    def solver(mucoef, u_trial, v_trial):
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
 
@@ -583,8 +582,8 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
 
-    def solver_fwd(mucoef):
-        u, v = solver(mucoef)
+    def solver_fwd(mucoef, u_trial, v_trial):
+        u, v = solver(mucoef, u_trial, v_trial)
 
         dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
                                                        (u.reshape(-1), v.reshape(-1), mucoef)
@@ -617,9 +616,12 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
         _, _, mu_bar = pullback_function((lambda_u, lambda_v))
         
-        #bwd has to return a tuple of cotangents for each primal input
-        #of solver, so have to return this 1-tuple:
-        return (mu_bar.reshape((ny, nx)), )
+#        #bwd has to return a tuple of cotangents for each primal input
+#        #of solver, so have to return this 1-tuple:
+#        return (mu_bar.reshape((ny, nx)), )
+
+        #I wonder if I can get away with just returning None for u_trial_bar and v_trial_bar...
+        return (mu_bar.reshape((ny, nx)), None, None)
 
 
     solver.defvjp(solver_fwd, solver_bwd)
@@ -628,16 +630,20 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
 
-def make_misfit_function(u_obs, v_obs, reg_param, solver):
+def make_misfit_function(u_obs, v_obs, reg_param, solver, misfit_only=False):
 
-    def misfit_function(mucoef_internal):
-        u_mod, v_mod = solver(mucoef_internal)
+    def misfit_function(mucoef_internal, u_trial, v_trial):
+        u_mod, v_mod = solver(mucoef_internal, u_trial, v_trial)
 
         misfit = jnp.sum((u_obs-u_mod)**2 + (v_obs-v_mod)**2)
         regularisation = reg_param * jnp.sum(mucoef_internal**2)
         # print(regularisation)
 
-        return misfit + regularisation
+        #In order for grad to work, the function has to return a scalar
+        #value as the first argument and then other things packaged together as the second.
+        #Then you have to specify has_aux=True so that it knows there's stuff in the
+        #second argument and to leave it alone.
+        return misfit + regularisation, (u_mod, v_mod)
 
     return misfit_function
 
@@ -650,15 +656,23 @@ def plotcontrol(field):
 
 
 def gradient_descent_function(misfit_function, iterations=400, step_size=1e7):
-    def gradient_descent(initial_guess):
-        get_grad = jax.grad(misfit_function)
+    def gradient_descent(initial_guess, u_init_initial, v_init_initial):
+        #instead of grad, value_and_grad returns value too
+        #so we can keep track
+        get_grad = jax.value_and_grad(misfit_function, has_aux=True)
+        #Note the has_aux as per the above comment.
+
         ctrl_i = initial_guess
+        u_i = u_init_initial
+        v_i = v_init_initial
         ctrls = [ctrl_i]
         for i in range(iterations):
             print(i)
-            grads = get_grad(ctrl_i)
+            #note that grad by default takes gradient wrt first arg
+            (misfit, (u_i, v_i)), grad = get_grad(ctrl_i, u_i, v_i) 
+            print(misfit)
             #print(grads)
-            ctrl_i = ctrl_i.at[:,:].set(ctrl_i - step_size*grads)
+            ctrl_i = ctrl_i.at[:,:].set(ctrl_i - step_size*grad)
 
             ctrls.append(ctrl_i)
 
@@ -717,18 +731,19 @@ C = jnp.where(thk==0, 1, C)
 
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
-n_iterations = 10
+n_iterations = 5
+
 solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-                                                         C, n_iterations, u_init, v_init)
+                                                         C, n_iterations)
 
 u_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/u_obs_clean.npy")
 v_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/v_obs_clean.npy")
 
 misfit_fct = make_misfit_function(u_obs, v_obs, 0, solver)
 
-gd_iterator = gradient_descent_function(misfit_fct, iterations=100, step_size=1e6)
+gd_iterator = gradient_descent_function(misfit_fct, iterations=50, step_size=2e6)
 
-#mucoef_inv = gd_iterator(jnp.ones_like(u_init))
+mucoef_inv = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
 
 
 

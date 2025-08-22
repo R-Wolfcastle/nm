@@ -67,7 +67,8 @@ endif
 badd +1 ice_shelf_newton.py
 badd +26 ../../../..//nm/scratch_test/inverse/inverse_test_1d_ice_shelf.py
 badd +562 ../../sparsity_utils.py
-badd +0 ../../../utils/sparsity_utils.py
+badd +175 ../../../utils/sparsity_utils.py
+badd +0 ../../../utils/plotting_stuff.py
 argglobal
 %argdel
 $argadd ice_shelf_newton.py
@@ -92,11 +93,11 @@ set winminheight=0
 set winheight=1
 set winminwidth=0
 set winwidth=1
-exe 'vert 1resize ' . ((&columns * 105 + 105) / 210)
-exe '2resize ' . ((&lines * 28 + 29) / 58)
-exe 'vert 2resize ' . ((&columns * 104 + 105) / 210)
-exe '3resize ' . ((&lines * 27 + 29) / 58)
-exe 'vert 3resize ' . ((&columns * 104 + 105) / 210)
+exe 'vert 1resize ' . ((&columns * 118 + 118) / 236)
+exe '2resize ' . ((&lines * 29 + 30) / 61)
+exe 'vert 2resize ' . ((&columns * 117 + 118) / 236)
+exe '3resize ' . ((&lines * 29 + 30) / 61)
+exe 'vert 3resize ' . ((&columns * 117 + 118) / 236)
 argglobal
 setlocal autoindent
 setlocal backupcopy=
@@ -223,16 +224,16 @@ setlocal wrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 123 - ((35 * winheight(0) + 28) / 56)
+let s:l = 626 - ((0 * winheight(0) + 29) / 59)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 123
-normal! 046|
+keepjumps 626
+normal! 0
 wincmd w
 argglobal
-if bufexists(fnamemodify("../../../utils/sparsity_utils.py", ":p")) | buffer ../../../utils/sparsity_utils.py | else | edit ../../../utils/sparsity_utils.py | endif
-balt ../../sparsity_utils.py
+if bufexists(fnamemodify("../../../utils/plotting_stuff.py", ":p")) | buffer ../../../utils/plotting_stuff.py | else | edit ../../../utils/plotting_stuff.py | endif
+balt ../../../utils/sparsity_utils.py
 setlocal autoindent
 setlocal backupcopy=
 setlocal nobinary
@@ -358,12 +359,12 @@ setlocal wrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 175 - ((0 * winheight(0) + 14) / 28)
+let s:l = 21 - ((13 * winheight(0) + 14) / 29)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 175
-normal! 0
+keepjumps 21
+normal! 078|
 wincmd w
 argglobal
 if bufexists(fnamemodify("../../../..//nm/scratch_test/inverse/inverse_test_1d_ice_shelf.py", ":p")) | buffer ../../../..//nm/scratch_test/inverse/inverse_test_1d_ice_shelf.py | else | edit ../../../..//nm/scratch_test/inverse/inverse_test_1d_ice_shelf.py | endif
@@ -493,18 +494,18 @@ setlocal wrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 26 - ((0 * winheight(0) + 13) / 27)
+let s:l = 219 - ((28 * winheight(0) + 14) / 29)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 26
+keepjumps 219
 normal! 0
 wincmd w
-exe 'vert 1resize ' . ((&columns * 105 + 105) / 210)
-exe '2resize ' . ((&lines * 28 + 29) / 58)
-exe 'vert 2resize ' . ((&columns * 104 + 105) / 210)
-exe '3resize ' . ((&lines * 27 + 29) / 58)
-exe 'vert 3resize ' . ((&columns * 104 + 105) / 210)
+exe 'vert 1resize ' . ((&columns * 118 + 118) / 236)
+exe '2resize ' . ((&lines * 29 + 30) / 61)
+exe 'vert 2resize ' . ((&columns * 117 + 118) / 236)
+exe '3resize ' . ((&lines * 29 + 30) / 61)
+exe 'vert 3resize ' . ((&columns * 117 + 118) / 236)
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0
   silent exe 'bwipe ' . s:wipebuf
