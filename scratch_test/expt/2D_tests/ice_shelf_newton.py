@@ -240,13 +240,68 @@ def add_ghost_cells_fcts(ny, nx):
 
     return add_reflection_ghost_cells, add_continuation_ghost_cells
 
-def extrapolate_over_cf_function():
 
-    def extrapolate_over_cf():
+def binary_dilation(boolean_array):
+    # 3x3 cross-shaped structuring element (4-connectivity)
+    kernel = jnp.array([[0,1,0],
+                        [1,1,1],
+                        [0,1,0]], dtype=jnp.bool_)
 
-        return u, v
+    kernel = kernel.astype(jnp.float32)
 
-    return add_caving_front_ghosts
+    def dilate_once(mask_float):
+        out = jax.lax.conv_general_dilated(
+            #shape (batch_size,channels,H,W)
+            mask_float[None, None, :, :],
+            #shape (out_chan,in_chan,H,W)
+            kernel[None, None, :, :],
+            window_strides=(1,1),
+            padding='SAME',
+            dimension_numbers=('NCHW','OIHW','NCHW')
+        )
+        return (out[0,0] > 0).astype(jnp.bool_)
+
+    return dilate_once(boolean_array.astype(jnp.float32))
+
+def extrapolate_over_cf_function(thk):
+
+    cf_adjacent_zero_ice_cells = (thk<0) & binary_dilation(thk>0)
+
+    ice_mask = (thk>0)
+
+    ice_mask_shift_up    = jnp.roll(ice_mask, -1, axis=0)
+    ice_mask_shift_down  = jnp.roll(ice_mask,  1, axis=0)
+    ice_mask_shift_left  = jnp.roll(ice_mask, -1, axis=1)
+    ice_mask_shift_right = jnp.roll(ice_mask,  1, axis=1)
+    
+
+    def extrapolate_over_cf(cc_field):
+
+        u_shift_up    = jnp.roll(cc_field, -1, axis=0)
+        u_shift_down  = jnp.roll(cc_field,  1, axis=0)
+        u_shift_left  = jnp.roll(cc_field, -1, axis=1)
+        u_shift_right = jnp.roll(cc_field,  1, axis=1)
+        
+        neighbour_values = jnp.stack([
+            jnp.where(ice_mask_shift_up   ==1, u_shift_up,    0),
+            jnp.where(ice_mask_shift_down ==1, u_shift_down,  0),
+            jnp.where(ice_mask_shift_left ==1, u_shift_left,  0),
+            jnp.where(ice_mask_shift_right==1, u_shift_right, 0),
+        ])
+        
+        neighbour_counts = jnp.stack([
+            (ice_mask_shift_up   ==1).astype(int),
+            (ice_mask_shift_down ==1).astype(int),
+            (ice_mask_shift_left ==1).astype(int),
+            (ice_mask_shift_right==1).astype(int),
+        ])
+        
+        u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+
+        return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float32)
+
+    return extrapolate_over_cf
+
 
 
 def compute_u_v_residuals_function(ny, nx, dy, dx, \
@@ -256,16 +311,14 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
                                    ns_gradient,\
                                    cc_gradient,\
                                    add_rflc_ghost_cells,\
-                                   add_cont_ghost_cells):
+                                   add_cont_ghost_cells,\
+                                   extrp_over_cf):
 
     
     def compute_u_v_residuals(u_1d, v_1d, mucoef):
 
-        u, v = add_rflc_ghost_cells(u_1d.reshape((ny,nx)),\
-                                    v_1d.reshape((ny,nx)))
-
-        u_alive = u[1:-1, 1:-1]
-        v_alive = v[1:-1, 1:-1]
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
         h = h_1d.reshape((ny, nx))
 
         s_gnd = h + b #b is globally defined
@@ -277,14 +330,23 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         #volume_term
         dsdx, dsdy = cc_gradient(s)
 
-        volume_x = - (beta * u_alive + c.RHO_I * c.g * h * dsdx) * dx * dy
-        volume_y = - (beta * v_alive + c.RHO_I * c.g * h * dsdy) * dy * dx
+        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
 
         #TODO: set bespoke conditions at the front for dvel_dx! otherwise
         #over-estimating the viscosity on the faces near the front!
         #u, v = extrapolate_over_cf(u, v)
 
+
         #momentum_term
+        #quickly extrapolate velocity over calving front
+        #NOTE: I'm not sure it's even really necessary to do this you know...
+        #in the y-aligned calving front it only affects the ddx_ns derivatives.
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_rflc_ghost_cells(u, v)
+
         #various face-centred derivatives
         dudx_ew, dudy_ew = ew_gradient(u)
         dvdx_ew, dvdy_ew = ew_gradient(v)
@@ -484,6 +546,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    extrapolate_over_cf                        = extrapolate_over_cf_function(h)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
                                                        h_1d, beta_eff,\
@@ -491,7 +554,8 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_rflc_ghost_cells,\
-                                                       add_cont_ghost_cells)
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
 
 
     #############
@@ -693,7 +757,7 @@ B = 0.5 * (A**(-1/c.GLEN_N))
 lx = 150_000
 ly = 200_000
 
-resolution = 4000 #m
+resolution = 2000 #m
 
 nr = int(ly/resolution)
 nc = int(lx/resolution)
@@ -729,21 +793,21 @@ C = jnp.where(thk==0, 1, C)
 #plt.show()
 
 
-u_init = jnp.zeros_like(thk)
-v_init = jnp.zeros_like(thk)
-n_iterations = 5
-
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-                                                         C, n_iterations)
-
-u_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/u_obs_clean.npy")
-v_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/v_obs_clean.npy")
-
-misfit_fct = make_misfit_function(u_obs, v_obs, 0, solver)
-
-gd_iterator = gradient_descent_function(misfit_fct, iterations=50, step_size=2e6)
-
-mucoef_inv = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
+#u_init = jnp.zeros_like(thk)
+#v_init = jnp.zeros_like(thk)
+#n_iterations = 5
+#
+#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
+#                                                         C, n_iterations)
+#
+#u_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/u_obs_clean_bigger.npy")
+#v_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/v_obs_clean_bigger.npy")
+#
+#misfit_fct = make_misfit_function(u_obs, v_obs, 0, solver)
+#
+#gd_iterator = gradient_descent_function(misfit_fct, iterations=50, step_size=2e6)
+#
+#mucoef_inv = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
 
 
 
@@ -755,26 +819,26 @@ mucoef_inv = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
 
 
 
-#mucoef = jnp.ones_like(thk)
-#mucoef = mucoef.at[15:-15,-8:-6].set(0.25)
-#
+mucoef = jnp.ones_like(thk)
+mucoef = mucoef.at[30:-30,-16:-14].set(0.25)
+
 #plt.imshow(mucoef, cmap="cubehelix", vmin=0, vmax=1)
 #plt.colorbar()
 #plt.show()
+#
+#
+u_init = jnp.zeros_like(thk)
+v_init = jnp.zeros_like(thk)
+n_iterations = 25
+solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
+                                                         C, n_iterations)
 
+u_out, v_out = solver(mucoef, u_init, v_init)
+
+show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
 #
-#u_init = jnp.zeros_like(thk)
-#v_init = jnp.zeros_like(thk)
-#n_iterations = 15
-#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-#                                                         C, n_iterations, u_init, v_init)
-#
-#u_out, v_out = solver(mucoef)
-#
-#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
-#
-#jnp.save("../../../bits_of_data/ice_shelf_ip/u_obs_clean.npy", u_out)
-#jnp.save("../../../bits_of_data/ice_shelf_ip/v_obs_clean.npy", v_out)
+#jnp.save("../../../bits_of_data/ice_shelf_ip/u_obs_clean_bigger.npy", u_out)
+#jnp.save("../../../bits_of_data/ice_shelf_ip/v_obs_clean_bigger.npy", v_out)
 
 
 
