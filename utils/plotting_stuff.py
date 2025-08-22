@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from PIL import Image
+import imageio
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,7 +13,26 @@ rho_w = 1000
 
 g = 9.8
 
+def make_gif(arrays, filename="animation.gif", interval=200, cmap="viridis", vmin=None, vmax=None):
+    images = []
+    for arr in arrays:
+        arr_np = np.array(arr)
+        fig, ax = plt.subplots()
+        im = ax.imshow(arr_np, cmap=cmap, origin="lower", vmin=vmin, vmax=vmax)
+        plt.colorbar(im, ax=ax)
 
+        # Draw the figure so the renderer is ready
+        fig.canvas.draw()
+
+        # Get RGBA buffer (portable across backends)
+        buf = np.asarray(fig.canvas.buffer_rgba())  # shape (H, W, 4)
+        images.append(buf[..., :3])  # drop alpha channel
+
+        plt.close(fig)
+
+    # Save gif
+    imageio.mimsave(filename, images, duration=interval/1000.0)
+    print(f"Saved gif to {filename}")
 
 
 def show_vel_field(u, v, spacing=1, cmap='Spectral_r'):

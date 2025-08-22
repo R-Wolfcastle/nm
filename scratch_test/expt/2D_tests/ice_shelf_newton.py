@@ -11,7 +11,7 @@ from sparsity_utils import scipy_coo_to_csr,\
                            make_sparse_jacrev_fct_new,\
                            make_sparse_jacrev_fct_shared_basis
 import constants as c
-from plotting_stuff import show_vel_field
+from plotting_stuff import show_vel_field, make_gif
 
 
 #3rd party
@@ -642,15 +642,30 @@ def make_misfit_function(u_obs, v_obs, reg_param, solver):
     return misfit_function
 
 
-def gradient_descent_function(misfit_function, iterations=400, step_size=0.01):
+def plotcontrol(field):
+    plt.figure(figsize=(5,5))
+    plt.imshow(field, vmin=0, vmax=1, cmap="cubehelix")
+    plt.colorbar()
+    plt.show()
+
+
+def gradient_descent_function(misfit_function, iterations=400, step_size=1e7):
     def gradient_descent(initial_guess):
         get_grad = jax.grad(misfit_function)
         ctrl_i = initial_guess
+        ctrls = [ctrl_i]
         for i in range(iterations):
             print(i)
             grads = get_grad(ctrl_i)
             #print(grads)
-            ctrl_i = ctrl_i.at[:].set(ctrl_i - step_size*grads)
+            ctrl_i = ctrl_i.at[:,:].set(ctrl_i - step_size*grads)
+
+            ctrls.append(ctrl_i)
+
+        print("making gif")
+        make_gif(ctrls, filename="../../../bits_of_data/ice_shelf_ip/ip.gif",
+                 cmap="cubehelix", vmin=0, vmax=1)
+
         return ctrl_i
     return gradient_descent
 
@@ -699,21 +714,21 @@ C = jnp.where(thk==0, 1, C)
 #plt.imshow(jnp.log10(C))
 #plt.show()
 
-mucoef = jnp.ones_like(thk)
-
-
 
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
-
 n_iterations = 10
-
 solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
                                                          C, n_iterations, u_init, v_init)
 
+u_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/u_obs_clean.npy")
+v_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/v_obs_clean.npy")
 
-misfit_fct = make_misfit_function(jnp.zeros_like(thk), jnp.zeros_like(thk), 0, solver)
+misfit_fct = make_misfit_function(u_obs, v_obs, 0, solver)
 
+gd_iterator = gradient_descent_function(misfit_fct, iterations=100, step_size=1e6)
+
+#mucoef_inv = gd_iterator(jnp.ones_like(u_init))
 
 
 
@@ -725,15 +740,27 @@ misfit_fct = make_misfit_function(jnp.zeros_like(thk), jnp.zeros_like(thk), 0, s
 
 
 
-mucoef = jnp.ones_like(thk)
-mucoef = mucoef.at[10:-10,-8:-6].set(0.25)
+#mucoef = jnp.ones_like(thk)
+#mucoef = mucoef.at[15:-15,-8:-6].set(0.25)
+#
+#plt.imshow(mucoef, cmap="cubehelix", vmin=0, vmax=1)
+#plt.colorbar()
+#plt.show()
 
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-                                                         C, n_iterations, u_init, v_init)
+#
+#u_init = jnp.zeros_like(thk)
+#v_init = jnp.zeros_like(thk)
+#n_iterations = 15
+#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
+#                                                         C, n_iterations, u_init, v_init)
+#
+#u_out, v_out = solver(mucoef)
+#
+#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+#
+#jnp.save("../../../bits_of_data/ice_shelf_ip/u_obs_clean.npy", u_out)
+#jnp.save("../../../bits_of_data/ice_shelf_ip/v_obs_clean.npy", v_out)
 
-u_out, v_out = solver(mucoef)
-
-show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
 
 
 
