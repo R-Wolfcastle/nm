@@ -34,8 +34,10 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
-np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
+import xarray as xr
 
+
+np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
 
 
 def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
@@ -342,8 +344,8 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         #quickly extrapolate velocity over calving front
         #NOTE: I'm not sure it's even really necessary to do this you know...
         #in the y-aligned calving front it only affects the ddx_ns derivatives.
-        u = extrp_over_cf(u)
-        v = extrp_over_cf(v)
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
         #and add the ghost cells in
         u, v = add_rflc_ghost_cells(u, v)
 
@@ -427,110 +429,6 @@ def print_residual_things(residual, rhs, init_residual, i):
 
     return old_residual, residual, init_residual
 
-
-#def newton_velocity_solver_function(ny, nx, dy, dx, mucoef, C, n_iterations):
-#
-#
-#    #functions for various things:
-#    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
-#    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
-#    cc_gradient                                = cc_gradient_function(dy, dx)
-#    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
-#
-#    mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-#
-#    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
-#                                                       mucoef_ew, mucoef_ns,\
-#                                                       interp_cc_to_fc,\
-#                                                       ew_gradient, ns_gradient,\
-#                                                       cc_gradient,\
-#                                                       add_rflc_ghost_cells,\
-#                                                       add_cont_ghost_cells)
-#
-#
-#    #############
-#    #setting up bvs and coords for a single block of the jacobian
-#    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
-#
-#    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
-#    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
-#    mask = (i_coordinate_sets>=0)
-#
-#
-#    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
-#                                                        basis_vectors,\
-#                                                        i_coordinate_sets,\
-#                                                        j_coordinate_sets,\
-#                                                        mask,\
-#                                                        2,
-#                                                        active_indices=(0,1)
-#                                                       )
-#    #sparse_jacrev = jax.jit(sparse_jacrev)
-#
-#
-#    i_coordinate_sets = i_coordinate_sets[mask]
-#    j_coordinate_sets = j_coordinate_sets[mask]
-#    #############
-#
-#    coords = jnp.stack([
-#                    jnp.concatenate(
-#                                [i_coordinate_sets,         i_coordinate_sets,\
-#                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
-#                                   ),\
-#                    jnp.concatenate(
-#                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
-#                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
-#                                   )
-#                       ])
-#
-#   
-#    beta_eff = C.copy()
-#
-#
-#    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
-#                                                              ksp_type="bcgs",\
-#                                                              preconditioner="hypre",\
-#                                                              precondition_only=False)
-#
-#
-#    def solver(u_trial, v_trial, h):
-#        u_1d = u_trial.copy().reshape(-1)
-#        v_1d = v_trial.copy().reshape(-1)
-#        h_1d = h.reshape(-1)
-#
-#        residual = jnp.inf
-#        init_res = 0
-#
-#        for i in range(n_iterations):
-#
-#            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-#                                                           (u_1d, v_1d, h_1d, beta_eff)
-#                                                          )
-#
-#            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
-#                                             dJv_du[mask], dJv_dv[mask]])
-#
-#            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, beta_eff))
-#
-#
-#            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
-#
-#
-#            du = la_solver(nz_jac_values, rhs)
-#
-#            u_1d = u_1d+du[:(ny*nx)]
-#            v_1d = v_1d+du[(ny*nx):]
-#
-#
-#        res_final = jnp.max(jnp.abs(jnp.concatenate(get_u_v_residuals(u_1d, v_1d, h_1d, beta_eff))))
-#        print("----------")
-#        print("Final residual: {}".format(res_final))
-#        print("Total residual reduction factor: {}".format(init_res/res_final))
-#        print("----------")
-#
-#        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
-#
-#    return solver
 
 
 def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
@@ -622,6 +520,8 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
             rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, mucoef))
 
+            #print(jnp.max(rhs))
+            #raise
 
             old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
 
@@ -712,6 +612,25 @@ def make_misfit_function(u_obs, v_obs, reg_param, solver, misfit_only=False):
     return misfit_function
 
 
+def make_misfit_function_speed(u_obs, u_c, reg_param, solver, misfit_only=False):
+
+    def misfit_function(mucoef_internal, u_trial, v_trial):
+        u_mod, v_mod = solver(mucoef_internal, u_trial, v_trial)
+
+        misfit = jnp.sum(u_c * (u_obs - jnp.sqrt(u_mod**2 + v_mod**2))**2)
+
+        regularisation = reg_param * jnp.sum(mucoef_internal**2)
+        # print(regularisation)
+
+        #In order for grad to work, the function has to return a scalar
+        #value as the first argument and then other things packaged together as the second.
+        #Then you have to specify has_aux=True so that it knows there's stuff in the
+        #second argument and to leave it alone.
+        return misfit + regularisation, (u_mod, v_mod)
+
+    return misfit_function
+
+
 def plotcontrol(field):
     plt.figure(figsize=(5,5))
     plt.imshow(field, vmin=0, vmax=1, cmap="cubehelix")
@@ -735,16 +654,23 @@ def gradient_descent_function(misfit_function, iterations=400, step_size=1e7):
             #note that grad by default takes gradient wrt first arg
             (misfit, (u_i, v_i)), grad = get_grad(ctrl_i, u_i, v_i) 
             print(misfit)
-            #print(grads)
+            
+            plt.imshow(grad)
+            plt.show()
+            raise
+
+            #print(jnp.min(grad))
+            #print(jnp.min(grad)==0)
+            #raise
             ctrl_i = ctrl_i.at[:,:].set(ctrl_i - step_size*grad)
 
             ctrls.append(ctrl_i)
 
         print("making gif")
-        make_gif(ctrls, filename="../../../bits_of_data/ice_shelf_ip/ip.gif",
+        make_gif(ctrls, filename="../../../bits_of_data/ice_shelf_ip/larsen_c_ip.gif",
                  cmap="cubehelix", vmin=0, vmax=1)
 
-        return ctrl_i
+        return ctrl_i, u_i, v_i
     return gradient_descent
 
 
@@ -754,16 +680,8 @@ A = c.A_COLD
 B = 0.5 * (A**(-1/c.GLEN_N))
 
 
-
-
-#would be nice to just give a netcdf of the co-located variables
-#and just be able to specify a resolution  and then have it make
-#a domain of the right size.
-
-
 data_nc_fp = "../../../bits_of_data/larsen_c/LC_EnvBm.nc"
 
-import xarray as xr
 
 ds = xr.open_dataset(data_nc_fp)
 
@@ -774,83 +692,98 @@ nc_res = x[1]-x[0]
 
 new_res = nc_res*8
 
-new_x = ds["x"].values[::8]
-new_y = ds["y"].values[::8]
+new_x = ds["x"].values[::16]
+new_y = ds["y"].values[::16]
 
-thk_interp = ds["thk"].interp(x=new_x, y=new_y, method="nearest")
+thk  = ds["thk"].interp(x=new_x, y=new_y, method="nearest")
+topg = ds["topg"].interp(x=new_x, y=new_y, method="nearest")
 
-thk_interp = thk_interp[160:-100,50:-50]
+uo = ds["uo"].interp(x=new_x, y=new_y, method="nearest")/c.S_PER_YEAR
+uc = ds["uc"].interp(x=new_x, y=new_y, method="nearest")
 
-plt.figure(figsize=(6,6))
-plt.imshow(thk_interp[::-1,:], vmin=0, vmax=500)
-plt.show()
+#thk  = jnp.array(thk[160:-100,50:-50])[::-1, :]
+#topg = jnp.array(topg[160:-100,50:-50])[::-1, :]
+thk  = jnp.array(thk[80:-50,25:-25])[::-1, :]
+topg = jnp.array(topg[80:-50,25:-25])[::-1, :]
 
-print(ds)
-raise
+uo = jnp.array(uo[80:-50,25:-25])[::-1, :]
+uc = jnp.array(uc[80:-50,25:-25])[::-1, :]
 
-
-lx = jnp.abs(x[-1]-x[0])
-ly = jnp.abs(y[-1]-y[0])
-
-resolution = 2000 #m
-
-nr = int(ly/resolution)
-nc = int(lx/resolution)
-
-lx = nr*resolution
-ly = nc*resolution
+#plt.imshow(uo)
+#plt.show()
+#plt.imshow(uc, vmin=0, vmax=1)
+#plt.show()
 
 
-
-slice(x[0], x[0]+lx)
-slice(y[0], y[0]+ly)
+nr, nc = thk.shape
 
 
+b = topg.copy()
 
 
-#nr, nc = 64, 64
-#nr, nc = 96*2, 64*2
+s_gnd = thk + b
+s_flt = thk * (1-c.RHO_I/c.RHO_W)
+
+grounded = jnp.where(s_gnd>=s_flt, 1, 0)
 
 
-x = jnp.linspace(0, lx, nc)
-y = jnp.linspace(0, ly, nr)
 
-delta_x = x[1]-x[0]
-delta_y = y[1]-y[0]
+C = jnp.zeros_like(grounded)
+C = jnp.where(grounded==1, 1e16, 0)
 
-thk_profile = 500# - 300*x/lx
-thk = jnp.zeros((nr, nc))+thk_profile
-thk = thk.at[:, -1:].set(0)
 
-b = jnp.zeros_like(thk)-600
+#plt.figure(figsize=(6,6))
+##plt.imshow(jnp.log10(C), vmin=0, vmax=20, cmap="RdBu_r")
+##plt.imshow(jnp.log10(C), vmin=0, vmax=20, cmap="RdBu_r")
+#plt.imshow(thk, vmin=0, vmax=600, cmap="magma")
+#plt.show()
 
-C = jnp.zeros_like(thk)
-C = C.at[:1, :].set(1e16)
-C = C.at[:, :1].set(1e16)
-C = C.at[-1:,:].set(1e16)
-C = jnp.where(thk==0, 1, C)
+
+delta_x = new_x[1]-new_x[0]
+delta_y = new_y[1]-new_y[0]
+
+
+
+
+#mucoef = jnp.ones_like(thk)
+
+
+#u_init = jnp.zeros_like(thk)
+#v_init = jnp.zeros_like(thk)
+#n_iterations = 25
+#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
+#                                                         C, n_iterations)
+#
+#u_out, v_out = solver(mucoef, u_init, v_init)
+#
+#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=1000)
+#
+#raise
 
 
 #plt.imshow(jnp.log10(C))
 #plt.show()
 
 
-#u_init = jnp.zeros_like(thk)
-#v_init = jnp.zeros_like(thk)
-#n_iterations = 5
-#
-#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-#                                                         C, n_iterations)
-#
-#u_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/u_obs_clean_bigger.npy")
-#v_obs = jnp.load("../../../bits_of_data/ice_shelf_ip/v_obs_clean_bigger.npy")
-#
-#misfit_fct = make_misfit_function(u_obs, v_obs, 0, solver)
-#
-#gd_iterator = gradient_descent_function(misfit_fct, iterations=50, step_size=2e6)
-#
-#mucoef_inv = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
+u_init = jnp.zeros_like(thk)
+v_init = jnp.zeros_like(thk)
+n_iterations = 10
 
+solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
+                                                         C, n_iterations)
+
+misfit_fct = make_misfit_function_speed(uo, uc, 0, solver)
+
+gd_iterator = gradient_descent_function(misfit_fct, iterations=10, step_size=2e6)
+
+mucoef_inv, u_final, v_final = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
+
+
+plt.imshow(mucoef_inv, cmap="cubehelix", vmin=0, vmax=1)
+plt.colorbar()
+plt.show()
+
+show_vel_field(u_final*c.S_PER_YEAR, v_final*c.S_PER_YEAR, vmin=0, vmax=1000)
 
 
 #get_grad = jax.grad(misfit_fct)
@@ -861,23 +794,12 @@ C = jnp.where(thk==0, 1, C)
 
 
 
-mucoef = jnp.ones_like(thk)
-mucoef = mucoef.at[30:-30,-16:-14].set(0.25)
 
 #plt.imshow(mucoef, cmap="cubehelix", vmin=0, vmax=1)
 #plt.colorbar()
 #plt.show()
 #
 #
-u_init = jnp.zeros_like(thk)
-v_init = jnp.zeros_like(thk)
-n_iterations = 25
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-                                                         C, n_iterations)
-
-u_out, v_out = solver(mucoef, u_init, v_init)
-
-show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
 #
 #jnp.save("../../../bits_of_data/ice_shelf_ip/u_obs_clean_bigger.npy", u_out)
 #jnp.save("../../../bits_of_data/ice_shelf_ip/v_obs_clean_bigger.npy", v_out)
