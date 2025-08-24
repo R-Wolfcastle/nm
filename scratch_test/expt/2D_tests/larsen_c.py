@@ -617,7 +617,8 @@ def make_misfit_function_speed(u_obs, u_c, reg_param, solver, misfit_only=False)
     def misfit_function(mucoef_internal, u_trial, v_trial):
         u_mod, v_mod = solver(mucoef_internal, u_trial, v_trial)
 
-        misfit = jnp.sum(u_c * (u_obs - jnp.sqrt(u_mod**2 + v_mod**2))**2)
+        #misfit = jnp.sum((u_obs - u_mod)**2)
+        misfit = jnp.sum(uc * (u_obs - jnp.sqrt(u_mod**2 + v_mod**2 + 1e-12)**2))
 
         regularisation = reg_param * jnp.sum(mucoef_internal**2)
         # print(regularisation)
@@ -654,10 +655,15 @@ def gradient_descent_function(misfit_function, iterations=400, step_size=1e7):
             #note that grad by default takes gradient wrt first arg
             (misfit, (u_i, v_i)), grad = get_grad(ctrl_i, u_i, v_i) 
             print(misfit)
+
+            #print(grad)
             
-            plt.imshow(grad)
-            plt.show()
-            raise
+            #print(jnp.min(grad))
+            #print(jnp.max(grad))
+
+            #plt.imshow(grad, cmap="hsv")
+            #plt.show()
+            #raise
 
             #print(jnp.min(grad))
             #print(jnp.min(grad)==0)
@@ -727,10 +733,9 @@ s_flt = thk * (1-c.RHO_I/c.RHO_W)
 grounded = jnp.where(s_gnd>=s_flt, 1, 0)
 
 
-
 C = jnp.zeros_like(grounded)
 C = jnp.where(grounded==1, 1e16, 0)
-
+C = jnp.where(thk==0, 1, C)
 
 #plt.figure(figsize=(6,6))
 ##plt.imshow(jnp.log10(C), vmin=0, vmax=20, cmap="RdBu_r")
@@ -774,7 +779,7 @@ solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_
 
 misfit_fct = make_misfit_function_speed(uo, uc, 0, solver)
 
-gd_iterator = gradient_descent_function(misfit_fct, iterations=10, step_size=2e6)
+gd_iterator = gradient_descent_function(misfit_fct, iterations=50, step_size=8e2)
 
 mucoef_inv, u_final, v_final = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
 

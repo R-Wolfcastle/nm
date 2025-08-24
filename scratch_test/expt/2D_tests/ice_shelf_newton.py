@@ -735,7 +735,11 @@ def gradient_descent_function(misfit_function, iterations=400, step_size=1e7):
             #note that grad by default takes gradient wrt first arg
             (misfit, (u_i, v_i)), grad = get_grad(ctrl_i, u_i, v_i) 
             print(misfit)
+
+            plt.imshow(grads, cmap="hsv")
+            plt.show()
             #print(grads)
+            raise
             ctrl_i = ctrl_i.at[:,:].set(ctrl_i - step_size*grad)
 
             ctrls.append(ctrl_i)
