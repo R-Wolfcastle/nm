@@ -457,19 +457,9 @@ def print_residual_things(residual, rhs, init_residual, i):
 
 
 
-def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
-                                                    h, C,
-                                                    n_iterations,
-                                                    u_init=None, v_init=None,
-                                                    initial_guess_from_model_state=True):
-
-    #NOTE: FUNCTIONAL PURITY VIOLATED HERE! -_-
-    solver_state = {"u_init": u_init, "v_init": v_init, "newton_iterations": n_iterations}
-    #the above is basically used to give the solver a good initial guess
-    #which is good for getting those newton iterations low in the IP.
-    #This closure is not a good way of doing things if we're going to JIT
-    #this function obviously!!
-
+def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
+                                                    h, C,\
+                                                    n_iterations):
 
     beta_eff = C.copy()
     h_1d = h.reshape(-1)
@@ -538,20 +528,14 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
 
 
     @custom_vjp
-    def solver(mucoef):
-        if solver_state["u_init"] is None:
-            u_trial, v_trial = jnp.zeros_like(mucoef), jnp.zeros_like(mucoef)
-        else:
-            u_trial, v_trial = solver_state["u_init"], solver_state["v_init"]
-
-
+    def solver(mucoef, u_trial, v_trial):
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
 
         residual = jnp.inf
         init_res = 0
 
-        for i in range(solver_state["newton_iterations"]):
+        for i in range(n_iterations):
 
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
                                                            (u_1d, v_1d, mucoef)
@@ -584,18 +568,12 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
         print("Total residual reduction factor: {}".format(init_res/res_final))
         print("----------")
 
-        if initial_guess_from_model_state:
-            solver_state["u_init"] = u_1d.reshape((ny, nx))
-            solver_state["v_init"] = v_1d.reshape((ny, nx))
-
-            solver_state["newton_iterations"] = 15
-
         return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
 
 
-    def solver_fwd(mucoef):
-        u, v = solver(mucoef)
+    def solver_fwd(mucoef, u_trial, v_trial):
+        u, v = solver(mucoef, u_trial, v_trial)
 
         dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
                                                        (u.reshape(-1), v.reshape(-1), mucoef)
@@ -633,7 +611,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
 #        return (mu_bar.reshape((ny, nx)), )
 
         #I wonder if I can get away with just returning None for u_trial_bar and v_trial_bar...
-        return (mu_bar.reshape((ny, nx)),)
+        return (mu_bar.reshape((ny, nx)), None, None)
 
 
     solver.defvjp(solver_fwd, solver_bwd)
@@ -740,11 +718,11 @@ def gradient_descent_function(misfit_function, iterations=400, step_size=1e7):
 
 
 
-def make_misfit_function_speed_basic(u_obs, u_c, reg_param, solver):
+def make_misfit_function_speed_basic(u_obs, u_c, reg_param, solver, u_trial, v_trial):
 
     def misfit_function(mucoef_internal):
 
-        u_mod, v_mod = solver(mucoef_internal.reshape(u_obs.shape))
+        u_mod, v_mod = solver(mucoef_internal.reshape(u_trial.shape), u_trial, v_trial)
 
         u_mod = u_mod*c.S_PER_YEAR
         v_mod = v_mod*c.S_PER_YEAR
@@ -891,81 +869,42 @@ v_init = jnp.zeros_like(thk)
 n_iterations = 10
 
 solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-                                                         C, n_iterations, u_init, v_init)
+                                                         C, n_iterations)
 
 #misfit_fct = make_misfit_function_speed(uo, uc, 1e-5, solver)
 #gd_iterator = gradient_descent_function(misfit_fct, iterations=5, step_size=1e4)
 #mucoef_inv, u_final, v_final = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
 
-misfit_fct = make_misfit_function_speed_basic(uo, uc, 1e2, solver)
-lbfgs_iterator = lbfgsb_function(misfit_fct, iterations=10)
-#mucoef_inv = lbfgs_iterator(jnp.ones_like(u_init).flatten())
+misfit_fct = make_misfit_function_speed_basic(uo, uc, 4e1, solver, u_init, v_init)
+lbfgs_iterator = lbfgsb_function(misfit_fct, iterations=25)
+mucoef_inv = lbfgs_iterator(jnp.ones_like(u_init).flatten())
 
 
-#plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix", vmin=0, vmax=1)
-##plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix")
-#plt.colorbar()
-#plt.show()
+plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix", vmin=0, vmax=1)
+#plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix")
+plt.colorbar()
+plt.show()
 
 
-#np.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_20its.npy", mucoef_inv)
-
-
-
-mucoef_loaded = jnp.load("../../../bits_of_data/ice_shelf_ip/mucoef_inv_100its.npy")
-
-u_init = jnp.zeros_like(thk)
-v_init = jnp.zeros_like(thk)
-n_iterations = 25
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-                                                         C, n_iterations)
-
-u_out, v_out = solver(mucoef_loaded.reshape((nr,nc)))
-
-show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=750)
+np.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy", mucoef_inv)
 
 
 
 
 
-
-
-
-#show_vel_field(u_final*c.S_PER_YEAR, v_final*c.S_PER_YEAR, vmin=0, vmax=5000)
-
-
-#get_grad = jax.grad(misfit_fct)
-#initial_guess = jnp.ones_like(thk)
-#grad = get_grad(initial_guess)
-#plt.imshow(grad)
-#plt.show()
-
-
-
-
-#plt.imshow(mucoef, cmap="cubehelix", vmin=0, vmax=1)
-#plt.colorbar()
-#plt.show()
+#mucoef_loaded = jnp.load("../../../bits_of_data/ice_shelf_ip/mucoef_inv_100its.npy")
+#
+#u_init = jnp.zeros_like(thk)
+#v_init = jnp.zeros_like(thk)
+#n_iterations = 25
+#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
+#                                                         C, n_iterations)
 #
 #
+#u_out, v_out = solver(mucoef_loaded.reshape((nr,nc)), u_init, v_init)
 #
-#jnp.save("../../../bits_of_data/ice_shelf_ip/u_obs_clean_bigger.npy", u_out)
-#jnp.save("../../../bits_of_data/ice_shelf_ip/v_obs_clean_bigger.npy", v_out)
+#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=750)
 
 
 
 
-#
-#plt.imshow(v_out*c.S_PER_YEAR)
-#plt.colorbar()
-#plt.show()
-#
-#plt.imshow(u_out*c.S_PER_YEAR)
-#plt.colorbar()
-#plt.show()
-#
-##plt.plot((u_out*c.S_PER_YEAR)[:,40])
-##plt.show()
-#
-#
-#
