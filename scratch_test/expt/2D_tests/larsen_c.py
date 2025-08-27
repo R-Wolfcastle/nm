@@ -868,42 +868,48 @@ u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 n_iterations = 10
 
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
-                                                         C, n_iterations)
-
-#misfit_fct = make_misfit_function_speed(uo, uc, 1e-5, solver)
-#gd_iterator = gradient_descent_function(misfit_fct, iterations=5, step_size=1e4)
-#mucoef_inv, u_final, v_final = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
-
-misfit_fct = make_misfit_function_speed_basic(uo, uc, 4e1, solver, u_init, v_init)
-lbfgs_iterator = lbfgsb_function(misfit_fct, iterations=25)
-mucoef_inv = lbfgs_iterator(jnp.ones_like(u_init).flatten())
-
-
-plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix", vmin=0, vmax=1)
-#plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix")
-plt.colorbar()
-plt.show()
-
-
-np.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy", mucoef_inv)
-
-
-
-
-
-#mucoef_loaded = jnp.load("../../../bits_of_data/ice_shelf_ip/mucoef_inv_100its.npy")
-#
-#u_init = jnp.zeros_like(thk)
-#v_init = jnp.zeros_like(thk)
-#n_iterations = 25
 #solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
 #                                                         C, n_iterations)
 #
+##misfit_fct = make_misfit_function_speed(uo, uc, 1e-5, solver)
+##gd_iterator = gradient_descent_function(misfit_fct, iterations=5, step_size=1e4)
+##mucoef_inv, u_final, v_final = gd_iterator(jnp.ones_like(u_init), u_init, v_init)
 #
-#u_out, v_out = solver(mucoef_loaded.reshape((nr,nc)), u_init, v_init)
+#misfit_fct = make_misfit_function_speed_basic(uo, uc, 1e3, solver, u_init, v_init)
+#lbfgs_iterator = lbfgsb_function(misfit_fct, iterations=25)
+#mucoef_inv = lbfgs_iterator(jnp.ones_like(u_init).flatten())
 #
-#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=750)
+#
+#plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix", vmin=0, vmax=1)
+##plt.imshow(mucoef_inv.reshape(u_init.shape), cmap="cubehelix")
+#plt.colorbar()
+#plt.show()
+#
+#
+#np.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy", mucoef_inv)
+
+
+
+
+
+mucoef_loaded = jnp.load("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy")
+plt.imshow(mucoef_loaded.reshape(u_init.shape)*(jnp.where(thk>0,1,jnp.nan)), cmap="RdBu", vmin=0, vmax=2)
+plt.colorbar()
+plt.show()
+
+raise
+u_init = jnp.zeros_like(thk)
+v_init = jnp.zeros_like(thk)
+n_iterations = 25
+solver = make_newton_velocity_solver_function_custom_vjp(nr, nc, delta_y, delta_x, thk,\
+                                                         C, n_iterations)
+
+
+u_out, v_out = solver(mucoef_loaded.reshape((nr,nc)), u_init, v_init)
+
+#jnp.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy", mucoef_inv)
+
+show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=750)
 
 
 
