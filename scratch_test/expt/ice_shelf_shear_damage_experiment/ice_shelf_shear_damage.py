@@ -345,7 +345,12 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 
     def compute_beta(u, v, sliding_coef):
         return sliding_coef*(jnp.sqrt(u**2+v**2+1e-15)**(-2/3))
-    
+
+Basically, add a bit that is multiplies mucoef that is a function of shear stress.
+then have either the coefficient or the exponent (or a set of coefficients for the 
+different stress directions or something) as an argument to compute_u_v_residuals.
+No need to actually compute and solve for the damage field I dont think...
+
     def compute_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef):
 
         u = u_1d.reshape((ny, nx))
@@ -444,6 +449,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
 
     return jax.jit(compute_u_v_residuals)
+
 
 
 def print_residual_things(residual, rhs, init_residual, i):
@@ -764,60 +770,23 @@ def lbfgsb_function(misfit_function, iterations=50):
 
 
 
-Lx = 320_000
-Ly = 80_000
+Lx = 100_000
+Ly = 100_000
 
-resolution = 2000
-
-x_bar = 300_000
+resolution = 1000
 
 x = jnp.arange(0, Lx, resolution)
 y = jnp.arange(0, Ly, resolution)
 
-
 nx = int(Lx/resolution)
 ny = int(Ly/resolution)
 
-B0 = -150
-B2 = -728.8
-B4 = 343.91
-B6 = -50.57
-
-fc = 4000
-dc = 500
-wc = 24000
-zb = -720
-x_calve = 320_000
-
-x_tilde = x/x_bar
-
-Bx = B0*x_tilde + B2*(x_tilde**2) + B4*(x_tilde**4) + B6*(x_tilde**6)
-By = dc * ( (1/(1+jnp.exp(-2*(y-Ly/2-wc)/fc))) + (1/(1+jnp.exp(2*(y-Ly/2+wc)/fc))) )
-
-Bx_2d = Bx[None, :]
-By_2d = By[:, None]
-
-b = jnp.maximum( (Bx_2d+By_2d), zb )
-
-#plt.imshow(B)
-#plt.show()
-#
-#plt.plot(B[:,150])
-#plt.show()
+b = jnp.zeros((ny,nx))-1000
 
 #thk_profile = 4000 - (3500*x/Lx)
 #NOTE: this is totally fucked. The above expression doesn't work,
 #but this one does:
-thk_profile = 4000*(1-(3500/4000)*x/Lx)
-#print(x)
-#print(x/Lx)
-#print(4000*(1-(3500/4000)*x/Lx))
-#raise
-
-#plt.plot(thk_profile)
-#plt.show()
-#raise
-
+thk_profile = 1000*(1-(500/1000)*x/Lx)
 thk = jnp.zeros((ny, nx))+thk_profile[None,:]
 thk = thk.at[:, -1].set(0)
 
@@ -825,7 +794,6 @@ A = 6.338e-25
 B = 0.5 * (A**(-1/c.GLEN_N))
 m = 3
 C = jnp.zeros_like(thk)+3.16e6
-
 
 
 
