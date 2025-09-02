@@ -35,7 +35,7 @@ def make_gif(arrays, filename="animation.gif", interval=200, cmap="viridis", vmi
     print(f"Saved gif to {filename}")
 
 
-def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None):
+def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, showcbar=True):
     """
     Displays the magnitude of a 2D vector field and overlays flow direction lines.
 
@@ -59,7 +59,8 @@ def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None):
 
     plt.figure(figsize=(8, 6))
     plt.imshow(magnitude, origin='lower', cmap=cmap, extent=(0, nx, 0, ny), vmin=vmin, vmax=vmax)
-    plt.colorbar(label='Speed (m/yr)')
+    if showcbar:
+        plt.colorbar(label='Speed (m/yr)')
 
     plt.streamplot(
         X, Y, u, v,

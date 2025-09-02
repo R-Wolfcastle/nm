@@ -1,0 +1,854 @@
+#1st party
+from pathlib import Path
+import sys
+import time
+
+
+#local apps
+sys.path.insert(1, "../../../utils/")
+from sparsity_utils import scipy_coo_to_csr,\
+                           basis_vectors_and_coords_2d_square_stencil,\
+                           make_sparse_jacrev_fct_new,\
+                           make_sparse_jacrev_fct_shared_basis
+import constants as c
+from plotting_stuff import show_vel_field, make_gif
+
+
+#3rd party
+from petsc4py import PETSc
+#from mpi4py import MPI
+
+import jax
+import jax.numpy as jnp
+from jax import jacfwd, jacrev
+import matplotlib.pyplot as plt
+import jax.scipy.linalg as lalg
+from jax.scipy.optimize import minimize
+from jax import custom_vjp
+from jax.experimental.sparse import BCOO
+
+import numpy as np
+import scipy
+from scipy.optimize import minimize as scinimize
+
+from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+
+import xarray as xr
+
+
+#np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
+np.set_printoptions(precision=10, suppress=False, linewidth=np.inf, threshold=np.inf)
+
+
+def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
+                                    ksp_type='gmres', preconditioner='hypre',\
+                                    precondition_only=False, monitor_ksp=False):
+
+    comm = PETSc.COMM_WORLD
+    size = comm.Get_size()
+    
+    def construct_ab(values, b, transpose):
+        if transpose:
+            iptr, j, values = scipy_coo_to_csr(values, coordinates[::-1,:],\
+                                           jac_shape, return_decomposition=True)
+        else:
+            iptr, j, values = scipy_coo_to_csr(values, coordinates,\
+                                           jac_shape, return_decomposition=True)
+        #rows_local = int(jac_shape[0] / size)
+
+        A = PETSc.Mat().createAIJ(size=jac_shape, \
+                                  csr=(iptr.astype(np.int32), j.astype(np.int32), values),\
+                                  comm=comm)
+        
+        b = PETSc.Vec().createWithArray(b, comm=comm)
+        return A, b
+
+    
+    def create_solver_object(A):
+        
+        #set ksp iterations
+        opts = PETSc.Options()
+        opts['ksp_max_it'] = 20
+        if monitor_ksp:
+            opts['ksp_monitor'] = None
+        opts['ksp_rtol'] = 1e-20
+        
+        # Create a linear solver
+        ksp = PETSc.KSP().create()
+        ksp.setType(ksp_type)
+
+        ksp.setOperators(A)
+        ksp.setFromOptions()
+        
+        if preconditioner is not None:
+            #assessing if preconditioner is doing anything:
+            #print((A*x - b).norm())
+
+            if preconditioner == 'hypre':
+                pc = ksp.getPC()
+                pc.setType('hypre')
+                pc.setHYPREType('boomeramg')
+            else:
+                pc = ksp.getPC()
+                pc.setType(preconditioner)
+        
+            return ksp, pc
+        else:
+            return ksp, None
+
+
+    @custom_vjp
+    def petsc_sparse_la_solver(values, b, transpose=False):
+    
+        A, b = construct_ab(values, b, transpose)
+        x = b.duplicate()
+        
+        ksp, pc = create_solver_object(A)
+
+        if precondition_only:
+            pc.apply(b, x)
+        else:
+            ksp.solve(b, x)
+        
+        x_jnp = jnp.array(x.getArray())
+
+        return x_jnp
+
+    def la_solver_fwd(values, b):
+        solution = petsc_sparse_la_solver(values, b)
+        return solution, (values, b, solution)
+
+    def linear_solve_bwd(res, x_bar):
+        values, b, x = res
+
+        lambda_ = petsc_sparse_la_solver(values, -x_bar, transpose=True)
+
+        b_bar = -lambda_
+
+        #sparse version of jnp.outer(x,lambda_)
+        values_bar = x[coordinates[0]] * lambda_[coordinates[1]]
+
+        return values_bar, b_bar
+
+
+    petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
+
+    return petsc_sparse_la_solver
+
+
+
+
+def interp_cc_to_fc_function(ny, nx):
+
+    def interp_cc_to_fc(var):
+        
+        var_ew = jnp.zeros((ny, nx+1))
+        var_ew = var_ew.at[:, 1:-1].set(0.5*(var[:, 1:]+var[:, :-1]))
+        var_ew = var_ew.at[:, 0].set(var[:, 0])
+        var_ew = var_ew.at[:, -1].set(var[:, -1])
+
+        var_ns = jnp.zeros((ny+1, nx))
+        var_ns = var_ns.at[1:-1, :].set(0.5*(var[:-1, :]+var[1:, :]))
+        var_ns = var_ns.at[0, :].set(var[0, :])
+        var_ns = var_ns.at[-1, :].set(var[-1, :])
+
+        return var_ew, var_ns
+
+    return interp_cc_to_fc
+
+
+def cc_gradient_function(dy, dx):
+
+    def cc_gradient(var):
+
+        dvar_dx = (0.5/dx) * (var[1:-1, 2:] - var[1:-1,:-2])
+        dvar_dy = (0.5/dy) * (var[:-2,1:-1] - var[2:, 1:-1])
+
+        return dvar_dx, dvar_dy
+
+    return cc_gradient
+
+
+def fc_gradient_functions(dy, dx):
+
+    def ew_face_gradient(var):
+        
+        dvar_dx_ew = (var[1:-1, 1:] - var[1:-1, :-1])/dx
+
+        dvar_dy_ew = (var[:-2, 1:] + var[:-2, :-1] - var[2:, 1:] - var[2:, :-1])/(4*dy)
+        
+        return dvar_dx_ew, dvar_dy_ew
+    
+    def ns_face_gradient(var):
+        
+        dvar_dy_ns = (var[:-1, 1:-1]-var[1:, 1:-1])/dy
+
+        dvar_dx_ns = (var[:-1, 2:] + var[1:, 2:] - var[:-1, :-2] - var[1:, :-2])/(4*dx)
+        
+        return dvar_dx_ns, dvar_dy_ns
+    
+    return ew_face_gradient, ns_face_gradient
+
+
+def add_ghost_cells_fcts(ny, nx):
+
+    def add_reflection_ghost_cells(u_int, v_int):
+
+        u = jnp.zeros((ny+2, nx+2))
+        u = u.at[1:-1,1:-1].set(u_int)
+        #edges
+        u = u.at[0, 1:-1].set( u[1, 1:-1])
+        u = u.at[-1,1:-1].set( u[-2,1:-1])
+        u = u.at[1:-1, 0].set(-u[1:-1, 1])
+        u = u.at[1:-1,-1].set(-u[1:-1,-2])
+        #corner points
+        u = u.at[0,0].set(-u[1,1])
+        u = u.at[-1,-1].set(-u[-2,-2])
+        u = u.at[-1,0].set(-u[-2,1])
+        u = u.at[0,-1].set(-u[1,-2])
+
+        
+        v = jnp.zeros((ny+2, nx+2))
+        v = v.at[1:-1,1:-1].set(v_int)
+        #edges
+        v = v.at[0, 1:-1].set(-v[1, 1:-1])
+        v = v.at[-1,1:-1].set(-v[-2,1:-1])
+        v = v.at[1:-1, 0].set( v[1:-1, 1])
+        v = v.at[1:-1,-1].set( v[1:-1,-2])
+        #corner points
+        v = v.at[0,0].set(-v[1,1])
+        v = v.at[-1,-1].set(-v[-2,-2])
+        v = v.at[-1,0].set(-v[-2,1])
+        v = v.at[0,-1].set(-v[1,-2])
+
+        return u, v
+
+    def add_continuation_ghost_cells(h_int):
+
+        h = jnp.zeros((ny+2, nx+2))
+        h = h.at[1:-1,1:-1].set(h_int)
+        #edges
+        h = h.at[0, 1:-1].set(h[1, 1:-1])
+        h = h.at[-1,1:-1].set(h[-2,1:-1])
+        h = h.at[1:-1, 0].set(h[1:-1, 1])
+        h = h.at[1:-1,-1].set(h[1:-1,-2])
+        #corner points
+        h = h.at[0,0].set(h[1,1])
+        h = h.at[-1,0].set(h[-2,1])
+        h = h.at[0,-1].set(h[1,-2])
+        h = h.at[-1,-1].set(h[-2,-2])
+
+        return h
+
+    return add_reflection_ghost_cells, add_continuation_ghost_cells
+
+
+def binary_erosion(boolean_array):
+    # 3x3 cross-shaped structuring element (4-connectivity)
+    #kernel = jnp.array([[1,1,1],
+    #                    [1,1,1],
+    #                    [1,1,1]], dtype=jnp.bool_)
+    kernel = jnp.array([[0,1,0],
+                        [1,1,1],
+                        [0,1,0]], dtype=jnp.bool_)
+
+    kernel = kernel.astype(jnp.float32)
+
+    def erode_once(mask_float):
+        out = jax.lax.conv_general_dilated(
+            #shape (batch_size,channels,H,W)
+            mask_float[None, None, :, :],
+            #shape (out_chan,in_chan,H,W)
+            kernel[None, None, :, :],
+            window_strides=(1,1),
+            padding='SAME',
+            dimension_numbers=('NCHW','OIHW','NCHW')
+        )
+        return (out[0,0] > 3).astype(jnp.bool_)
+
+    return erode_once(boolean_array.astype(jnp.float32))
+
+def binary_dilation(boolean_array):
+    # 3x3 cross-shaped structuring element (4-connectivity)
+    kernel = jnp.array([[0,1,0],
+                        [1,1,1],
+                        [0,1,0]], dtype=jnp.bool_)
+
+    kernel = kernel.astype(jnp.float32)
+
+    def dilate_once(mask_float):
+        out = jax.lax.conv_general_dilated(
+            #shape (batch_size,channels,H,W)
+            mask_float[None, None, :, :],
+            #shape (out_chan,in_chan,H,W)
+            kernel[None, None, :, :],
+            window_strides=(1,1),
+            padding='SAME',
+            dimension_numbers=('NCHW','OIHW','NCHW')
+        )
+        return (out[0,0] > 0).astype(jnp.bool_)
+
+    return dilate_once(boolean_array.astype(jnp.float32))
+
+def extrapolate_over_cf_function(thk):
+
+    cf_adjacent_zero_ice_cells = (thk<0) & binary_dilation(thk>0)
+
+    ice_mask = (thk>0)
+
+    ice_mask_shift_up    = jnp.roll(ice_mask, -1, axis=0)
+    ice_mask_shift_down  = jnp.roll(ice_mask,  1, axis=0)
+    ice_mask_shift_left  = jnp.roll(ice_mask, -1, axis=1)
+    ice_mask_shift_right = jnp.roll(ice_mask,  1, axis=1)
+    
+
+    def extrapolate_over_cf(cc_field):
+
+        u_shift_up    = jnp.roll(cc_field, -1, axis=0)
+        u_shift_down  = jnp.roll(cc_field,  1, axis=0)
+        u_shift_left  = jnp.roll(cc_field, -1, axis=1)
+        u_shift_right = jnp.roll(cc_field,  1, axis=1)
+        
+        neighbour_values = jnp.stack([
+            jnp.where(ice_mask_shift_up   ==1, u_shift_up,    0),
+            jnp.where(ice_mask_shift_down ==1, u_shift_down,  0),
+            jnp.where(ice_mask_shift_left ==1, u_shift_left,  0),
+            jnp.where(ice_mask_shift_right==1, u_shift_right, 0),
+        ])
+        
+        neighbour_counts = jnp.stack([
+            (ice_mask_shift_up   ==1).astype(int),
+            (ice_mask_shift_down ==1).astype(int),
+            (ice_mask_shift_left ==1).astype(int),
+            (ice_mask_shift_right==1).astype(int),
+        ])
+        
+        u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+
+        return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float32)
+
+    return extrapolate_over_cf
+
+
+
+def compute_u_v_residuals_function(ny, nx, dy, dx, \
+                                   h_1d,\
+                                   interp_cc_to_fc,\
+                                   ew_gradient,\
+                                   ns_gradient,\
+                                   cc_gradient,\
+                                   add_rflc_ghost_cells,\
+                                   add_cont_ghost_cells,\
+                                   extrp_over_cf):
+
+    def compute_beta(u, v, sliding_coef):
+        return sliding_coef*(jnp.sqrt(u**2+v**2+1e-15)**(-2/3))
+    
+    def compute_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef):
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        s_gnd = h + b #b is globally defined
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        s = add_cont_ghost_cells(s)
+
+        #volume_term
+        dsdx, dsdy = cc_gradient(s)
+        beta = compute_beta(u, v, sliding_coef)
+
+
+        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
+
+        #TODO: set bespoke conditions at the front for dvel_dx! otherwise
+        #over-estimating the viscosity on the faces near the front!
+        #u, v = extrapolate_over_cf(u, v)
+
+
+        #momentum_term
+        #quickly extrapolate velocity over calving front
+        #NOTE: I'm not sure it's even really necessary to do this you know...
+        #in the y-aligned calving front it only affects the ddx_ns derivatives.
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_rflc_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        ##cc_derivatives, e.g. for viscosity calculation
+        #dudx_cc, dudy_cc = cc_gradient(u)
+        #dvdx_cc, dvdy_cc = cc_gradient(v)
+
+        #interpolate things onto face-cenres
+        h_ew, h_ns = interp_cc_to_fc(h)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+
+        
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+
+        #mu_ns = mu_ns.at[:, -2].set(0) #screws everything up for some reason!
+        #mu_ns = mu_ns*0
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        
+        ##removing the thickness makes speeds look better!
+        #visc_x = mu_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+        #         mu_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+        #         mu_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+        #         mu_ns[1:, :]*(dudy_ns[1:,:] + dvdx_ns[1:,:])*0.5*dx
+
+
+        #visc_y = mu_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+        #         mu_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+        #         mu_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+        #         mu_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
+
+
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_u_v_residuals)
+
+
+def print_residual_things(residual, rhs, init_residual, i):
+    old_residual = residual
+    residual = jnp.max(jnp.abs(-rhs))
+
+    if i==0:
+        init_residual = residual.copy()
+        print("Initial residual: {}".format(residual))
+    else:
+        print("residual: {}".format(residual))
+        print("Residual reduction factor: {}".format(old_residual/residual))
+    print("------")
+
+    return old_residual, residual, init_residual
+
+
+
+def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
+                                                    h, n_iterations):
+
+    h_1d = h.reshape(-1)
+
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    extrapolate_over_cf                        = extrapolate_over_cf_function(h)
+
+    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+                                                       h_1d,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
+
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+
+
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+                                                              ksp_type="bcgs",\
+                                                              preconditioner="hypre",\
+                                                              precondition_only=False)
+
+
+
+    @custom_vjp
+    def solver(mucoef, u_trial, v_trial, sliding_coef):
+        u_1d = u_trial.copy().reshape(-1)
+        v_1d = v_trial.copy().reshape(-1)
+
+        residual = jnp.inf
+        init_res = 0
+
+        for i in range(n_iterations):
+
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+                                                           (u_1d, v_1d, mucoef, sliding_coef)
+                                                          )
+
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef))
+
+            #print(jnp.max(rhs))
+            #raise
+
+            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
+
+
+            du = la_solver(nz_jac_values, rhs)
+
+            u_1d = u_1d+du[:(ny*nx)]
+            v_1d = v_1d+du[(ny*nx):]
+
+
+        res_final = jnp.max(jnp.abs(jnp.concatenate(
+                                    get_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef)
+                                                   )
+                                   )
+                           )
+        print("----------")
+        print("Final residual: {}".format(res_final))
+        print("Total residual reduction factor: {}".format(init_res/res_final))
+        print("----------")
+
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+
+
+    def solver_fwd(mucoef, u_trial, v_trial, sliding_coef):
+        u, v = solver(mucoef, u_trial, v_trial)
+
+        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+                                                       (u.reshape(-1), v.reshape(-1),\
+                                                        mucoef, sliding_coef)
+                                                      )
+        dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+
+        fwd_residuals = (u, v, dJ_dvel_nz_values, mucoef, sliding_coef)
+
+        return (u, v), fwd_residuals
+
+
+    def solver_bwd(res, cotangent):
+        
+        u, v, dJ_dvel_nz_values, mucoef, sliding_coef = res
+        u_bar, v_bar = cotangent
+
+        lambda_ = la_solver(dJ_dvel_nz_values,
+                            -jnp.concatenate([u_bar, v_bar]),
+                            transpose=True)
+
+        lambda_u = lambda_[:(ny*nx)]
+        lambda_v = lambda_[(ny*nx):]
+
+
+        _, pullback_function = jax.vjp(get_u_v_residuals,
+                                         u.reshape(-1), v.reshape(-1),
+                                         mucoef, sliding_coef
+                                      )
+
+        _, _, mu_bar, _ = pullback_function((lambda_u, lambda_v))
+        
+#        #bwd has to return a tuple of cotangents for each primal input
+#        #of solver, so have to return this 1-tuple:
+#        return (mu_bar.reshape((ny, nx)), )
+
+        #I wonder if I can get away with just returning None for u_trial_bar and v_trial_bar...
+        return (mu_bar.reshape((ny, nx)), None, None, None)
+
+
+    solver.defvjp(solver_fwd, solver_bwd)
+
+    return solver
+
+
+
+def make_misfit_function(u_obs, v_obs, reg_param, solver, misfit_only=False):
+
+    def misfit_function(mucoef_internal, u_trial, v_trial):
+        u_mod, v_mod = solver(mucoef_internal, u_trial, v_trial)
+
+        misfit = jnp.sum((u_obs-u_mod)**2 + (v_obs-v_mod)**2)
+        regularisation = reg_param * jnp.sum(mucoef_internal**2)
+        # print(regularisation)
+
+        #In order for grad to work, the function has to return a scalar
+        #value as the first argument and then other things packaged together as the second.
+        #Then you have to specify has_aux=True so that it knows there's stuff in the
+        #second argument and to leave it alone.
+        return misfit + regularisation, (u_mod, v_mod)
+
+    return misfit_function
+
+
+def make_misfit_function_speed(u_obs, u_c, reg_param, solver, misfit_only=False):
+
+    def misfit_function(mucoef_internal, u_trial, v_trial):
+        u_mod, v_mod = solver(mucoef_internal, u_trial, v_trial)
+
+
+        #plt.imshow(np.array(v_mod.copy()))
+        #plt.show()
+    
+        #plt.imshow(uc)
+        #plt.show()
+
+        misfit = jnp.sum(uc * (u_obs - jnp.sqrt(u_mod**2 + v_mod**2 + 1e-12))**2)
+
+        regularisation = reg_param * jnp.sum((1-mucoef_internal)**2)
+        # print(regularisation)
+
+        #In order for grad to work, the function has to return a scalar
+        #value as the first argument and then other things packaged together as the second.
+        #Then you have to specify has_aux=True so that it knows there's stuff in the
+        #second argument and to leave it alone.
+        return misfit + regularisation, (u_mod, v_mod)
+
+    return misfit_function
+
+
+
+def plotcontrol(field):
+    plt.figure(figsize=(5,5))
+    plt.imshow(field, vmin=0, vmax=1, cmap="cubehelix")
+    plt.colorbar()
+    plt.show()
+
+
+def gradient_descent_function(misfit_function, iterations=400, step_size=1e7):
+    def gradient_descent(initial_guess, u_init_initial, v_init_initial):
+        #instead of grad, value_and_grad returns value too
+        #so we can keep track
+        get_grad = jax.value_and_grad(misfit_function, has_aux=True)
+        #Note the has_aux as per the above comment.
+
+        ctrl_i = initial_guess
+        u_i = u_init_initial
+        v_i = v_init_initial
+        ctrls = [ctrl_i]
+        for i in range(iterations):
+            print(i)
+            #note that grad by default takes gradient wrt first arg
+            (misfit, (u_i, v_i)), grad = get_grad(ctrl_i, u_i, v_i) 
+            print(misfit)
+
+            #print(grad)
+
+            grad = jnp.clip(grad, a_min=-1e-4, a_max=1e-4)
+            
+            print(jnp.min(grad))
+            print(jnp.max(grad))
+
+            #plt.imshow(grad, cmap="hsv")
+            #plt.show()
+            #raise
+
+            #print(jnp.min(grad))
+            #print(jnp.min(grad)==0)
+            #raise
+            ctrl_i = ctrl_i.at[:,:].set(ctrl_i - step_size*grad)
+            ctrl_i = jnp.clip(ctrl_i, a_min=0.1, a_max=2)
+
+            ctrls.append(ctrl_i[::-1, :])
+
+#        print("making gif")
+#        make_gif(ctrls, filename="../../../bits_of_data/ice_shelf_ip/larsen_c_ip.gif",
+#                 cmap="cubehelix", vmin=0, vmax=1)
+
+        return ctrl_i, u_i, v_i
+    return gradient_descent
+
+
+
+
+def make_misfit_function_speed_basic(u_obs, u_c, reg_param, solver, u_trial, v_trial):
+
+    def misfit_function(mucoef_internal):
+
+        u_mod, v_mod = solver(mucoef_internal.reshape(u_trial.shape), u_trial, v_trial)
+
+        u_mod = u_mod*c.S_PER_YEAR
+        v_mod = v_mod*c.S_PER_YEAR
+
+        misfit = jnp.sum(uc * (u_obs - jnp.sqrt(u_mod**2 + v_mod**2 + 1e-12))**2)/(u_mod.size)
+
+        regularisation = reg_param * jnp.sum((1-mucoef_internal)**2)/(u_mod.size)
+
+        return misfit + regularisation
+
+    return misfit_function
+
+
+def lbfgsb_function(misfit_function, iterations=50):
+    def lbfgsb(initial_guess):
+
+        get_grad = jax.grad(misfit_function)
+
+        print("starting opt")
+        #need the callback to give intermediate vals etc. will sort later.
+        result = scinimize(misfit_function, 
+                           initial_guess, 
+                           jac = lambda x: get_grad(x), 
+                           method="L-BFGS-B", 
+                           bounds=[(0.1, 2)] * initial_guess.size, 
+                           options={"maxiter": iterations} #Note: disp is depricated
+                          )
+
+        return result.x
+    return lbfgsb
+
+
+
+
+
+
+Lx = 640_000
+Ly = 80_000
+
+resolution = 2000
+
+x_bar = 300_000
+
+x = jnp.arange(0, Lx, resolution)
+y = jnp.arange(0, Ly, resolution)
+
+
+nx = int(Lx/resolution)
+ny = int(Ly/resolution)
+
+B0 = -150
+B2 = -728.8
+B4 = 343.91
+B6 = -50.57
+
+fc = 4000
+dc = 500
+wc = 24000
+zb = -720
+x_calve = 640_000
+
+x_tilde = x/x_bar
+
+Bx = B0*x_tilde + B2*(x_tilde**2) + B4*(x_tilde**4) + B6*(x_tilde**6)
+By = dc * ( (1/(1+jnp.exp(-2*(y-Ly/2-wc)/fc))) + (1/(1+jnp.exp(2*(y-Ly/2+wc)/fc))) )
+
+Bx_2d = Bx[None, :]
+By_2d = By[:, None]
+
+b = jnp.maximum( (Bx_2d+By_2d), zb )
+
+#plt.imshow(B)
+#plt.show()
+#
+#plt.plot(B[:,150])
+#plt.show()
+
+#thk_profile = 4000 - (3500*x/Lx)
+#NOTE: this is totally fucked. The above expression doesn't work,
+#but this one does:
+thk_profile = 4000*(1-(3500/4000)*x/Lx)
+#print(x)
+#print(x/Lx)
+#print(4000*(1-(3500/4000)*x/Lx))
+#raise
+
+#plt.plot(thk_profile)
+#plt.show()
+#raise
+
+thk = jnp.zeros((ny, nx))+thk_profile[None,:]
+thk = thk.at[:, -1].set(0)
+
+A = 6.338e-25
+B = 0.5 * (A**(-1/c.GLEN_N))
+m = 3
+C = jnp.zeros_like(thk)+3.16e6
+
+
+
+
+
+
+mucoef = jnp.ones_like(thk)
+
+u_init = jnp.zeros_like(thk)
+v_init = jnp.zeros_like(thk)
+n_iterations = 15
+solver = make_newton_velocity_solver_function_custom_vjp(ny, nx, resolution, resolution, thk,\
+                                                         n_iterations)
+
+
+u_out, v_out = solver(mucoef, u_init, v_init, C)
+
+#jnp.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy", mucoef_inv)
+
+#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=100_000, showcbar=False)
+show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=100_000)
+
+
+
+raise
+
+
