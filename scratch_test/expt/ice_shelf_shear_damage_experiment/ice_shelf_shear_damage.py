@@ -159,6 +159,13 @@ def interp_cc_to_fc_function(ny, nx):
     return interp_cc_to_fc
 
 
+def interp_fc_to_cc_function(ny, nx):
+    def interp_fc_to_cc(var_ew, var_ns):
+        var_cc = 0.25*(var_ew[:,:-1]+var_ew[:,1:]+var_ns[1:,:]+var_ns[:-1,:])
+        return var_cc
+    return interp_fc_to_cc
+
+
 def cc_gradient_function(dy, dx):
 
     def cc_gradient(var):
@@ -332,24 +339,59 @@ def extrapolate_over_cf_function(thk):
     return extrapolate_over_cf
 
 
-
-def compute_u_v_residuals_function(ny, nx, dy, dx, \
-                                   h_1d,\
-                                   interp_cc_to_fc,\
-                                   ew_gradient,\
-                                   ns_gradient,\
-                                   cc_gradient,\
-                                   add_rflc_ghost_cells,\
-                                   add_cont_ghost_cells,\
+def compute_u_v_residuals_function_with_damage(ny, nx, dy, dx,
+                                   h_1d,
+                                   interp_cc_to_fc,
+                                   ew_gradient,
+                                   ns_gradient,
+                                   cc_gradient,
+                                   add_rflc_ghost_cells,
+                                   add_cont_ghost_cells,
                                    extrp_over_cf):
+
+    damcoef = 5e-6
+    #damcoef = 1.3e3
 
     def compute_beta(u, v, sliding_coef):
         return sliding_coef*(jnp.sqrt(u**2+v**2+1e-15)**(-2/3))
 
-Basically, add a bit that is multiplies mucoef that is a function of shear stress.
-then have either the coefficient or the exponent (or a set of coefficients for the 
-different stress directions or something) as an argument to compute_u_v_residuals.
-No need to actually compute and solve for the damage field I dont think...
+    def compute_damage(u, v, mucoef, h):
+        u, v = add_rflc_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        #interpolate things onto face-cenres
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+        #damage. note it lives on faces
+        damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew))/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)))
+        damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns))/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)))
+        #damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2)/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2))
+        #damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2)/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2))
+        #damage_ew = damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)
+        #damage_ns = damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)
+        damage_ew = jnp.minimum(damage_ew, 0.75)
+        damage_ns = jnp.minimum(damage_ns, 0.75)
+
+        return 0.25*(damage_ns[1:,:]+damage_ns[:-1,:]+damage_ew[:,1:]+damage_ew[:,:-1])
+        
 
     def compute_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef):
 
@@ -406,6 +448,132 @@ No need to actually compute and solve for the damage field I dont think...
         mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
                     0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+        #damage. note it lives on faces
+        damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew))/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)))
+        damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns))/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)))
+        #damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2)/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2))
+        #damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2)/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2))
+        #damage_ew = damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)
+        #damage_ns = damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)
+        damage_ew = jnp.minimum(damage_ew, 0.75)
+        damage_ns = jnp.minimum(damage_ns, 0.75)
+
+#        print(damage_ew)
+#        raise
+
+        #mu_ns = mu_ns.at[:, -2].set(0) #screws everything up for some reason!
+        #mu_ns = mu_ns*0
+
+        visc_x = 2 * (1-damage_ew[:, 1:]) * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * (1-damage_ew[:,:-1]) * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * (1-damage_ns[:-1,:]) * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * (1-damage_ns[1:, :]) * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+
+        visc_y = 2 * (1-damage_ew[:, 1:]) * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * (1-damage_ew[:,:-1]) * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * (1-damage_ns[:-1,:]) * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * (1-damage_ns[1:, :]) * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        
+        ##removing the thickness makes speeds look better!
+        #visc_x = mu_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+        #         mu_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+        #         mu_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+        #         mu_ns[1:, :]*(dudy_ns[1:,:] + dvdx_ns[1:,:])*0.5*dx
+
+
+        #visc_y = mu_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+        #         mu_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+        #         mu_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+        #         mu_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
+
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_u_v_residuals), compute_damage
+
+
+
+def compute_u_v_residuals_function(ny, nx, dy, dx, \
+                                   h_1d,\
+                                   interp_cc_to_fc,\
+                                   ew_gradient,\
+                                   ns_gradient,\
+                                   cc_gradient,\
+                                   add_rflc_ghost_cells,\
+                                   add_cont_ghost_cells,\
+                                   extrp_over_cf):
+
+    def compute_beta(u, v, sliding_coef):
+        return sliding_coef*(jnp.sqrt(u**2+v**2+1e-15)**(-2/3))
+
+    def compute_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef):
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        s_gnd = h + b #b is globally defined
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        s = add_cont_ghost_cells(s)
+
+        #volume_term
+        dsdx, dsdy = cc_gradient(s)
+        beta = compute_beta(u, v, sliding_coef)
+
+
+        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
+
+        #TODO: set bespoke conditions at the front for dvel_dx! otherwise
+        #over-estimating the viscosity on the faces near the front!
+        #u, v = extrapolate_over_cf(u, v)
+
+
+        #momentum_term
+        #quickly extrapolate velocity over calving front
+        #NOTE: I'm not sure it's even really necessary to do this you know...
+        #in the y-aligned calving front it only affects the ddx_ns derivatives.
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_rflc_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        ##cc_derivatives, e.g. for viscosity calculation
+        #dudx_cc, dudy_cc = cc_gradient(u)
+        #dvdx_cc, dvdy_cc = cc_gradient(v)
+
+        #interpolate things onto face-cenres
+        h_ew, h_ns = interp_cc_to_fc(h)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+
+        
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        
         #to account for calving front boundary condition, set effective viscosities
         #of faces of all cells with zero thickness to zero:
         mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
@@ -481,7 +649,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
 
-    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+    get_u_v_residuals, compute_damage = compute_u_v_residuals_function_with_damage(ny, nx, dy, dx,\
                                                        h_1d,\
                                                        interp_cc_to_fc,\
                                                        ew_gradient, ns_gradient,\
@@ -489,6 +657,14 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                        add_rflc_ghost_cells,\
                                                        add_cont_ghost_cells,\
                                                        extrapolate_over_cf)
+    #get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+    #                                                   h_1d,\
+    #                                                   interp_cc_to_fc,\
+    #                                                   ew_gradient, ns_gradient,\
+    #                                                   cc_gradient,\
+    #                                                   add_rflc_ghost_cells,\
+    #                                                   add_cont_ghost_cells,\
+    #                                                   extrapolate_over_cf)
 
 
     #############
@@ -627,7 +803,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
     solver.defvjp(solver_fwd, solver_bwd)
 
-    return solver
+    return solver, compute_damage
 
 
 
@@ -791,9 +967,12 @@ thk = jnp.zeros((ny, nx))+thk_profile[None,:]
 thk = thk.at[:, -1].set(0)
 
 A = 6.338e-25
-B = 0.5 * (A**(-1/c.GLEN_N))
+#B = 0.5 * (A**(-1/c.GLEN_N))
+B = A**(-1/c.GLEN_N)
 m = 3
+
 C = jnp.zeros_like(thk)+3.16e6
+C = C.at[6:-6, 6:].set(0)
 
 
 
@@ -804,7 +983,7 @@ mucoef = jnp.ones_like(thk)
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 n_iterations = 15
-solver = make_newton_velocity_solver_function_custom_vjp(ny, nx, resolution, resolution, thk,\
+solver, compute_damage = make_newton_velocity_solver_function_custom_vjp(ny, nx, resolution, resolution, thk,\
                                                          n_iterations)
 
 
@@ -813,7 +992,14 @@ u_out, v_out = solver(mucoef, u_init, v_init, C)
 #jnp.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy", mucoef_inv)
 
 #show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=100_000, showcbar=False)
-show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=100_000)
+
+d = compute_damage(u_out, v_out, mucoef, thk)
+plt.figure(figsize=(5,5))
+plt.imshow(d, vmin=0, vmax=0.75, cmap="cubehelix_r")
+plt.colorbar()
+plt.show()
+
+show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=1000)
 
 
 
