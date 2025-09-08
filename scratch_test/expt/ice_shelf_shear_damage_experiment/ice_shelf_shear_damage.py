@@ -11,7 +11,8 @@ from sparsity_utils import scipy_coo_to_csr,\
                            make_sparse_jacrev_fct_new,\
                            make_sparse_jacrev_fct_shared_basis
 import constants as c
-from plotting_stuff import show_vel_field, make_gif
+from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
+                           create_gif_from_png_fps, create_high_quality_gif_from_pngfps
 
 
 #3rd party
@@ -338,9 +339,8 @@ def extrapolate_over_cf_function(thk):
 
     return extrapolate_over_cf
 
-
-def compute_u_v_residuals_function_with_damage(ny, nx, dy, dx,
-                                   h_1d,
+def compute_u_v_residuals_function_damcoef_ip(ny, nx, dy, dx,
+                                   h_1d, mucoef,
                                    interp_cc_to_fc,
                                    ew_gradient,
                                    ns_gradient,
@@ -349,13 +349,13 @@ def compute_u_v_residuals_function_with_damage(ny, nx, dy, dx,
                                    add_cont_ghost_cells,
                                    extrp_over_cf):
 
-    damcoef = 5e-6
-    #damcoef = 1.3e3
 
     def compute_beta(u, v, sliding_coef):
         return sliding_coef*(jnp.sqrt(u**2+v**2+1e-15)**(-2/3))
 
-    def compute_damage(u, v, mucoef, h):
+    def compute_damage(u, v, h, damcoef):
+        #damcoef = 5e-6
+
         u, v = add_rflc_ghost_cells(u, v)
 
         #various face-centred derivatives
@@ -393,7 +393,172 @@ def compute_u_v_residuals_function_with_damage(ny, nx, dy, dx,
         return 0.25*(damage_ns[1:,:]+damage_ns[:-1,:]+damage_ew[:,1:]+damage_ew[:,:-1])
         
 
-    def compute_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef):
+    def compute_u_v_residuals(u_1d, v_1d, damcoef, sliding_coef):
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        s_gnd = h + b #b is globally defined
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        s = add_cont_ghost_cells(s)
+
+        #volume_term
+        dsdx, dsdy = cc_gradient(s)
+        beta = compute_beta(u, v, sliding_coef)
+
+
+        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
+
+        #TODO: set bespoke conditions at the front for dvel_dx! otherwise
+        #over-estimating the viscosity on the faces near the front!
+        #u, v = extrapolate_over_cf(u, v)
+
+
+        #momentum_term
+        #quickly extrapolate velocity over calving front
+        #NOTE: I'm not sure it's even really necessary to do this you know...
+        #in the y-aligned calving front it only affects the ddx_ns derivatives.
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_rflc_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        ##cc_derivatives, e.g. for viscosity calculation
+        #dudx_cc, dudy_cc = cc_gradient(u)
+        #dvdx_cc, dvdy_cc = cc_gradient(v)
+
+        #interpolate things onto face-cenres
+        h_ew, h_ns = interp_cc_to_fc(h)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+
+        
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+        #damage. note it lives on faces
+        damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew))/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)))
+        damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns))/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)))
+        #damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2)/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2))
+        #damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2)/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2))
+        #damage_ew = damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)
+        #damage_ns = damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)
+        damage_ew = jnp.minimum(damage_ew, 0.75)
+        damage_ns = jnp.minimum(damage_ns, 0.75)
+
+#        print(damage_ew)
+#        raise
+
+        #mu_ns = mu_ns.at[:, -2].set(0) #screws everything up for some reason!
+        #mu_ns = mu_ns*0
+
+        visc_x = 2 * (1-damage_ew[:, 1:]) * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * (1-damage_ew[:,:-1]) * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * (1-damage_ns[:-1,:]) * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * (1-damage_ns[1:, :]) * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+
+        visc_y = 2 * (1-damage_ew[:, 1:]) * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * (1-damage_ew[:,:-1]) * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * (1-damage_ns[:-1,:]) * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * (1-damage_ns[1:, :]) * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        
+        ##removing the thickness makes speeds look better!
+        #visc_x = mu_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+        #         mu_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+        #         mu_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+        #         mu_ns[1:, :]*(dudy_ns[1:,:] + dvdx_ns[1:,:])*0.5*dx
+
+
+        #visc_y = mu_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+        #         mu_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+        #         mu_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+        #         mu_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
+
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_u_v_residuals), compute_damage
+
+
+def compute_u_v_residuals_function_with_damage(ny, nx, dy, dx,
+                                   h_1d,
+                                   interp_cc_to_fc,
+                                   ew_gradient,
+                                   ns_gradient,
+                                   cc_gradient,
+                                   add_rflc_ghost_cells,
+                                   add_cont_ghost_cells,
+                                   extrp_over_cf):
+
+    #damcoef = 5e-6
+    #damcoef = 1.3e3
+
+    def compute_beta(u, v, sliding_coef):
+        return sliding_coef*(jnp.sqrt(u**2+v**2+1e-15)**(-2/3))
+
+    def compute_damage(u, v, mucoef, h, damcoef):
+        u, v = add_rflc_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        #interpolate things onto face-cenres
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+        #damage. note it lives on faces
+        damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew))/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)))
+        damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns))/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)))
+        #damage_ew = (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2)/(1+ (damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)**2))
+        #damage_ns = (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2)/(1+ (damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)**2))
+        #damage_ew = damcoef*mu_ew*0.5*jnp.abs(dudy_ew + dvdx_ew)
+        #damage_ns = damcoef*mu_ns*0.5*jnp.abs(dudy_ns + dvdx_ns)
+        damage_ew = jnp.minimum(damage_ew, 0.75)
+        damage_ns = jnp.minimum(damage_ns, 0.75)
+
+        return 0.25*(damage_ns[1:,:]+damage_ns[:-1,:]+damage_ew[:,1:]+damage_ew[:,:-1])
+        
+
+    def compute_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef, damcoef):
 
         u = u_1d.reshape((ny, nx))
         v = v_1d.reshape((ny, nx))
@@ -712,8 +877,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
 
-    @custom_vjp
-    def solver(mucoef, u_trial, v_trial, sliding_coef):
+    def _solver(mucoef, u_trial, v_trial, sliding_coef, damcoef):
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
 
@@ -723,13 +887,13 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
         for i in range(n_iterations):
 
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                                           (u_1d, v_1d, mucoef, sliding_coef)
+                                                           (u_1d, v_1d, mucoef, sliding_coef, damcoef)
                                                           )
 
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
-            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef))
+            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef, damcoef))
 
             #print(jnp.max(rhs))
             #raise
@@ -744,7 +908,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
         res_final = jnp.max(jnp.abs(jnp.concatenate(
-                                    get_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef)
+                                    get_u_v_residuals(u_1d, v_1d, mucoef, sliding_coef, damcoef)
                                                    )
                                    )
                            )
@@ -755,27 +919,34 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
         return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
+    
+    @custom_vjp
+    def solver(mucoef, u_trial, v_trial, sliding_coef, damcoef):
+        # primal call uses the plain solver
+        return _newton_solve(mucoef, u_trial, v_trial, sliding_coef, damcoef)
 
 
-    def solver_fwd(mucoef, u_trial, v_trial, sliding_coef):
-        u, v = solver(mucoef, u_trial, v_trial)
+
+
+    def solver_fwd(mucoef, u_trial, v_trial, sliding_coef, damcoef):
+        u, v = _solver(mucoef, u_trial, v_trial, sliding_coef, damcoef)
 
         dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
                                                        (u.reshape(-1), v.reshape(-1),\
-                                                        mucoef, sliding_coef)
+                                                        mucoef, sliding_coef, damcoef)
                                                       )
         dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
 
-        fwd_residuals = (u, v, dJ_dvel_nz_values, mucoef, sliding_coef)
+        fwd_residuals = (u, v, dJ_dvel_nz_values, mucoef, sliding_coef, damcoef)
 
         return (u, v), fwd_residuals
 
 
     def solver_bwd(res, cotangent):
         
-        u, v, dJ_dvel_nz_values, mucoef, sliding_coef = res
+        u, v, dJ_dvel_nz_values, mucoef, sliding_coef, damcoef = res
         u_bar, v_bar = cotangent
 
         lambda_ = la_solver(dJ_dvel_nz_values,
@@ -788,17 +959,19 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
         _, pullback_function = jax.vjp(get_u_v_residuals,
                                          u.reshape(-1), v.reshape(-1),
-                                         mucoef, sliding_coef
+                                         mucoef, sliding_coef, damcoef
                                       )
 
-        _, _, mu_bar, _ = pullback_function((lambda_u, lambda_v))
+        #_, _, mu_bar, _, damcoef_bar = pullback_function((lambda_u, lambda_v))
+        _, _, _, _, damcoef_bar = pullback_function((lambda_u, lambda_v))
         
 #        #bwd has to return a tuple of cotangents for each primal input
 #        #of solver, so have to return this 1-tuple:
 #        return (mu_bar.reshape((ny, nx)), )
 
         #I wonder if I can get away with just returning None for u_trial_bar and v_trial_bar...
-        return (mu_bar.reshape((ny, nx)), None, None, None)
+        #return (mu_bar.reshape((ny, nx)), None, None, None, damcoef_bar)
+        return (None, None, None, None, damcoef_bar)
 
 
     solver.defvjp(solver_fwd, solver_bwd)
@@ -943,6 +1116,72 @@ def lbfgsb_function(misfit_function, iterations=50):
 
 
 
+def make_misfit_function_speed_for_damcoef(u_obs, u_c, reg_param, solver, mucoef, sliding_coef):
+
+    def misfit_function(damcoef_internal, u_trial, v_trial):
+
+        #print(damcoef_internal)
+
+        u_mod, v_mod = solver(mucoef, u_trial, v_trial, sliding_coef, damcoef_internal)
+
+        u_mod = u_mod
+        v_mod = v_mod
+
+        misfit = jnp.sum(u_c * (u_obs - jnp.sqrt(u_mod**2 + v_mod**2 + 1e-12))**2)/(u_mod.size)
+
+        #regularisation = reg_param * jnp.sum((1-mucoef_internal)**2)/(u_mod.size)
+        regularisation = reg_param * jnp.square(damcoef_internal)
+
+        return misfit + regularisation, (u_mod, v_mod)
+
+    return misfit_function
+
+
+
+def gradient_descent_function_for_damcoef(misfit_function, iterations=400, step_size=1e-12):
+    def gradient_descent(initial_guess, u_init_initial, v_init_initial):
+        #instead of grad, value_and_grad returns value too
+        #so we can keep track
+        get_grad = jax.value_and_grad(misfit_function, has_aux=True)
+        #Note the has_aux as per the above comment.
+
+        ctrl_i = initial_guess
+        u_i = u_init_initial
+        v_i = v_init_initial
+        ctrls = [ctrl_i]
+        for i in range(iterations):
+            #note that grad by default takes gradient wrt first arg
+            #(misfit, (u_i, v_i)), grad = get_grad(ctrl_i, u_i, v_i)
+            (misfit, (u_i, v_i)), grad = get_grad(ctrl_i, jnp.zeros_like(u_i), jnp.zeros_like(v_i))
+            print(ctrl_i)
+            print(misfit)
+            print(grad)
+
+            
+            jnp.save("../../../bits_of_data/damage_coefficient_ip/test_1/ip/u_{}.npy".format(i), u_i)
+            jnp.save("../../../bits_of_data/damage_coefficient_ip/test_1/ip/v_{}.npy".format(i), v_i)
+
+            #grad = jnp.clip(grad, a_min=-1e-4, a_max=1e-4) 
+            #print(jnp.min(grad))
+            #print(jnp.max(grad))
+
+
+            #print(jnp.min(grad))
+            #print(jnp.min(grad)==0)
+            #raise
+            ctrl_i = ctrl_i - step_size*grad
+            ctrl_i = jnp.clip(ctrl_i, a_min=0, a_max=1e-5)
+
+            #print(ctrls)
+
+            ctrls.append(ctrl_i)
+
+        print(ctrls)
+
+        return ctrl_i, u_i, v_i
+    return gradient_descent
+
+
 
 
 
@@ -972,37 +1211,187 @@ B = A**(-1/c.GLEN_N)
 m = 3
 
 C = jnp.zeros_like(thk)+3.16e6
-C = C.at[6:-6, 6:].set(0)
-
-
+C = C.at[15:-15, 1:].set(0)
+C = C.at[:, -20:].set(0)
 
 
 
 mucoef = jnp.ones_like(thk)
 
-u_init = jnp.zeros_like(thk)
-v_init = jnp.zeros_like(thk)
-n_iterations = 15
-solver, compute_damage = make_newton_velocity_solver_function_custom_vjp(ny, nx, resolution, resolution, thk,\
-                                                         n_iterations)
+
+def run_fwd_prob(damage_coefficient, save=False):
+
+    mucoef = jnp.ones_like(thk)
+    
+    u_init = jnp.zeros_like(thk)
+    v_init = jnp.zeros_like(thk)
+    n_iterations = 15
+    solver, compute_damage = make_newton_velocity_solver_function_custom_vjp(ny, nx, resolution, resolution, thk,\
+                                                             n_iterations)
+    
+    u_out, v_out = solver(mucoef, u_init, v_init, C, damage_coefficient)
+    
+    
+    #show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=100_000, showcbar=False)
+    
+    d = compute_damage(u_out, v_out, mucoef, thk, damage_coefficient)
+   
+    plt.figure(figsize=(5,5))
+    plt.imshow(d, vmin=0, vmax=0.75, cmap="cubehelix_r")
+    plt.colorbar()
+    plt.show()
+    
+    show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=1000)
+    
+    if save:
+        jnp.save("../../../bits_of_data/damage_coefficient_ip/test_1/u.npy", u_out)
+        jnp.save("../../../bits_of_data/damage_coefficient_ip/test_1/v.npy", v_out)
+        jnp.save("../../../bits_of_data/damage_coefficient_ip/test_1/damage.npy", d)
+    
 
 
-u_out, v_out = solver(mucoef, u_init, v_init, C)
+def run_inv_prob():
+    uo = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/u.npy")
+    vo = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/v.npy")
+    
+    speed_o = jnp.sqrt(uo**2 + vo**2)
+    uc = jnp.ones_like(uo)
 
-#jnp.save("../../../bits_of_data/ice_shelf_ip/mucoef_inv_25its_rp4e1.npy", mucoef_inv)
+    reg_param = 0
 
-#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=100_000, showcbar=False)
+    
+    u_init = jnp.zeros_like(thk)
+    v_init = jnp.zeros_like(thk)
+    n_iterations = 8
+    solver, compute_damage = make_newton_velocity_solver_function_custom_vjp(ny, nx,
+                                                            resolution, resolution, thk,\
+                                                            n_iterations)
 
-d = compute_damage(u_out, v_out, mucoef, thk)
-plt.figure(figsize=(5,5))
-plt.imshow(d, vmin=0, vmax=0.75, cmap="cubehelix_r")
-plt.colorbar()
-plt.show()
+    misfit_function = make_misfit_function_speed_for_damcoef(speed_o, uc, reg_param, solver, mucoef, C)
 
-show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR, vmin=0, vmax=1000)
+    #gd_function = gradient_descent_function_for_damcoef(misfit_function, iterations=2, step_size=1e-5)
+    gd_function = gradient_descent_function_for_damcoef(misfit_function, iterations=60, step_size=2e-2)
+
+    #damcoef_initial_guess = 4e-6
+    damcoef_initial_guess = 1e-10
+#    damcoef_initial_guess = 2.2017598e-06
+    u_ig = jnp.zeros_like(thk)
+    v_ig = jnp.zeros_like(thk)
+
+    damcoef_out, u_out, v_out = gd_function(damcoef_initial_guess, u_ig, v_ig)
+
+    print(damcoef_out)
+
+    pass
+
+dcs = [1e-10, 1.2421302e-07, 2.4784572e-07, 3.7091746e-07, 4.9336654e-07, 6.1514845e-07, 7.3609976e-07, 8.5629654e-07, 9.755597e-07, 1.0937932e-06, 1.2109094e-06, 1.3268461e-06, 1.4414945e-06, 1.5547799e-06, 1.6666309e-06, 1.7769751e-06, 1.8857198e-06, 1.992773e-06, 2.0980658e-06, 2.2017598e-06, 2.3033065e-06, 2.40276e-06, 2.5009285e-06, 2.5961624e-06, 2.6888058e-06, 2.7799701e-06, 2.868898e-06, 2.9555474e-06, 3.0399028e-06, 3.1219236e-06, 3.201623e-06, 3.2789446e-06, 3.3538872e-06, 3.426499e-06, 3.4967538e-06, 3.5646635e-06, 3.630188e-06, 3.693454e-06, 3.7545105e-06, 3.8131454e-06, 3.869722e-06, 3.9238535e-06, 3.976093e-06, 4.026014e-06, 4.074076e-06, 4.1199755e-06, 4.1638436e-06, 4.205777e-06, 4.245922e-06, 4.284201e-06, 4.3207733e-06, 4.355593e-06, 4.3888103e-06, 4.4204767e-06, 4.4505687e-06, 4.479258e-06, 4.506361e-06, 4.53225e-06, 4.556801e-06, 4.579987e-06, 4.6021255e-06]
+
+def make_a_plot_or_two():
+    speedpaths = []
+    damagepaths = []
+    
+    _, compute_damage = make_newton_velocity_solver_function_custom_vjp(ny, nx,
+                                                            resolution, resolution, thk,\
+                                                            0)
+
+    for i in range(60):
+    #    u = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/ip/u_{}.npy".format(i))
+    #    v = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/ip/v_{}.npy".format(i))
+    #    damcoef = dcs[i]
+    #    d = compute_damage(u, v, mucoef, thk, damcoef)
+
+    #    show_vel_field(u*c.S_PER_YEAR, v*c.S_PER_YEAR, vmin=0, vmax=800,
+    #       savepath= "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed{}.png".format(i),
+    #       show=False)
+
+        speedpaths.append("../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed{}.png".format(i))
+
+    #    show_damage_field(d, 
+    #       savepath= "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage{}.png".format(i),
+    #       show=False)
+
+        damagepaths.append("../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage{}.png".format(i))
+
+    create_high_quality_gif_from_pngfps(speedpaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed_gif.gif")
+    create_high_quality_gif_from_pngfps(damagepaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage_gif.gif")
+    #create_gif_from_png_fps(speedpaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed_gif.gif")
+    #create_gif_from_png_fps(damagepaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage_gif.gif")
 
 
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import LogLocator, LogFormatter, AutoMinorLocator
+
+def plot_pretty_series(values, title="Series", y_label="Value", x_label="Index",
+                       save_to=None, logy=True, dpi=240):
+    v = np.asarray(values, dtype=float)
+    x = np.arange(v.size)
+
+    with plt.rc_context({
+        "figure.figsize": (7.2, 4.4),
+        "axes.facecolor": "#fcfcff",
+        "axes.edgecolor": "#2f2f2f",
+        "axes.grid": True,
+        "grid.color": "#d0d7de",
+        "grid.linestyle": "-",
+        "grid.alpha": 0.6,
+        "axes.titleweight": "bold",
+        "axes.titlesize": 13,
+        "axes.labelsize": 12,
+        "font.size": 11,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "savefig.bbox": "tight",
+        "savefig.facecolor": "white",
+    }):
+        fig, ax = plt.subplots(dpi=dpi, constrained_layout=True)
+
+        mark_every = max(1, v.size // 60)
+        ax.plot(x, v, color="#0b84a5", lw=2.2, marker="o", markersize=4,
+                markevery=mark_every, alpha=0.95)
+
+        if logy:
+            ax.set_yscale("log", nonpositive="clip")
+            ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=9))
+            ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1, numticks=90))
+            ax.yaxis.set_major_formatter(LogFormatter())
+        else:
+            ax.yaxis.set_minor_locator(AutoMinorLocator())
+
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(title)
+
+        # Highlight min/max with annotations
+        imin = int(np.nanargmin(v))
+        imax = int(np.nanargmax(v))
+        ax.scatter([x[imin], x[imax]], [v[imin], v[imax]], s=60, zorder=3,
+                   color="#f66d44", edgecolor="white", linewidth=0.8)
+        ax.annotate(f"min = {v[imin]:.2e}", (x[imin], v[imin]),
+                    xytext=(-10, 14), textcoords="offset points",
+                    ha="right", va="bottom", fontsize=9,
+                    bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#f66d44", lw=0.8),
+                    arrowprops=dict(arrowstyle="->", color="#f66d44", lw=0.8))
+        ax.annotate(f"max = {v[imax]:.2e}", (x[imax], v[imax]),
+                    xytext=(10, -14), textcoords="offset points",
+                    ha="left", va="top", fontsize=9,
+                    bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#f66d44", lw=0.8),
+                    arrowprops=dict(arrowstyle="->", color="#f66d44", lw=0.8))
+
+        if save_to:
+            fig.savefig(save_to, dpi=dpi)
+
+        return fig, ax
+
+
+
+
+#run_fwd_prob(5e-6)
+#run_inv_prob()
+#make_a_plot_or_two()
+
+plot_pretty_series(dcs, save_to="../../../bits_of_data/damage_coefficient_ip/test_1/ip/dcs.png", dpi=200)
 
 raise
-
-

@@ -13,6 +13,28 @@ rho_w = 1000
 
 g = 9.8
 
+
+def create_gif_from_png_fps(png_paths, output_path, duration=200, loop=0):
+    frames = [Image.open(p) for p in png_paths]
+    frames[0].save(output_path, save_all=True, append_images=frames[1:], duration=duration, loop=loop)
+
+
+def create_high_quality_gif_from_pngfps(png_paths, output_path, duration=200, loop=0):
+    frames = [Image.open(p).convert("RGBA") for p in png_paths]
+    frames = [f.quantize(colors=256, method=Image.MEDIANCUT) for f in frames]
+    frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=duration,
+        loop=loop,
+        optimize=True,
+        disposal=2
+    )
+
+
+
+
 def make_gif(arrays, filename="animation.gif", interval=200, cmap="viridis", vmin=None, vmax=None):
     images = []
     for arr in arrays:
@@ -35,7 +57,7 @@ def make_gif(arrays, filename="animation.gif", interval=200, cmap="viridis", vmi
     print(f"Saved gif to {filename}")
 
 
-def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, showcbar=True):
+def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, showcbar=True, savepath=None, show=True):
     """
     Displays the magnitude of a 2D vector field and overlays flow direction lines.
 
@@ -71,7 +93,34 @@ def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, sho
     )
 
     plt.tight_layout()
-    plt.show()
+
+    if savepath is not None:
+        plt.savefig(savepath, dpi=100)
+
+    if show:
+        plt.show()
+
+def show_damage_field(d, spacing=1, cmap='cubehelix_r', vmin=0, vmax=1, showcbar=True, savepath=None, show=True):
+    d = jnp.flipud(d)
+
+    ny, nx = d.shape
+
+    x = np.arange(nx)
+    y = np.arange(ny)
+    X, Y = np.meshgrid(x, y)
+
+    plt.figure(figsize=(8, 6))
+    plt.imshow(d, origin='lower', cmap=cmap, extent=(0, nx, 0, ny), vmin=vmin, vmax=vmax)
+    if showcbar:
+        plt.colorbar(label='Damage')
+
+    plt.tight_layout()
+
+    if savepath is not None:
+        plt.savefig(savepath, dpi=100)
+
+    if show:
+        plt.show()
 
 
 
