@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 import imageio
 import jax.numpy as jnp
 import numpy as np
@@ -32,6 +32,65 @@ def create_high_quality_gif_from_pngfps(png_paths, output_path, duration=200, lo
         disposal=2
     )
 
+def create_imageio_gif(png_paths, output_path):
+    images = []
+    for filename in png_paths:
+        images.append(imageio.imread(filename))
+    imageio.mimsave(output_path, images)
+
+
+
+def create_gif_global_palette(png_paths, output_path, duration=200, loop=0,
+                                  dither=True, background=(255, 255, 255)):
+    # Load RGBA frames
+    rgba = [Image.open(p).convert("RGBA") for p in png_paths]
+    w, h = rgba[0].size
+
+    # Composite onto a solid background -> RGB
+    bg = Image.new("RGB", (w, h), background)
+    rgb_frames = [Image.alpha_composite(bg.copy(), f).convert("RGB") for f in rgba]
+
+    # Derive ONE global palette from a mosaic of downscaled frames
+    scale = 4
+    thumbs = [fr.resize((max(1, w//scale), max(1, h//scale)), Image.BILINEAR) for fr in rgb_frames]
+    cols = max(1, int(len(thumbs) ** 0.5))
+    rows = (len(thumbs) + cols - 1) // cols
+    mosaic = Image.new("RGB", (cols * thumbs[0].width, rows * thumbs[0].height))
+    for i, t in enumerate(thumbs):
+        r, c = divmod(i, cols)
+        mosaic.paste(t, (c * t.width, r * t.height))
+
+    # Global adaptive palette (256 colors)
+    palette_img = mosaic.convert("P", palette=Image.ADAPTIVE, colors=256)
+
+    # Quantize each RGB frame to the SAME palette
+    dither_mode = Image.FLOYDSTEINBERG if dither else Image.NONE
+    qframes = [fr.quantize(palette=palette_img, dither=dither_mode) for fr in rgb_frames]
+
+    # Save GIF
+    qframes[0].save(
+        output_path,
+        save_all=True,
+        append_images=qframes[1:],
+        duration=duration,
+        loop=loop,
+        optimize=True,
+        disposal=2,
+    )
+
+
+def create_webp_from_pngs(png_paths, output_path, duration=200, loop=0, quality=95):
+    frames = [Image.open(p).convert("RGBA") for p in png_paths]
+    frames[0].save(
+        output_path,              # e.g. "out.webp"
+        save_all=True,
+        append_images=frames[1:],
+        duration=duration,
+        loop=loop,
+        quality=quality,          # 80–95 typically looks great
+        method=6,                 # slowest/best compression
+        lossless=False            # set True for lossless (larger files)
+    )
 
 
 
@@ -57,7 +116,7 @@ def make_gif(arrays, filename="animation.gif", interval=200, cmap="viridis", vmi
     print(f"Saved gif to {filename}")
 
 
-def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, showcbar=True, savepath=None, show=True):
+def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, showcbar=True, savepath=None, show=True, title=None):
     """
     Displays the magnitude of a 2D vector field and overlays flow direction lines.
 
@@ -94,13 +153,15 @@ def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, sho
 
     plt.tight_layout()
 
+    plt.title(title)
+
     if savepath is not None:
         plt.savefig(savepath, dpi=100)
 
     if show:
         plt.show()
 
-def show_damage_field(d, spacing=1, cmap='cubehelix_r', vmin=0, vmax=1, showcbar=True, savepath=None, show=True):
+def show_damage_field(d, spacing=1, cmap='cubehelix_r', vmin=0, vmax=1, showcbar=True, savepath=None, show=True, title=None):
     d = jnp.flipud(d)
 
     ny, nx = d.shape
@@ -115,6 +176,8 @@ def show_damage_field(d, spacing=1, cmap='cubehelix_r', vmin=0, vmax=1, showcbar
         plt.colorbar(label='Damage')
 
     plt.tight_layout()
+
+    plt.title(title)
 
     if savepath is not None:
         plt.savefig(savepath, dpi=100)

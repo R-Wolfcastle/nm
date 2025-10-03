@@ -12,7 +12,8 @@ from sparsity_utils import scipy_coo_to_csr,\
                            make_sparse_jacrev_fct_shared_basis
 import constants as c
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
-                           create_gif_from_png_fps, create_high_quality_gif_from_pngfps
+                           create_gif_from_png_fps, create_high_quality_gif_from_pngfps,\
+                           create_imageio_gif, create_webp_from_pngs, create_gif_global_palette
 
 
 #3rd party
@@ -1295,25 +1296,30 @@ def make_a_plot_or_two():
                                                             0)
 
     for i in range(60):
-    #    u = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/ip/u_{}.npy".format(i))
-    #    v = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/ip/v_{}.npy".format(i))
-    #    damcoef = dcs[i]
-    #    d = compute_damage(u, v, mucoef, thk, damcoef)
+        #u = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/ip/u_{}.npy".format(i))
+        #v = jnp.load("../../../bits_of_data/damage_coefficient_ip/test_1/ip/v_{}.npy".format(i))
+        #damcoef = dcs[i]
+        #d = compute_damage(u, v, mucoef, thk, damcoef)
 
-    #    show_vel_field(u*c.S_PER_YEAR, v*c.S_PER_YEAR, vmin=0, vmax=800,
-    #       savepath= "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed{}.png".format(i),
-    #       show=False)
+        #show_vel_field(u*c.S_PER_YEAR, v*c.S_PER_YEAR, vmin=0, vmax=800,
+        #   savepath= "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed{}.png".format(i),
+        #   show=False, title="k = "+str(damcoef))
 
         speedpaths.append("../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed{}.png".format(i))
 
-    #    show_damage_field(d, 
-    #       savepath= "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage{}.png".format(i),
-    #       show=False)
+        #show_damage_field(d, 
+        #   savepath= "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage{}.png".format(i),
+        #   show=False, title="k = "+str(damcoef))
 
         damagepaths.append("../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage{}.png".format(i))
+    
+    create_gif_global_palette(speedpaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed_gif.gif")
+    create_gif_global_palette(damagepaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage_gif.gif")
 
-    create_high_quality_gif_from_pngfps(speedpaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed_gif.gif")
-    create_high_quality_gif_from_pngfps(damagepaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage_gif.gif")
+    #create_imageio_gif(speedpaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed_gif.gif")
+    #create_imageio_gif(damagepaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage_gif.gif")
+    #create_high_quality_gif_from_pngfps(speedpaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed_gif.gif")
+    #create_high_quality_gif_from_pngfps(damagepaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage_gif.gif")
     #create_gif_from_png_fps(speedpaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/speed_gif.gif")
     #create_gif_from_png_fps(damagepaths, "../../../bits_of_data/damage_coefficient_ip/test_1/ip/damage_gif.gif")
 
@@ -1390,8 +1396,8 @@ def plot_pretty_series(values, title="Series", y_label="Value", x_label="Index",
 
 #run_fwd_prob(5e-6)
 #run_inv_prob()
-#make_a_plot_or_two()
+make_a_plot_or_two()
 
-plot_pretty_series(dcs, save_to="../../../bits_of_data/damage_coefficient_ip/test_1/ip/dcs.png", dpi=200)
+#plot_pretty_series(dcs, save_to="../../../bits_of_data/damage_coefficient_ip/test_1/ip/dcs.png", dpi=200)
 
 raise
