@@ -129,6 +129,29 @@ def double_dot_contraction(A, B):
         +  jnp.dot(A[0,1], B[1,0]) + jnp.dot(A[1,1], B[1,1])
 
 
+def cc_vector_field_gradient(ny, nx, dy, dx, cc_grad,
+                             add_rb_ghost_cells):
+    def cc_vector_field_gradient(vector_field):
+        u = vector_field[0].reshape((ny, nx))
+        v = vector_field[1].reshape((ny, nx))
+
+        u, v = add_rb_ghost_cells(u, v)
+
+        dudx, dudy = cc_grad(u)
+        dvdx, dvdy = cc_grad(v)
+
+        grad_vf = jnp.zeros((ny, nx, 2, 2))
+
+        grad_vf[:,:,0,0] = dudx
+        grad_vf[:,:,0,1] = dudy
+        grad_vf[:,:,1,0] = dvdx
+        grad_vf[:,:,1,1] = dvdy
+
+        return grad_vf
+
+    return cc_vector_field_gradient
+
+
 def membrane_strain_rate_function(ny, nx, dy, dx, 
                                   cc_grad,
                                   add_rb_ghost_cells):
@@ -155,7 +178,7 @@ def membrane_strain_rate_function(ny, nx, dy, dx,
 
 
 
-def compute_linear_ssa_residuals_lhs_function(ny, nx, dy, dx, \
+def compute_linear_ssa_residuals_function(ny, nx, dy, dx, \
                                               h_1d, beta,\
                                               interp_cc_to_fc,\
                                               ew_gradient,\
@@ -165,7 +188,7 @@ def compute_linear_ssa_residuals_lhs_function(ny, nx, dy, dx, \
                                               add_cont_ghost_cells,\
                                               extrp_over_cf):
 
-    def compute_linear_ssa_residuals_lhs(u_1d, v_1d, mu_bar, cc_rhs):
+    def compute_linear_ssa_residuals(u_1d, v_1d, mu_bar, cc_rhs):
 
         u = u_1d.reshape((ny, nx))
         v = v_1d.reshape((ny, nx))
