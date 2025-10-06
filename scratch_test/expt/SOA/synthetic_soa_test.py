@@ -129,8 +129,8 @@ def double_dot_contraction(A, B):
         +  jnp.dot(A[0,1], B[1,0]) + jnp.dot(A[1,1], B[1,1])
 
 
-def cc_vector_field_gradient(ny, nx, dy, dx, cc_grad,
-                             add_rb_ghost_cells):
+def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
+                                      add_rb_ghost_cells):
     def cc_vector_field_gradient(vector_field):
         u = vector_field[0].reshape((ny, nx))
         v = vector_field[1].reshape((ny, nx))
@@ -356,7 +356,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 
 
 
-def make_solver_of_linear_viscous_problem(ny, nx, dy, dx, h, C):
+def make_solver_of_linear_viscous_problem(ny, nx, dy, dx, h, C, rhs):
     
     beta_eff = C.copy()
     h_1d = h.reshape(-1)
@@ -626,6 +626,170 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     solver.defvjp(solver_fwd, solver_bwd)
 
     return solver
+
+
+def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
+
+    def solver(u_trial, v_trial, residuals_function, n_iterations,
+               additional_residuals_fct_args):
+
+        u_1d = u_trial.copy().reshape(-1)
+        v_1d = v_trial.copy().reshape(-1)
+        
+        residual = jnp.inf
+        init_res = 0
+        for i in range(n_iterations):
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(residuals_function,
+                                                           (u_1d, v_1d,
+                                                            *residuals_fct_args)
+                                                          )
+
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+            rhs = -jnp.concatenate(residuals_function(u_1d, v_1d,
+                                                      *residuals_fct_args))
+
+            #print(jnp.max(rhs))
+            #raise
+
+            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
+
+
+            du = la_solver(nz_jac_values, rhs)
+
+            u_1d = u_1d+du[:(ny*nx)]
+            v_1d = v_1d+du[(ny*nx):]
+
+
+        res_final = jnp.max(jnp.abs(jnp.concatenate(
+                                    residuals_function(*residuals_fct_args)
+                                                   )
+                                   )
+                           )
+        print("----------")
+        print("Final residual: {}".format(res_final))
+        print("Total residual reduction factor: {}".format(init_res/res_final))
+        print("----------")
+
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+    return solver
+
+
+    
+
+
+
+
+
+def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,\
+                                                            h, C,\
+                                                            n_iterations):
+
+    beta_eff = C.copy()
+    h_1d = h.reshape(-1)
+
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    extrapolate_over_cf                        = extrapolate_over_cf_function(h)
+    cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
+                                                       dy, cc_gradient,
+                                                       add_rflc_ghost_cells)
+    membrane_strain_rate                       = membrane_strain_rate_function(ny, nx, dy, dx,
+                                                       cc_grad,
+                                                       add_rflc_ghost_cells)
+
+    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+                                                       h_1d, beta_eff,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
+
+    linear_ssa_residuals = compute_linear_ssa_residuals_function(ny, nx, dy, dx,
+                                                       h_1d, beta_eff,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+
+
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+                                                              ksp_type="bcgs",\
+                                                              preconditioner="hypre",\
+                                                              precondition_only=False)
+
+
+    newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
+
+
+    def solve_fwd_problem(mucoef, u_trial, v_trial):
+        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (mucoef))
+        return u, v
+   
+    def solve_adjoint_problem(mucoef, u, v, lx_trial, ly_trial):
+
+        #solve forward problem:
+        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (mucoef))
+        
+        #calculate viscosity
+
+        #solve adjoint problem
+
+
+        #solve second-order adjoint equations
+
+
+        #calculate gradient
+
+        #calculate hessian-vector-product
+
 
 
 
