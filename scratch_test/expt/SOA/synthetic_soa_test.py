@@ -728,9 +728,9 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
 
 
-def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,
-                                                            h, C,
-                                                            n_iterations):
+def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx,
+                                                     h, C,
+                                                     n_iterations):
 
     beta_eff = C.copy()
     h_1d = h.reshape(-1)
@@ -846,16 +846,41 @@ def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,
         #calculate viscosity
         mu_bar = cc_viscosity(mucoef, u, v)
 
-        #rhs of first equation
+
+        #solve first equation for mu
         rhs_x, rhs_y = div_tensor_field(h * mu_bar * perturbation_direction *\
                                         membrane_strain_rate(u.reshape(-1), v.reshape(-1)))
         rhs = - jnp.concatenate([rhs_x, rhs_y])
 
-        #solve second-order adjoint equations
+        mu_x, mu_y = newton_solver(lx_trial, ly_trial, linear_ssa_residuals, 1, (mu_bar, rhs))
+
+
+        #solve second equation for beta
+        gradient_j = jax.grad(functional, argnums=(0,1))
+        direct_hvp_x, direct_hvp_y = jax.jvp(gradient_j, (u, v, mucoef, *additional_fctl_args), (mu_x, mu_y))
+        rhs = 
+        rhs_1_x, rhs_1_y = div_tensor_field(h * mu_bar * perturbation_direction *\
+                                        membrane_strain_rate(u.reshape(-1), v.reshape(-1)))
+
+        rhs = - jnp.concatenate([rhs_1_x + direct_hvp_x, rhs_1_y + direct_hvp_y])
+
+        beta_x, beta_y = newton_solver(lx_trial, ly_trial, linear_ssa_residuals, 1, (mu_bar, rhs))
+
 
         #calculate hessian-vector-product
+        direct_hvp_part = jax.jvp(jax.grad(functional, argmuns=2), (u,v,mucoef,*additional_fctl_args), perturbation_direction)
+        hvp = direct_hvp_part -\
+              mu_bar * perturbation_direction * h * double_dot_contraction(cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                                                     membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                                                          ) -\
+              mu_bar * h * double_dot_contraction(cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                                                     membrane_strain_rate(mu_x.reshape(-1), mu_y.reshape(-1))
+                                                                          ) -\
+              mu_bar * h * double_dot_contraction(cc_vector_field_gradient(beta_x.reshape(-1), beta_y.reshape(-1)),
+                                                     membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                                                          )
 
+        return hvp
 
-
-
+    return solve_fwd_problem, solve_adjoint_problem, solve_soa_problem
 
