@@ -135,9 +135,9 @@ def double_dot_contraction(A, B):
 
 def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
                                       add_rb_ghost_cells):
-    def cc_vector_field_gradient(vector_field):
-        u = vector_field[0].reshape((ny, nx))
-        v = vector_field[1].reshape((ny, nx))
+    def cc_vector_field_gradient(u, v):
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
         u, v = add_rb_ghost_cells(u, v)
 
@@ -160,9 +160,9 @@ def membrane_strain_rate_function(ny, nx, dy, dx,
                                   cc_grad,
                                   add_rb_ghost_cells):
 
-    def membrane_sr_tensor(vector_field):
-        u = vector_field[0].reshape((ny, nx))
-        v = vector_field[1].reshape((ny, nx))
+    def membrane_sr_tensor(u, v):
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
         u, v = add_rb_ghost_cells(u, v)
 
@@ -383,6 +383,22 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
     return jax.jit(compute_u_v_residuals)
 
 
+def cc_viscosity_function(ny, nx, dy, dx):
+
+    def effective_strain_rate(u, v, cc_vector_field_gradient, add_rflc_ghost_cells):
+        vector_field_gradient = cc_vector_field_gradient(u, v)
+        #TODO: finish
+
+        return epsilon_ii
+
+    def cc_viscosity(mucoef, u, v, cc_vector_field_gradient, add_rflc_ghost_cells):
+
+        effective_sr = effective_strain_rate(u, v, cc_vector_field_gradient, add_rflc_ghost_cells)
+
+        mu_va = B * effective_sr**(-1/3)
+
+        return mu_va
+    return cc_viscosity
 
 
 def make_solver_of_linear_viscous_problem(ny, nx, dy, dx, h, C, rhs):
@@ -733,6 +749,9 @@ def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,
                                                                                cc_grad,
                                                                                add_rflc_ghost_cells)
     div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx)
+
+    #calculate cell-centred viscosity based on velocity and mucoef
+    cc_viscosity = cc_viscosity_function(ny, nx, dy, dx)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
                                                        h_1d, beta_eff,\
