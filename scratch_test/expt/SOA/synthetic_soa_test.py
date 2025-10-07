@@ -4,7 +4,8 @@ import sys
 import time
 
 
-#local apps
+
+##local apps
 sys.path.insert(1, "../../../utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
@@ -14,6 +15,7 @@ import constants as c
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
                            create_gif_from_png_fps, create_high_quality_gif_from_pngfps,\
                            create_imageio_gif, create_webp_from_pngs, create_gif_global_palette
+
 
 
 #3rd party
@@ -36,6 +38,8 @@ from scipy.optimize import minimize as scinimize
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+
+
 
 
 
@@ -176,6 +180,31 @@ def membrane_strain_rate_function(ny, nx, dy, dx,
 
     return membrane_sr_tensor
 
+
+def divergence_of_tensor_field_function(ny, nx, dy, dx):
+    def div_tensor_field(tf):
+        #these have to be 2d scalar fields, of course
+        tf_xx = tf[0,0]
+        tf_xy = tf[0,1]
+        tf_yx = tf[1,0]
+        tf_yy = tf[1,1]
+
+        shape_0, shape_1 = tf_xx.shape
+
+        dx_tf_xx = jnp.zeros((shape_0, shape_1))
+        dx_tf_xx = dx_tf_xx.at[:,1:-1](tf_xx[:,2:] - tf_xx[:,:-2])/(2*dx)
+        
+        dy_tf_yx = jnp.zeros((shape_0, shape_1))
+        dy_tf_yx = dy_tf_yx.at[1:-1,:](tf_xx[:-2] - tf_xx[2:,:])/(2*dy)
+
+        dx_tf_xy = jnp.zeros((shape_0, shape_1))
+        dx_tf_xy = dx_tf_xy.at[:,1:-1](tf_xy[:,2:] - tf_xy[:,:-2])/(2*dx)
+        
+        dy_tf_yy = jnp.zeros((shape_0, shape_1))
+        dy_tf_yy = dy_tf_yy.at[1:-1,:](tf_yy[:-2] - tf_yy[2:,:])/(2*dy)
+
+        return dx_tf_xx+dy_tf_yx, dx_tf_xy+dy_tf_yy
+    return div_tensor_field
 
 
 def compute_linear_ssa_residuals_function(ny, nx, dy, dx, \
@@ -683,8 +712,8 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
 
 
-def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,\
-                                                            h, C,\
+def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,
+                                                            h, C,
                                                             n_iterations):
 
     beta_eff = C.copy()
@@ -698,11 +727,12 @@ def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,\
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
-                                                       dy, cc_gradient,
-                                                       add_rflc_ghost_cells)
+                                                                                   dy, cc_gradient,
+                                                                                   add_rflc_ghost_cells)
     membrane_strain_rate                       = membrane_strain_rate_function(ny, nx, dy, dx,
-                                                       cc_grad,
-                                                       add_rflc_ghost_cells)
+                                                                               cc_grad,
+                                                                               add_rflc_ghost_cells)
+    div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
                                                        h_1d, beta_eff,\
@@ -772,21 +802,37 @@ def solve_forward_adjoint_and_second_order_adjoint_problems(ny, nx, dy, dx,\
     def solve_fwd_problem(mucoef, u_trial, v_trial):
         u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (mucoef))
         return u, v
-   
-    def solve_adjoint_problem(mucoef, u, v, lx_trial, ly_trial):
 
-        #solve forward problem:
-        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (mucoef))
-        
+
+    def solve_adjoint_problem(mucoef, u, v, lx_trial, ly_trial, functional:callable, additional_fctl_args=(None)):
         #calculate viscosity
+        mu_bar = cc_viscosity(mucoef, u, v)
+
+        #right-hand-side (\partial_u J)
+        dJdu, dJdv = jax.grad(functional, argnums=(0,1))(u.reshape(-1), v.reshape(-1), *additional_fctl_args)
+        rhs = - jnp.concatenate([dJdu, dJdv])
 
         #solve adjoint problem
-
-
-        #solve second-order adjoint equations
-
+        lx, ly = newton_solver(lx_trial, ly_trial, linear_ssa_residuals, 1, (mu_bar, rhs))
 
         #calculate gradient
+        dJdq = - mu_bar * h * double_dot_contraction(cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                                                     membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                                    )
+
+        return lx, ly, dJdq
+
+    def solve_soa_problem(mucoef, u, v, lx, ly, functional:callable, 
+                          additional_fctl_args, perturbation_direction):
+        #calculate viscosity
+        mu_bar = cc_viscosity(mucoef, u, v)
+
+        #rhs of first equation
+        rhs_x, rhs_y = div_tensor_field(h * mu_bar * perturbation_direction *\
+                                        membrane_strain_rate(u.reshape(-1), v.reshape(-1)))
+        rhs = - jnp.concatenate([rhs_x, rhs_y])
+
+        #solve second-order adjoint equations
 
         #calculate hessian-vector-product
 
