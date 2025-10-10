@@ -328,8 +328,8 @@ def extrapolate_over_cf_function(thk):
     return extrapolate_over_cf
 
 def double_dot_contraction(A, B):
-    return jnp.dot(A[0,0], B[0,0]) + jnp.dot(A[1,0], B[0,1])\
-        +  jnp.dot(A[0,1], B[1,0]) + jnp.dot(A[1,1], B[1,1])
+    return A[:,:,0,0]*B[:,:,0,0] + A[:,:,1,0]*B[:,:,0,1] +\
+           A[:,:,0,1]*B[:,:,1,0] + A[:,:,1,1]*B[:,:,1,1]
 
 
 def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
@@ -1047,6 +1047,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
         dJdu, dJdv = jax.grad(functional, argnums=(0,1))(*argz)
         rhs = - jnp.concatenate([dJdu, dJdv])
 
+
         #solve adjoint problem
         lx, ly = newton_solver(lx_trial.reshape(-1), ly_trial.reshape(-1),
                                linear_ssa_residuals, 1, (mu_bar, rhs))
@@ -1059,10 +1060,17 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
         return lx, ly, dJdq
 
-    def solve_soa_problem(mucoef, u, v, lx, ly, functional:callable, 
-                          additional_fctl_args, perturbation_direction):
+    def solve_soa_problem(mucoef, u, v, lx, ly, perturbation_direction,
+                          functional:callable, 
+                          additional_fctl_args=None):
         #calculate viscosity
         mu_bar = cc_viscosity(mucoef, u, v)
+        
+        #right-hand-side (\partial_u J)
+        if additional_fctl_args is None:
+            argz = (u.reshape(-1), v.reshape(-1), mucoef)
+        else:
+            argz = (mucoef, *additional_fctl_args)
 
 
         #solve first equation for mu
@@ -1154,9 +1162,9 @@ b = jnp.zeros_like(thk)-600
 mucoef = jnp.ones_like(thk)
 
 C = jnp.zeros_like(thk)
-C = C.at[:1, :].set(1e16)
-C = C.at[:, :1].set(1e16)
-C = C.at[-1:,:].set(1e16)
+C = C.at[:2, :].set(1e16)
+C = C.at[:, :2].set(1e16)
+C = C.at[-2:,:].set(1e16)
 C = jnp.where(thk==0, 1, C)
 
 
@@ -1175,7 +1183,10 @@ mucoef = jnp.ones_like(C)
 
 
 def functional(v_field_x, v_field_y, mucoef):
-    return jnp.sum(jnp.sqrt(v_field_x**2 + v_field_y**2))
+    #NOTE: for things like this, you need to ensure the value isn't
+    #zero where the argument is zero, because JAX can't differentiate
+    #through the square-root otherwise. Silly JAX.
+    return jnp.sum(jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10))
 
 
 fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
@@ -1190,7 +1201,13 @@ lx, ly, gradient = adjoint_solver(mucoef, u_out, v_out,
                                   jnp.zeros_like(u_out),
                                   functional)
 
-show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+
+#NOTE: Calving front stiffness dominating the gradient calculation
+#Should investigate. For now, cutting out to visualise
+plt.imshow(gradient[:,:35])
+plt.show()
+
 
 
 
