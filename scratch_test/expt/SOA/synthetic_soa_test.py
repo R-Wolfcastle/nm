@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 import time
-
+from functools import partial
 
 
 ##local apps
@@ -383,24 +383,28 @@ def membrane_strain_rate_function(ny, nx, dy, dx,
 def divergence_of_tensor_field_function(ny, nx, dy, dx):
     def div_tensor_field(tf):
         #these have to be 2d scalar fields, of course
-        tf_xx = tf[0,0]
-        tf_xy = tf[0,1]
-        tf_yx = tf[1,0]
-        tf_yy = tf[1,1]
+        tf_xx = tf[...,0,0]
+        tf_xy = tf[...,0,1]
+        tf_yx = tf[...,1,0]
+        tf_yy = tf[...,1,1]
 
         shape_0, shape_1 = tf_xx.shape
 
+
+        #NOTE: This is done assuming basically everything of interest and its
+        #gradient is zero at the boundaries
+
         dx_tf_xx = jnp.zeros((shape_0, shape_1))
-        dx_tf_xx = dx_tf_xx.at[:,1:-1](tf_xx[:,2:] - tf_xx[:,:-2])/(2*dx)
+        dx_tf_xx = dx_tf_xx.at[:,1:-1].set((tf_xx[:,2:] - tf_xx[:,:-2])/(2*dx))
         
         dy_tf_yx = jnp.zeros((shape_0, shape_1))
-        dy_tf_yx = dy_tf_yx.at[1:-1,:](tf_xx[:-2] - tf_xx[2:,:])/(2*dy)
+        dy_tf_yx = dy_tf_yx.at[1:-1,:].set((tf_xx[:-2,:] - tf_xx[2:,:])/(2*dy))
 
         dx_tf_xy = jnp.zeros((shape_0, shape_1))
-        dx_tf_xy = dx_tf_xy.at[:,1:-1](tf_xy[:,2:] - tf_xy[:,:-2])/(2*dx)
+        dx_tf_xy = dx_tf_xy.at[:,1:-1].set((tf_xy[:,2:] - tf_xy[:,:-2])/(2*dx))
         
         dy_tf_yy = jnp.zeros((shape_0, shape_1))
-        dy_tf_yy = dy_tf_yy.at[1:-1,:](tf_yy[:-2] - tf_yy[2:,:])/(2*dy)
+        dy_tf_yy = dy_tf_yy.at[1:-1,:].set((tf_yy[:-2,:] - tf_yy[2:,:])/(2*dy))
 
         return dx_tf_xx+dy_tf_yx, dx_tf_xy+dy_tf_yy
     return div_tensor_field
@@ -895,6 +899,8 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
         
         residual = jnp.inf
         init_res = 0
+
+
         for i in range(n_iterations):
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(residuals_function,
                                                            (u_1d, v_1d,
@@ -1070,35 +1076,46 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
         if additional_fctl_args is None:
             argz = (u.reshape(-1), v.reshape(-1), mucoef)
         else:
-            argz = (mucoef, *additional_fctl_args)
+            argz = (u.reshape(-1), v.reshape(-1), mucoef, *additional_fctl_args)
 
-
+        
         #solve first equation for mu
-        rhs_x, rhs_y = div_tensor_field(h * mu_bar * perturbation_direction *\
+        rhs_x, rhs_y = div_tensor_field((h * mu_bar * perturbation_direction)[...,None,None] *\
                                         membrane_strain_rate(u.reshape(-1), v.reshape(-1)))
-        rhs = - jnp.concatenate([rhs_x, rhs_y])
+        rhs = - jnp.concatenate([rhs_x.reshape(-1), rhs_y.reshape(-1)])
 
-        mu_x, mu_y = newton_solver(lx_trial, ly_trial, linear_ssa_residuals, 1, (mu_bar, rhs))
+        x_trial = jnp.zeros_like(mu_bar).reshape(-1)
+        y_trial = jnp.zeros_like(x_trial)
+
+
+        mu_x, mu_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
+                                   1, (mu_bar, rhs))
 
 
         #solve second equation for beta
-        gradient_j = jax.grad(functional, argnums=(0,1))
+        #NOTE: using partial to make functional essentially a function just of u,v to avoid the
+        #difficulties with what to do with mucoef gradients
+        functional_fixed_mucoef = lambda u, v: functional(u, v, mucoef)
+        gradient_j = jax.grad(functional_fixed_mucoef, argnums=(0,1))
         direct_hvp_x, direct_hvp_y = jax.jvp(gradient_j,
-                                             (u, v, mucoef, *additional_fctl_args),
-                                             (mu_x, mu_y))
-        rhs_1_x, rhs_1_y = div_tensor_field(h * mu_bar * perturbation_direction *\
+                                             (u.reshape(-1), v.reshape(-1)),
+                                             (mu_x.reshape(-1), mu_y.reshape(-1)))[1]
+        rhs_1_x, rhs_1_y = div_tensor_field((h * mu_bar * perturbation_direction)[...,None,None] *\
                                         membrane_strain_rate(u.reshape(-1), v.reshape(-1))
                                            )
 
-        rhs = - jnp.concatenate([rhs_1_x + direct_hvp_x, rhs_1_y + direct_hvp_y])
+        rhs = - jnp.concatenate([(rhs_1_x.reshape(-1) + direct_hvp_x),
+                                 (rhs_1_y.reshape(-1) + direct_hvp_y)])
 
-        beta_x, beta_y = newton_solver(lx_trial, ly_trial, linear_ssa_residuals, 1, (mu_bar, rhs))
+        beta_x, beta_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
+                                       1, (mu_bar, rhs))
 
 
         #calculate hessian-vector-product
-        direct_hvp_part = jax.jvp(jax.grad(functional, argmuns=2),
-                                  (u,v,mucoef,*additional_fctl_args),
-                                  perturbation_direction)
+        functional_fixed_vel = lambda mucoef: functional(u.reshape(-1), v.reshape(-1), mucoef)
+        direct_hvp_part = jax.jvp(jax.grad(functional_fixed_vel, argnums=0),
+                                  (mucoef,),
+                                  (perturbation_direction,))[1]
         hvp = direct_hvp_part - mu_bar * h * (\
               perturbation_direction * double_dot_contraction(
                                               cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
@@ -1193,23 +1210,29 @@ fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoin
                                              nr, nc, delta_y, delta_x, thk, C, n_iterations
                                                                                          )
 
-
+print("solving fwd problem:")
 u_out, v_out = fwd_solver(mucoef, u_init, v_init)
 
+#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+
+print("solving adjoint problem:")
 lx, ly, gradient = adjoint_solver(mucoef, u_out, v_out,
                                   jnp.zeros_like(u_out),
                                   jnp.zeros_like(u_out),
                                   functional)
 
-#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
 
-#NOTE: Calving front stiffness dominating the gradient calculation
-#Should investigate. For now, cutting out to visualise
-plt.imshow(gradient[:,:35])
+##NOTE: Calving front stiffness dominating the gradient calculation
+##Should investigate. For now, cutting out to visualise
+#plt.imshow(gradient[:,:35])
+#plt.show()
+
+print("solving second-order adjoint problem:")
+pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
+hvp = soa_solver(mucoef, u_out, v_out, lx, ly, pert_dir, functional)
+
+plt.imshow(hvp[:,:35])
 plt.show()
-
-
-
 
 
 
