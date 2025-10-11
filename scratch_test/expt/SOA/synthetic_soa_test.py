@@ -2,7 +2,6 @@
 from pathlib import Path
 import sys
 import time
-from functools import partial
 
 
 ##local apps
@@ -115,8 +114,8 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
 
         return x_jnp
 
-    def la_solver_fwd(values, b):
-        solution = petsc_sparse_la_solver(values, b)
+    def la_solver_fwd(values, b, transpose=False):
+        solution = petsc_sparse_la_solver(values, b, transpose=transpose)
         return solution, (values, b, solution)
 
     def linear_solve_bwd(res, x_bar):
@@ -124,17 +123,22 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
 
         lambda_ = petsc_sparse_la_solver(values, -x_bar, transpose=True)
 
-        b_bar = -lambda_
+        b_bar = -lambda_.reshape(b.shape) #ensure same shape as input b.
 
         #sparse version of jnp.outer(x,lambda_)
         values_bar = x[coordinates[0]] * lambda_[coordinates[1]]
 
-        return values_bar, b_bar
+        #this is dodgy as hell. Need to wrap everything so I don't
+        #have to put these dummies in...
+        transpose_bar = 0
 
+        return values_bar, b_bar, transpose_bar
 
     petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
 
     return petsc_sparse_la_solver
+
+
 
 def interp_cc_to_fc_function(ny, nx):
 
@@ -618,115 +622,6 @@ def print_residual_things(residual, rhs, init_residual, i):
     return old_residual, residual, init_residual
 
 
-def make_solver_of_linear_viscous_problem(ny, nx, dy, dx, h, C, rhs):
-    
-    beta_eff = C.copy()
-    h_1d = h.reshape(-1)
-
-
-    #functions for various things:
-    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
-    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
-    cc_gradient                                = cc_gradient_function(dy, dx)
-    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
-    extrapolate_over_cf                        = extrapolate_over_cf_function(h)
-
-    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
-                                                       h_1d, beta_eff,\
-                                                       interp_cc_to_fc,\
-                                                       ew_gradient, ns_gradient,\
-                                                       cc_gradient,\
-                                                       add_rflc_ghost_cells,\
-                                                       add_cont_ghost_cells,\
-                                                       extrapolate_over_cf)
-
-
-    #############
-    #setting up bvs and coords for a single block of the jacobian
-    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
-
-    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
-    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
-    mask = (i_coordinate_sets>=0)
-
-
-    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
-                                                        basis_vectors,\
-                                                        i_coordinate_sets,\
-                                                        j_coordinate_sets,\
-                                                        mask,\
-                                                        2,
-                                                        active_indices=(0,1)
-                                                       )
-    #sparse_jacrev = jax.jit(sparse_jacrev)
-
-
-    i_coordinate_sets = i_coordinate_sets[mask]
-    j_coordinate_sets = j_coordinate_sets[mask]
-    #############
-
-    coords = jnp.stack([
-                    jnp.concatenate(
-                                [i_coordinate_sets,         i_coordinate_sets,\
-                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
-                                   ),\
-                    jnp.concatenate(
-                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
-                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
-                                   )
-                       ])
-
-   
-
-
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
-                                                              ksp_type="bcgs",\
-                                                              preconditioner="hypre",\
-                                                              precondition_only=False)
-    
-    def solver(u_trial, v_trial, mu_bar):
-        u_1d = u_trial.copy().reshape(-1)
-        v_1d = v_trial.copy().reshape(-1)
-
-        residual = jnp.inf
-        init_res = 0
-
-
-        ###LINEAR SOLVE######:
-        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                                       (u_1d, v_1d, mucoef)
-                                                      )
-
-        nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
-                                         dJv_du[mask], dJv_dv[mask]])
-
-        rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, mucoef))
-
-        old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
-
-
-        du = la_solver(nz_jac_values, rhs)
-
-        u_1d = u_1d+du[:(ny*nx)]
-        v_1d = v_1d+du[(ny*nx):]
-
-
-        res_final = jnp.max(jnp.abs(jnp.concatenate(
-                                    get_u_v_residuals(u_1d, v_1d, mucoef)
-                                                   )
-                                   )
-                           )
-        print("----------")
-        print("Final residual: {}".format(res_final))
-        print("Total residual reduction factor: {}".format(init_res/res_final))
-        print("----------")
-
-        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
-
-
-
-
-
 
 def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                     h, C,\
@@ -1028,7 +923,8 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
                                                               ksp_type="bcgs",\
                                                               preconditioner="hypre",\
-                                                              precondition_only=False)
+                                                              precondition_only=False,
+                                                              monitor_ksp=False)
 
 
     newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
@@ -1066,6 +962,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
         return lx, ly, dJdq
 
+
     def solve_soa_problem(mucoef, u, v, lx, ly, perturbation_direction,
                           functional:callable, 
                           additional_fctl_args=None):
@@ -1093,7 +990,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
 
         #solve second equation for beta
-        #NOTE: using partial to make functional essentially a function just of u,v to avoid the
+        #NOTE: make functional essentially a function just of u,v to avoid the
         #difficulties with what to do with mucoef gradients
         functional_fixed_mucoef = lambda u, v: functional(u, v, mucoef)
         gradient_j = jax.grad(functional_fixed_mucoef, argnums=(0,1))
@@ -1179,9 +1076,9 @@ b = jnp.zeros_like(thk)-600
 mucoef = jnp.ones_like(thk)
 
 C = jnp.zeros_like(thk)
-C = C.at[:2, :].set(1e16)
-C = C.at[:, :2].set(1e16)
-C = C.at[-2:,:].set(1e16)
+C = C.at[:4, :].set(1e16)
+C = C.at[:, :4].set(1e16)
+C = C.at[-4:,:].set(1e16)
 C = jnp.where(thk==0, 1, C)
 
 
@@ -1206,33 +1103,81 @@ def functional(v_field_x, v_field_y, mucoef):
     return jnp.sum(jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10))
 
 
-fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
-                                             nr, nc, delta_y, delta_x, thk, C, n_iterations
-                                                                                         )
-
-print("solving fwd problem:")
-u_out, v_out = fwd_solver(mucoef, u_init, v_init)
-
-#show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
-
-print("solving adjoint problem:")
-lx, ly, gradient = adjoint_solver(mucoef, u_out, v_out,
-                                  jnp.zeros_like(u_out),
-                                  jnp.zeros_like(u_out),
-                                  functional)
 
 
-##NOTE: Calving front stiffness dominating the gradient calculation
-##Should investigate. For now, cutting out to visualise
-#plt.imshow(gradient[:,:35])
-#plt.show()
+def calculate_hvp_via_soa():
+    fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
+                                                 nr, nc, delta_y, delta_x, thk, C, n_iterations
+                                                                                             )
+    
+    print("solving fwd problem:")
+    u_out, v_out = fwd_solver(mucoef, u_init, v_init)
+    
+    #show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+    
+    print("solving adjoint problem:")
+    lx, ly, gradient = adjoint_solver(mucoef, u_out, v_out,
+                                      jnp.zeros_like(u_out),
+                                      jnp.zeros_like(u_out),
+                                      functional)
+    
+    
+    ##NOTE: Calving front stiffness dominating the gradient calculation
+    ##Should investigate. For now, cutting out to visualise
+    #plt.imshow(gradient[:,:35])
+    #plt.show()
+    
+    print("solving second-order adjoint problem:")
+    pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
+    hvp = soa_solver(mucoef, u_out, v_out, lx, ly, pert_dir, functional)
+    
+    plt.imshow(jnp.log(hvp[:,:35]))
+    plt.show()
 
-print("solving second-order adjoint problem:")
-pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
-hvp = soa_solver(mucoef, u_out, v_out, lx, ly, pert_dir, functional)
 
-plt.imshow(hvp[:,:35])
-plt.show()
+def calculate_hvp_via_ad():
+
+    solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
+                                                             delta_y,
+                                                             delta_x,
+                                                             thk, C,
+                                                             n_iterations)
+
+    def reduced_functional(mucoef):
+        u_out, v_out = solver(mucoef, u_init, v_init)
+        return functional(u_out, v_out, mucoef)
+
+    get_grad = jax.grad(reduced_functional)
+
+    gradient = get_grad(mucoef)
+    
+    plt.imshow(gradient[:,:35])
+    plt.show()
+
+    #I'd have imagined it's ok to do the following:
+    #      hvp = jax.vjp(get_grad, (mucoef,), (pert_dir,))
+    #However, JAX seemingly doesn't support reverse mode AD for functions
+    #that have custom vjps defined within them. IDK why!!
+    #But you can reverse the order of the dot product and derivative computation.
+    #That's actually Lemma 2 in the original Adjoints document I wrote so
+    #that, at least, seems at least to be true!
+
+    def hess_vec_product(mucoef, perturbation):
+        return jax.grad(lambda m: jnp.vdot(get_grad(m), perturbation))(mucoef)
+
+
+    pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
+
+    print(mucoef.shape)
+    print(pert_dir.shape)
+
+    hvp = hess_vec_product(mucoef, pert_dir)
+
+    plt.imshow(hvp[:,:35])
+    plt.show()
+
+
+calculate_hvp_via_ad()
 
 
 
