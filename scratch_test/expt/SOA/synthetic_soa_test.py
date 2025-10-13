@@ -126,7 +126,9 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         b_bar = -lambda_.reshape(b.shape) #ensure same shape as input b.
 
         #sparse version of jnp.outer(x,lambda_)
-        values_bar = x[coordinates[0]] * lambda_[coordinates[1]]
+        #TODO: CHECK THESE COORDINATES - I'VE GOT NO IDEA ATM!!
+        #values_bar = x[coordinates[0]] * lambda_[coordinates[1]]
+        values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
 
         #this is dodgy as hell. Need to wrap everything so I don't
         #have to put these dummies in...
@@ -156,7 +158,7 @@ def interp_cc_to_fc_function(ny, nx):
 
         return var_ew, var_ns
 
-    return interp_cc_to_fc
+    return jax.jit(interp_cc_to_fc)
 
 
 
@@ -169,7 +171,7 @@ def cc_gradient_function(dy, dx):
 
         return dvar_dx, dvar_dy
 
-    return cc_gradient
+    return jax.jit(cc_gradient)
 
 def fc_gradient_functions(dy, dx):
 
@@ -189,7 +191,7 @@ def fc_gradient_functions(dy, dx):
         
         return dvar_dx_ns, dvar_dy_ns
     
-    return ew_face_gradient, ns_face_gradient
+    return jax.jit(ew_face_gradient), jax.jit(ns_face_gradient)
 
 
 def add_ghost_cells_fcts(ny, nx):
@@ -242,7 +244,7 @@ def add_ghost_cells_fcts(ny, nx):
 
         return h
 
-    return add_reflection_ghost_cells, add_continuation_ghost_cells
+    return jax.jit(add_reflection_ghost_cells), jax.jit(add_continuation_ghost_cells)
 
 
 def binary_erosion(boolean_array):
@@ -331,6 +333,7 @@ def extrapolate_over_cf_function(thk):
 
     return extrapolate_over_cf
 
+@jax.jit
 def double_dot_contraction(A, B):
     return A[:,:,0,0]*B[:,:,0,0] + A[:,:,1,0]*B[:,:,0,1] +\
            A[:,:,0,1]*B[:,:,1,0] + A[:,:,1,1]*B[:,:,1,1]
@@ -356,7 +359,7 @@ def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
 
         return grad_vf
 
-    return cc_vector_field_gradient
+    return jax.jit(cc_vector_field_gradient)
 
 
 def membrane_strain_rate_function(ny, nx, dy, dx, 
@@ -381,7 +384,7 @@ def membrane_strain_rate_function(ny, nx, dy, dx,
 
         return msr_tensor
 
-    return membrane_sr_tensor
+    return jax.jit(membrane_sr_tensor)
 
 
 def divergence_of_tensor_field_function(ny, nx, dy, dx):
@@ -402,7 +405,7 @@ def divergence_of_tensor_field_function(ny, nx, dy, dx):
         dx_tf_xx = dx_tf_xx.at[:,1:-1].set((tf_xx[:,2:] - tf_xx[:,:-2])/(2*dx))
         
         dy_tf_yx = jnp.zeros((shape_0, shape_1))
-        dy_tf_yx = dy_tf_yx.at[1:-1,:].set((tf_xx[:-2,:] - tf_xx[2:,:])/(2*dy))
+        dy_tf_yx = dy_tf_yx.at[1:-1,:].set((tf_yx[:-2,:] - tf_yx[2:,:])/(2*dy))
 
         dx_tf_xy = jnp.zeros((shape_0, shape_1))
         dx_tf_xy = dx_tf_xy.at[:,1:-1].set((tf_xy[:,2:] - tf_xy[:,:-2])/(2*dx))
@@ -411,7 +414,7 @@ def divergence_of_tensor_field_function(ny, nx, dy, dx):
         dy_tf_yy = dy_tf_yy.at[1:-1,:].set((tf_yy[:-2,:] - tf_yy[2:,:])/(2*dy))
 
         return dx_tf_xx+dy_tf_yx, dx_tf_xy+dy_tf_yy
-    return div_tensor_field
+    return jax.jit(div_tensor_field)
 
 
 def compute_linear_ssa_residuals_function(ny, nx, dy, dx, \
@@ -602,7 +605,7 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient):
                            0.25*(vfg[:,:,0,1] + vfg[:,:,1,0])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         return mu
-    return cc_viscosity
+    return jax.jit(cc_viscosity)
 
 
 
@@ -741,22 +744,33 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     def solver_fwd(mucoef, u_trial, v_trial):
         u, v = solver(mucoef, u_trial, v_trial)
 
-        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                                       (u.reshape(-1), v.reshape(-1), mucoef)
-                                                      )
-        dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
-                                             dJv_du[mask], dJv_dv[mask]])
-
-
-        fwd_residuals = (u, v, dJ_dvel_nz_values, mucoef)
+#        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+#                                                       (u.reshape(-1), v.reshape(-1), mucoef)
+#                                                      )
+#        dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+#                                             dJv_du[mask], dJv_dv[mask]])
+#
+#
+#        fwd_residuals = (u, v, dJ_dvel_nz_values, mucoef)
+        fwd_residuals = (u, v, mucoef)
 
         return (u, v), fwd_residuals
 
 
     def solver_bwd(res, cotangent):
         
-        u, v, dJ_dvel_nz_values, mucoef = res
+#        u, v, dJ_dvel_nz_values, mucoef = res
+        u, v, mucoef = res
+
         u_bar, v_bar = cotangent
+        
+
+        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+                                                       (u.reshape(-1), v.reshape(-1), mucoef)
+                                                      )
+        dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
 
         lambda_ = la_solver(dJ_dvel_nz_values,
                             -jnp.concatenate([u_bar, v_bar]),
@@ -854,7 +868,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
-                                                                                   dy, cc_gradient,
+                                                                                   dx, cc_gradient,
                                                                                    add_rflc_ghost_cells)
     membrane_strain_rate                       = membrane_strain_rate_function(ny, nx, dy, dx,
                                                                                cc_gradient,
@@ -1013,6 +1027,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
         direct_hvp_part = jax.jvp(jax.grad(functional_fixed_vel, argnums=0),
                                   (mucoef,),
                                   (perturbation_direction,))[1]
+        #NOTE: the first term in the brackets is zero if we're thinking about mucoef rather than q
         hvp = direct_hvp_part - mu_bar * h * (\
               perturbation_direction * double_dot_contraction(
                                               cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
@@ -1064,6 +1079,7 @@ ly = nc*resolution
 x = jnp.linspace(0, lx, nc)
 y = jnp.linspace(0, ly, nr)
 
+
 delta_x = x[1]-x[0]
 delta_y = y[1]-y[0]
 
@@ -1100,7 +1116,7 @@ def functional(v_field_x, v_field_y, mucoef):
     #NOTE: for things like this, you need to ensure the value isn't
     #zero where the argument is zero, because JAX can't differentiate
     #through the square-root otherwise. Silly JAX.
-    return jnp.sum(jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10))
+    return jnp.sum(jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10)) * c.S_PER_YEAR
 
 
 
@@ -1124,14 +1140,16 @@ def calculate_hvp_via_soa():
     
     ##NOTE: Calving front stiffness dominating the gradient calculation
     ##Should investigate. For now, cutting out to visualise
-    #plt.imshow(gradient[:,:35])
-    #plt.show()
+    plt.imshow(gradient[:,:35])
+    plt.colorbar()
+    plt.show()
     
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
     hvp = soa_solver(mucoef, u_out, v_out, lx, ly, pert_dir, functional)
     
-    plt.imshow(jnp.log(hvp[:,:35]))
+    plt.imshow(jnp.log(hvp[6:-6,6:35]))
+    plt.colorbar()
     plt.show()
 
 
@@ -1143,6 +1161,10 @@ def calculate_hvp_via_ad():
                                                              thk, C,
                                                              n_iterations)
 
+#    u_out, v_out = solver(mucoef, u_init, v_init)
+#    plt.imshow(u_out)
+#    plt.show()
+    
     def reduced_functional(mucoef):
         u_out, v_out = solver(mucoef, u_init, v_init)
         return functional(u_out, v_out, mucoef)
@@ -1151,14 +1173,31 @@ def calculate_hvp_via_ad():
 
     gradient = get_grad(mucoef)
     
-    plt.imshow(gradient[:,:35])
-    plt.show()
+    #plt.imshow(gradient[:,:73])
+    #plt.colorbar()
+    #plt.show()
+
+    
+    pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
+
+
+    ##finite diff hvp for comparison
+    #plt.imshow(p)
+    #plt.colorbar()
+    #plt.show()
+    #raise
+    #eps = 1e-3
+    #fd_hvp = (get_grad(mucoef + eps*pert_dir) - get_grad(mucoef)) / eps
+    #plt.imshow(fd_hvp[:,:35])
+    #plt.colorbar()
+    #plt.show()
+    #raise
 
     #I'd have imagined it's ok to do the following:
     #      hvp = jax.vjp(get_grad, (mucoef,), (pert_dir,))
     #However, JAX seemingly doesn't support reverse mode AD for functions
     #that have custom vjps defined within them. IDK why!!
-    #But you can reverse the order of the dot product and derivative computation.
+    #But people seem to reverse the order of the dot product and derivative computation.
     #That's actually Lemma 2 in the original Adjoints document I wrote so
     #that, at least, seems at least to be true!
 
@@ -1166,18 +1205,34 @@ def calculate_hvp_via_ad():
         return jax.grad(lambda m: jnp.vdot(get_grad(m), perturbation))(mucoef)
 
 
-    pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
-
-    print(mucoef.shape)
-    print(pert_dir.shape)
-
     hvp = hess_vec_product(mucoef, pert_dir)
 
-    plt.imshow(hvp[:,:35])
+    plt.imshow((hvp/jnp.linalg.norm(hvp))[:,:35])
+    plt.colorbar()
     plt.show()
 
 
-calculate_hvp_via_ad()
+    plt.imshow((gradient/jnp.linalg.norm(gradient))[:,:35])
+    plt.colorbar()
+    plt.show()
+
+
+    plt.imshow((hvp/jnp.linalg.norm(hvp) - gradient/jnp.linalg.norm(gradient))[:,:35], cmap="Spectral_r")
+    plt.colorbar()
+    plt.show()
+
+    plt.imshow(hvp[:,:35])
+    plt.colorbar()
+    plt.show()
+
+
+
+#TODO: rewrite everything so that it is in terms of q rather than mucoef or re-derive the soa equations so they're in terms of mucoef not q!!!!
+
+
+
+calculate_hvp_via_soa()
+#calculate_hvp_via_ad()
 
 
 
