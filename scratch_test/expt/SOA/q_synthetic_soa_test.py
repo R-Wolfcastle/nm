@@ -498,7 +498,9 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
                                    extrp_over_cf):
 
     
-    def compute_u_v_residuals(u_1d, v_1d, mucoef):
+    def compute_u_v_residuals(u_1d, v_1d, q):
+
+        mucoef = mucoef_0*jnp.exp(q)
 
         u = u_1d.reshape((ny, nx))
         v = v_1d.reshape((ny, nx))
@@ -597,11 +599,11 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 
 
 def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient):
-    def cc_viscosity(mucoef, u, v):
+    def cc_viscosity(q, u, v):
         
         vfg = cc_vector_field_gradient(u, v)
         
-        mu = B * mucoef * (vfg[:,:,0,0]**2 + vfg[:,:,1,1]**2 + vfg[:,:,0,0]*vfg[:,:,1,1] + \
+        mu = B * mucoef_0 * jnp.exp(q) * (vfg[:,:,0,0]**2 + vfg[:,:,1,1]**2 + vfg[:,:,0,0]*vfg[:,:,1,1] + \
                            0.25*(vfg[:,:,0,1] + vfg[:,:,1,0])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         return mu
@@ -697,7 +699,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
     @custom_vjp
-    def solver(mucoef, u_trial, v_trial):
+    def solver(q, u_trial, v_trial):
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
 
@@ -707,13 +709,13 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
         for i in range(n_iterations):
 
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                                           (u_1d, v_1d, mucoef)
+                                                           (u_1d, v_1d, q)
                                                           )
 
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
-            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, mucoef))
+            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, q))
 
             #print(jnp.max(rhs))
             #raise
@@ -728,7 +730,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
         res_final = jnp.max(jnp.abs(jnp.concatenate(
-                                    get_u_v_residuals(u_1d, v_1d, mucoef)
+                                    get_u_v_residuals(u_1d, v_1d, q)
                                                    )
                                    )
                            )
@@ -741,32 +743,32 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
 
-    def solver_fwd(mucoef, u_trial, v_trial):
-        u, v = solver(mucoef, u_trial, v_trial)
+    def solver_fwd(q, u_trial, v_trial):
+        u, v = solver(q, u_trial, v_trial)
 
 #        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-#                                                       (u.reshape(-1), v.reshape(-1), mucoef)
+#                                                       (u.reshape(-1), v.reshape(-1), q)
 #                                                      )
 #        dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
 #                                             dJv_du[mask], dJv_dv[mask]])
 #
 #
-#        fwd_residuals = (u, v, dJ_dvel_nz_values, mucoef)
-        fwd_residuals = (u, v, mucoef)
+#        fwd_residuals = (u, v, dJ_dvel_nz_values, q)
+        fwd_residuals = (u, v, q)
 
         return (u, v), fwd_residuals
 
 
     def solver_bwd(res, cotangent):
         
-#        u, v, dJ_dvel_nz_values, mucoef = res
-        u, v, mucoef = res
+#        u, v, dJ_dvel_nz_values, q = res
+        u, v, q = res
 
         u_bar, v_bar = cotangent
         
 
         dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                                       (u.reshape(-1), v.reshape(-1), mucoef)
+                                                       (u.reshape(-1), v.reshape(-1), q)
                                                       )
         dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
@@ -781,7 +783,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
         _, pullback_function = jax.vjp(get_u_v_residuals,
-                                         u.reshape(-1), v.reshape(-1), mucoef
+                                         u.reshape(-1), v.reshape(-1), q
                                       )
 
         _, _, mu_bar = pullback_function((lambda_u, lambda_v))
@@ -875,7 +877,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                                                add_rflc_ghost_cells)
     div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx)
 
-    #calculate cell-centred viscosity based on velocity and mucoef
+    #calculate cell-centred viscosity based on velocity and q
     cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
@@ -944,21 +946,21 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
 
 
-    def solve_fwd_problem(mucoef, u_trial, v_trial):
-        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (mucoef,))
-        return u, v
+    def solve_fwd_problem(q, u_trial, v_trial):
+        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,))
+        return u.reshape((ny,nx)), v.reshape((ny,nx))
 
 
-    def solve_adjoint_problem(mucoef, u, v, lx_trial, ly_trial,
+    def solve_adjoint_problem(q, u, v, lx_trial, ly_trial,
                               functional:callable, additional_fctl_args=None):
         #calculate viscosity
-        mu_bar = cc_viscosity(mucoef, u, v)
+        mu_bar = cc_viscosity(q, u, v)
 
         #right-hand-side (\partial_u J)
         if additional_fctl_args is None:
-            argz = (u.reshape(-1), v.reshape(-1), mucoef)
+            argz = (u.reshape(-1), v.reshape(-1), q)
         else:
-            argz = (mucoef, *additional_fctl_args)
+            argz = (q, *additional_fctl_args)
 
         dJdu, dJdv = jax.grad(functional, argnums=(0,1))(*argz)
         rhs = - jnp.concatenate([dJdu, dJdv])
@@ -974,20 +976,20 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                            membrane_strain_rate(u.reshape(-1), v.reshape(-1))
                                                     )
 
-        return lx, ly, dJdq
+        return lx.reshape((ny,nx)), ly.reshape((ny,nx)), dJdq
 
 
-    def solve_soa_problem(mucoef, u, v, lx, ly, perturbation_direction,
+    def solve_soa_problem(q, u, v, lx, ly, perturbation_direction,
                           functional:callable, 
                           additional_fctl_args=None):
         #calculate viscosity
-        mu_bar = cc_viscosity(mucoef, u, v)
+        mu_bar = cc_viscosity(q, u, v)
         
         #right-hand-side (\partial_u J)
         if additional_fctl_args is None:
-            argz = (u.reshape(-1), v.reshape(-1), mucoef)
+            argz = (u.reshape(-1), v.reshape(-1), q)
         else:
-            argz = (u.reshape(-1), v.reshape(-1), mucoef, *additional_fctl_args)
+            argz = (u.reshape(-1), v.reshape(-1), q, *additional_fctl_args)
 
         
         #solve first equation for mu
@@ -1005,9 +1007,9 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
         #solve second equation for beta
         #NOTE: make functional essentially a function just of u,v to avoid the
-        #difficulties with what to do with mucoef gradients
-        functional_fixed_mucoef = lambda u, v: functional(u, v, mucoef)
-        gradient_j = jax.grad(functional_fixed_mucoef, argnums=(0,1))
+        #difficulties with what to do with q gradients
+        functional_fixed_q = lambda u, v: functional(u, v, q)
+        gradient_j = jax.grad(functional_fixed_q, argnums=(0,1))
         direct_hvp_x, direct_hvp_y = jax.jvp(gradient_j,
                                              (u.reshape(-1), v.reshape(-1)),
                                              (mu_x.reshape(-1), mu_y.reshape(-1)))[1]
@@ -1023,11 +1025,11 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
 
         #calculate hessian-vector-product
-        functional_fixed_vel = lambda mucoef: functional(u.reshape(-1), v.reshape(-1), mucoef)
+        functional_fixed_vel = lambda q: functional(u.reshape(-1), v.reshape(-1), q)
         direct_hvp_part = jax.jvp(jax.grad(functional_fixed_vel, argnums=0),
-                                  (mucoef,),
+                                  (q,),
                                   (perturbation_direction,))[1]
-        #NOTE: the first term in the brackets is zero if we're thinking about mucoef rather than q
+        #NOTE: the first term in the brackets is zero if we're thinking about q rather than q
         hvp = direct_hvp_part - mu_bar * h * (\
               perturbation_direction * double_dot_contraction(
                                               cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
@@ -1111,15 +1113,20 @@ n_iterations = 10
 
 mucoef = jnp.ones_like(C)
 
+mucoef_0 = jnp.ones_like(C)
+
 q = jnp.zeros_like(C)
 
 
+mask = jnp.zeros_like(C)
+mask = mask.at[6:-6,6:-6].set(1)
 
-def functional(v_field_x, v_field_y, mucoef):
+
+def functional(v_field_x, v_field_y, q):
     #NOTE: for things like this, you need to ensure the value isn't
     #zero where the argument is zero, because JAX can't differentiate
     #through the square-root otherwise. Silly JAX.
-    return jnp.sum(jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10)) * c.S_PER_YEAR
+    return jnp.sum(mask.reshape(-1) * jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10)) * c.S_PER_YEAR
 
 
 
@@ -1130,12 +1137,12 @@ def calculate_hvp_via_soa():
                                                                                              )
     
     print("solving fwd problem:")
-    u_out, v_out = fwd_solver(mucoef, u_init, v_init)
+    u_out, v_out = fwd_solver(q, u_init, v_init)
     
     #show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
     
     print("solving adjoint problem:")
-    lx, ly, gradient = adjoint_solver(mucoef, u_out, v_out,
+    lx, ly, gradient = adjoint_solver(q, u_out, v_out,
                                       jnp.zeros_like(u_out),
                                       jnp.zeros_like(u_out),
                                       functional)
@@ -1149,11 +1156,15 @@ def calculate_hvp_via_soa():
     
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
-    hvp = soa_solver(mucoef, u_out, v_out, lx, ly, pert_dir, functional)
+    hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
-    plt.imshow(jnp.log(hvp[6:-6,6:35]))
+    plt.imshow(hvp[:,:35])
     plt.colorbar()
     plt.show()
+    
+    #plt.imshow(jnp.log(hvp[6:-6,6:35]))
+    #plt.colorbar()
+    #plt.show()
 
 
 def calculate_hvp_via_ad():
@@ -1164,19 +1175,19 @@ def calculate_hvp_via_ad():
                                                              thk, C,
                                                              n_iterations)
 
-#    u_out, v_out = solver(mucoef, u_init, v_init)
+#    u_out, v_out = solver(q, u_init, v_init)
 #    plt.imshow(u_out)
 #    plt.show()
     
-    def reduced_functional(mucoef):
-        u_out, v_out = solver(mucoef, u_init, v_init)
-        return functional(u_out, v_out, mucoef)
+    def reduced_functional(q):
+        u_out, v_out = solver(q, u_init, v_init)
+        return functional(u_out, v_out, q)
 
     get_grad = jax.grad(reduced_functional)
 
-    gradient = get_grad(mucoef)
+    gradient = get_grad(q)
     
-    #plt.imshow(gradient[:,:73])
+    #plt.imshow(gradient[:,:])
     #plt.colorbar()
     #plt.show()
 
@@ -1185,46 +1196,46 @@ def calculate_hvp_via_ad():
 
 
     ##finite diff hvp for comparison
-    #plt.imshow(p)
-    #plt.colorbar()
-    #plt.show()
-    #raise
+    ##plt.imshow(p)
+    ##plt.colorbar()
+    ##plt.show()
+    ##raise
     #eps = 1e-3
-    #fd_hvp = (get_grad(mucoef + eps*pert_dir) - get_grad(mucoef)) / eps
+    #fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
     #plt.imshow(fd_hvp[:,:35])
     #plt.colorbar()
     #plt.show()
-    #raise
+    ##raise
 
     #I'd have imagined it's ok to do the following:
-    #      hvp = jax.vjp(get_grad, (mucoef,), (pert_dir,))
+    #      hvp = jax.vjp(get_grad, (q,), (pert_dir,))
     #However, JAX seemingly doesn't support reverse mode AD for functions
     #that have custom vjps defined within them. IDK why!!
     #But people seem to reverse the order of the dot product and derivative computation.
     #That's actually Lemma 2 in the original Adjoints document I wrote so
     #that, at least, seems at least to be true!
 
-    def hess_vec_product(mucoef, perturbation):
-        return jax.grad(lambda m: jnp.vdot(get_grad(m), perturbation))(mucoef)
+    def hess_vec_product(q, perturbation):
+        return jax.grad(lambda m: jnp.vdot(get_grad(m), perturbation))(q)
 
 
-    hvp = hess_vec_product(mucoef, pert_dir)
+    hvp = hess_vec_product(q, pert_dir)
 
-    plt.imshow((hvp/jnp.linalg.norm(hvp))[:,:35])
-    plt.colorbar()
-    plt.show()
-
-
-    plt.imshow((gradient/jnp.linalg.norm(gradient))[:,:35])
-    plt.colorbar()
-    plt.show()
+    #plt.imshow((hvp/jnp.linalg.norm(hvp))[:,:])
+    #plt.colorbar()
+    #plt.show()
 
 
-    plt.imshow((hvp/jnp.linalg.norm(hvp) - gradient/jnp.linalg.norm(gradient))[:,:35], cmap="Spectral_r")
-    plt.colorbar()
-    plt.show()
+    #plt.imshow((gradient/jnp.linalg.norm(gradient))[:,:])
+    #plt.colorbar()
+    #plt.show()
 
-    plt.imshow(hvp[:,:35])
+
+    #plt.imshow((hvp/jnp.linalg.norm(hvp) - gradient/jnp.linalg.norm(gradient))[:,:35], cmap="Spectral_r")
+    #plt.colorbar()
+    #plt.show()
+
+    plt.imshow(hvp[:,:33])
     plt.colorbar()
     plt.show()
 
