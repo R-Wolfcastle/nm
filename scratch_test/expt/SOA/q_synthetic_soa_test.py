@@ -39,6 +39,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
 
+#jax.config.update("jax_enable_x64", True)
 
 def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
                                     ksp_type='gmres', preconditioner='hypre',\
@@ -127,8 +128,9 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
 
         #sparse version of jnp.outer(x,lambda_)
         #TODO: CHECK THESE COORDINATES - I'VE GOT NO IDEA ATM!!
-        #values_bar = x[coordinates[0]] * lambda_[coordinates[1]]
-        values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
+        #TODO: CHECK WHETHER THERE SHOULD BE A MINUS SIGN (I think not as it's accounted for in defn of b_bar...)
+        values_bar = x[coordinates[0]] * lambda_[coordinates[1]]
+        #values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
 
         #this is dodgy as hell. Need to wrap everything so I don't
         #have to put these dummies in...
@@ -549,9 +551,9 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         
         #calculate face-centred viscosity:
         mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
         mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
 
         #to account for calving front boundary condition, set effective viscosities
         #of faces of all cells with zero thickness to zero:
@@ -604,7 +606,7 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient):
         vfg = cc_vector_field_gradient(u, v)
         
         mu = B * mucoef_0 * jnp.exp(q) * (vfg[:,:,0,0]**2 + vfg[:,:,1,1]**2 + vfg[:,:,0,0]*vfg[:,:,1,1] + \
-                           0.25*(vfg[:,:,0,1] + vfg[:,:,1,0])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+                           0.25*(vfg[:,:,0,1] + vfg[:,:,1,0])**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
 
         return mu
     return jax.jit(cc_viscosity)
@@ -1014,7 +1016,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                              (u.reshape(-1), v.reshape(-1)),
                                              (mu_x.reshape(-1), mu_y.reshape(-1)))[1]
         rhs_1_x, rhs_1_y = div_tensor_field((h * mu_bar * perturbation_direction)[...,None,None] *\
-                                        membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                        membrane_strain_rate(lx.reshape(-1), ly.reshape(-1))
                                            )
 
         rhs = - jnp.concatenate([(rhs_1_x.reshape(-1) + direct_hvp_x),
@@ -1062,6 +1064,10 @@ A = c.A_COLD
 B = 0.5 * (A**(-1/c.GLEN_N))
 
 
+##NOTE: make everything linear by changing to 1
+nvisc = c.GLEN_N
+#nvisc = 1
+
 lx = 150_000
 ly = 200_000
 
@@ -1107,7 +1113,7 @@ C = jnp.where(thk==0, 1, C)
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
-n_iterations = 10
+n_iterations = 1
 
 
 
@@ -1126,7 +1132,7 @@ def functional(v_field_x, v_field_y, q):
     #NOTE: for things like this, you need to ensure the value isn't
     #zero where the argument is zero, because JAX can't differentiate
     #through the square-root otherwise. Silly JAX.
-    return jnp.sum(mask.reshape(-1) * jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10)) * c.S_PER_YEAR
+    return jnp.sum(mask.reshape(-1) * jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10).reshape(-1)) * c.S_PER_YEAR
 
 
 
@@ -1139,7 +1145,7 @@ def calculate_hvp_via_soa():
     print("solving fwd problem:")
     u_out, v_out = fwd_solver(q, u_init, v_init)
     
-    #show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+    show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
     
     print("solving adjoint problem:")
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
@@ -1158,7 +1164,8 @@ def calculate_hvp_via_soa():
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
-    plt.imshow(hvp[:,:35])
+    #plt.imshow(-hvp[:,:35], vmin=-35, vmax=2)
+    plt.imshow(-hvp[:,:35])
     plt.colorbar()
     plt.show()
     
@@ -1200,7 +1207,7 @@ def calculate_hvp_via_ad():
     ##plt.colorbar()
     ##plt.show()
     ##raise
-    #eps = 1e-3
+    #eps = 1e-2
     #fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
     #plt.imshow(fd_hvp[:,:35])
     #plt.colorbar()
@@ -1214,6 +1221,15 @@ def calculate_hvp_via_ad():
     #But people seem to reverse the order of the dot product and derivative computation.
     #That's actually Lemma 2 in the original Adjoints document I wrote so
     #that, at least, seems at least to be true!
+
+    #def hessian(q_prime):
+    #    return jax.jacrev(get_grad)(q_prime)
+
+    #hess = hessian(q)
+
+    #plt.imshow(hess)
+    #plt.show()
+    #raise
 
     def hess_vec_product(q, perturbation):
         return jax.grad(lambda m: jnp.vdot(get_grad(m), perturbation))(q)
@@ -1235,18 +1251,96 @@ def calculate_hvp_via_ad():
     #plt.colorbar()
     #plt.show()
 
-    plt.imshow(hvp[:,:33])
+    plt.imshow(hvp[:,:35])
     plt.colorbar()
     plt.show()
 
 
 
-#TODO: rewrite everything so that it is in terms of q rather than mucoef or re-derive the soa equations so they're in terms of mucoef not q!!!!
-
-
+#TODO: get full Hessian rather than HVP once and see
+#TODO: write linear version.
 
 calculate_hvp_via_soa()
 #calculate_hvp_via_ad()
+
+
+raise
+
+
+
+
+
+
+# --- Force 64-bit for the test ---
+import jax
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp
+import numpy as np
+
+# Build SPD matrix: 1D Laplacian + alpha*I in COO
+n = 200
+alpha = 2.0
+rows = []
+cols = []
+vals = []
+for i in range(n):
+    rows.append(i); cols.append(i);   vals.append(2.0 + alpha)
+    if i > 0:     rows.append(i); cols.append(i-1); vals.append(-1.0)
+    if i < n-1:   rows.append(i); cols.append(i+1); vals.append(-1.0)
+rows   = jnp.array(rows, dtype=jnp.int32)
+cols   = jnp.array(cols, dtype=jnp.int32)
+values = jnp.array(vals, dtype=jnp.float64)
+coords = jnp.stack([rows, cols])
+
+# IMPORTANT: In create_solver_object(A) set:
+# ksp.setTolerances(rtol=1e-12, atol=0.0, max_it=500)
+# and use ksp_type="cg", preconditioner="hypre" or None.
+
+la = create_sparse_petsc_la_solver_with_custom_vjp(
+    coords, (n, n), ksp_type="cg", preconditioner="hypre"
+)
+
+key = jax.random.PRNGKey(0)
+b     = jax.random.normal(key, (n,), dtype=jnp.float64)
+x_bar = jax.random.normal(jax.random.split(key, 2)[1], (n,), dtype=jnp.float64)
+
+def L_of_b(b):
+    x = la(values, b, transpose=False)       # Ax = b
+    return jnp.vdot(x, x_bar)
+
+# ---- Test dL/db ----
+_, vjp_fn = jax.vjp(lambda bb: la(values, bb, transpose=False), b)
+(b_bar_pred,) = vjp_fn(x_bar)
+
+eps = 1e-6
+e   = jax.random.normal(jax.random.split(key, 3)[2], (n,), dtype=jnp.float64)
+L_fd = (L_of_b(b + eps*e) - L_of_b(b)) / eps
+rel_err_db = float(abs(L_fd - jnp.vdot(b_bar_pred, e)) / (abs(L_fd) + 1e-30))
+print("rel err dL/db:", rel_err_db)
+
+# ---- Test a single matrix entry dL/dA_ij (Option A) ----
+def L_of_values(vals):
+    x = la(vals, b, transpose=False)
+    return jnp.vdot(x, x_bar)
+
+x          = la(values, b, transpose=False)
+lambda_opA = la(values, -x_bar, transpose=True)   # Option A: RHS = -x_bar
+k = 0
+i, j = int(coords[0, k]), int(coords[1, k])
+Abar_pred = lambda_opA[i] * x[j]                  # Option A formula
+
+eps = 1e-6
+vals_fd = values.at[k].add(eps)
+Abar_fd = (L_of_values(vals_fd) - L_of_values(values)) / eps
+rel_err_dA = float(abs(Abar_fd - Abar_pred) / (abs(Abar_fd) + 1e-30))
+print("rel err dL/dA_ij:", rel_err_dA)
+
+
+raise
+
+
+
 
 
 
