@@ -146,7 +146,7 @@ def make_sparse_jacrev_fct_new(basis_vectors, i_coord_sets, j_coord_sets, mask):
         
         apply_basis = lambda bv: vjp_fun(bv)[0]
         
-        basis = jnp.stack(basis_vectors).astype(jnp.float32) #int8 won't cut it apparently...
+        basis = jnp.stack(basis_vectors).astype(jnp.float64) #int8 won't cut it apparently...
         
         rows = jax.vmap(apply_basis)(basis)
 
@@ -205,7 +205,7 @@ def make_sparse_jacrev_fct_shared_basis(basis_vectors, i_coord_sets, j_coord_set
         #vjp_fun takes a tuple of shape (output_0, output_1, ...)
 
         
-        basis = jnp.stack(basis_vectors).astype(jnp.float32) #int8 won't cut it apparently...
+        basis = jnp.stack(basis_vectors).astype(jnp.float64) #int8 won't cut it apparently...
         
         #def apply_basis_for_output(out_index):
         #    return lambda bv: vjp_fun(
