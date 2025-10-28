@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 import time
-
+from functools import partial
 
 ##local apps
 sys.path.insert(1, "../../../utils/")
@@ -27,7 +27,7 @@ from jax import jacfwd, jacrev
 import matplotlib.pyplot as plt
 import jax.scipy.linalg as lalg
 from jax.scipy.optimize import minimize
-from jax import custom_vjp
+from jax import custom_vjp, custom_jvp
 from jax.experimental.sparse import BCOO
 
 import numpy as np
@@ -81,8 +81,6 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         ksp.setOperators(A)
         ksp.setFromOptions()
 
-        ksp.setTolerances(rtol=1e-12, atol=0.0, max_it=500)
-        
         if preconditioner is not None:
             #assessing if preconditioner is doing anything:
             #print((A*x - b).norm())
@@ -100,7 +98,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
             return ksp, None
 
 
-    @custom_vjp
+    @partial(jax.custom_vjp, nondiff_argnums=(2,))
     def petsc_sparse_la_solver(values, b, transpose=False):
     
         A, b = construct_ab(values, b, transpose)
@@ -117,11 +115,14 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
 
         return x_jnp
 
+    
     def la_solver_fwd(values, b, transpose=False):
         solution = petsc_sparse_la_solver(values, b, transpose=transpose)
         return solution, (values, b, solution)
 
-    def linear_solve_bwd(res, x_bar):
+
+    #NOTE: the nondiff_argnums=(2,) thing shunts the transpose ragument to the front.
+    def linear_solve_bwd(transpose, res, x_bar):
         #NOTE: The sign convention here is correct, despite what people say...
         #It just follows the documentation rather than "textbook" versions.
         values, b, x = res
@@ -134,13 +135,11 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         #TODO: CHECK WHICH WAY ROUND THESE COORDS GO. SHOULD BE RIGHT IF THEY ARE IJ!
         values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
 
-        #this is dodgy as hell. Need to wrap everything so I don't
-        #have to put these dummies in...
-        transpose_bar = 0
+        jax.debug.print("x = {x}", x=x)
+        jax.debug.print("lambda_ = {x}", x=lambda_)
 
-        return values_bar, b_bar, transpose_bar
+        return values_bar, b_bar
 
-    
     petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
 
     return petsc_sparse_la_solver
@@ -633,6 +632,7 @@ def print_residual_things(residual, rhs, init_residual, i):
 
 
 
+
 def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                     h, C,\
                                                     n_iterations):
@@ -694,8 +694,6 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                        ])
 
    
-
-
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
                                                               ksp_type="bcgs",\
                                                               preconditioner="hypre",\
@@ -743,7 +741,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
         print("Final residual: {}".format(res_final))
         print("Total residual reduction factor: {}".format(init_res/res_final))
         print("----------")
-
+        
         return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
 
@@ -782,7 +780,10 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
         lambda_ = la_solver(dJ_dvel_nz_values,
                             -jnp.concatenate([u_bar, v_bar]),
                             transpose=True)
-        lambda_ = lax.stop_gradient(lambda_)
+
+        #NOTE: Ok, so if you stop the gradients through lambda, it gets rid of the
+        #massive gradients. But it also gets rid of the interesting information...
+        #lambda_ = jax.lax.stop_gradient(lambda_)
 
         lambda_u = lambda_[:(ny*nx)]
         lambda_v = lambda_[(ny*nx):]
@@ -805,6 +806,11 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     solver.defvjp(solver_fwd, solver_bwd)
 
     return solver
+
+
+
+
+
 
 
 def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
@@ -1207,18 +1213,18 @@ def calculate_hvp_via_ad():
     pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
 
 
-    #finite diff hvp for comparison
-    #plt.imshow(p)
+    ##finite diff hvp for comparison
+    ##plt.imshow(p)
+    ##plt.colorbar()
+    ##plt.show()
+    ##raise
+    #eps = 4e-11
+    #fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
+    #plt.imshow(fd_hvp[:,:35])
+    #plt.title("hvp via fd")
     #plt.colorbar()
     #plt.show()
-    #raise
-    eps = 4e-11
-    fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:35])
-    plt.title("hvp via fd")
-    plt.colorbar()
-    plt.show()
-    #raise
+    ##raise
 
     #I'd have imagined it's ok to do the following:
     #      hvp = jax.vjp(get_grad, (q,), (pert_dir,))
@@ -1263,7 +1269,7 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:29])
+    plt.imshow(hvp[:,:35])
     plt.title("hvp via ad")
     plt.colorbar()
     plt.show()

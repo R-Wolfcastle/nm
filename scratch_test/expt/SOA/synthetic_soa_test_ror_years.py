@@ -10,7 +10,7 @@ from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\
                            make_sparse_jacrev_fct_shared_basis
-import constants as c
+import constants_years as c
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
                            create_gif_from_png_fps, create_high_quality_gif_from_pngfps,\
                            create_imageio_gif, create_webp_from_pngs, create_gif_global_palette
@@ -115,40 +115,9 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
 
         return x_jnp
 
-    def la_solver_callback(values, b, transpose=False):
-        out_spec = jax.ShapeDtypeStruct(b.shape, b.dtype)
-        return jax.pure_callback(
-                    lambda values_, b_: petsc_sparse_la_solver(values_, b_, transpose), 
-                    out_spec, values, b
-                                )
-
-
-
-    #def la_solver_fwd(values, b, transpose=False):
-    #    solution = petsc_sparse_la_solver(values, b, transpose=transpose)
-    #    return solution, (values, b, solution)
-
-
-    ##NOTE: the nondiff_argnums=(2,) thing shunts the transpose ragument to the front.
-    #def linear_solve_bwd(transpose, res, x_bar):
-    #    #NOTE: The sign convention here is correct, despite what people say...
-    #    #It just follows the documentation rather than "textbook" versions.
-    #    values, b, x = res
-
-    #    lambda_ = petsc_sparse_la_solver(values, -x_bar, transpose=True)
-
-    #    b_bar = -lambda_.reshape(b.shape) #ensure same shape as input b.
-
-    #    #sparse version of jnp.outer(x,lambda_)
-    #    #TODO: CHECK WHICH WAY ROUND THESE COORDS GO. SHOULD BE RIGHT IF THEY ARE IJ!
-    #    values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
-
-    #    return values_bar, b_bar
-
-
-
+    
     def la_solver_fwd(values, b, transpose=False):
-        solution = la_solver_callback(values, b, transpose)
+        solution = petsc_sparse_la_solver(values, b, transpose=transpose)
         return solution, (values, b, solution)
 
 
@@ -158,7 +127,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         #It just follows the documentation rather than "textbook" versions.
         values, b, x = res
 
-        lambda_ = la_solver_callback(values, -x_bar, transpose=True)
+        lambda_ = petsc_sparse_la_solver(values, -x_bar, transpose=True)
 
         b_bar = -lambda_.reshape(b.shape) #ensure same shape as input b.
 
@@ -166,8 +135,11 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         #TODO: CHECK WHICH WAY ROUND THESE COORDS GO. SHOULD BE RIGHT IF THEY ARE IJ!
         values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
 
+        jax.debug.print("x = {x}", x=x)
+        jax.debug.print("lambda_ = {x}", x=lambda_)
+
         return values_bar, b_bar
-    
+
     petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
 
     return petsc_sparse_la_solver
@@ -659,148 +631,6 @@ def print_residual_things(residual, rhs, init_residual, i):
     return old_residual, residual, init_residual
 
 
-def make_newton_velocity_solver_function_custom_jvp(ny, nx, dy, dx,\
-                                                    h, C,\
-                                                    n_iterations):
-
-    beta_eff = C.copy()
-    h_1d = h.reshape(-1)
-
-
-    #functions for various things:
-    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
-    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
-    cc_gradient                                = cc_gradient_function(dy, dx)
-    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
-    extrapolate_over_cf                        = extrapolate_over_cf_function(h)
-
-    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
-                                                       h_1d, beta_eff,\
-                                                       interp_cc_to_fc,\
-                                                       ew_gradient, ns_gradient,\
-                                                       cc_gradient,\
-                                                       add_rflc_ghost_cells,\
-                                                       add_cont_ghost_cells,\
-                                                       extrapolate_over_cf)
-
-
-    #############
-    #setting up bvs and coords for a single block of the jacobian
-    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
-
-    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
-    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
-    mask = (i_coordinate_sets>=0)
-
-
-    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
-                                                        basis_vectors,\
-                                                        i_coordinate_sets,\
-                                                        j_coordinate_sets,\
-                                                        mask,\
-                                                        2,
-                                                        active_indices=(0,1)
-                                                       )
-    #sparse_jacrev = jax.jit(sparse_jacrev)
-
-
-    i_coordinate_sets = i_coordinate_sets[mask]
-    j_coordinate_sets = j_coordinate_sets[mask]
-    #############
-
-    coords = jnp.stack([
-                    jnp.concatenate(
-                                [i_coordinate_sets,         i_coordinate_sets,\
-                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
-                                   ),\
-                    jnp.concatenate(
-                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
-                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
-                                   )
-                       ])
-
-   
-
-
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
-                                                              ksp_type="bcgs",\
-                                                              preconditioner="hypre",\
-                                                              precondition_only=False)
-
-    @custom_jvp
-    def solver(q, u_trial, v_trial):
-        u_1d = u_trial.copy().reshape(-1)
-        v_1d = v_trial.copy().reshape(-1)
-
-        residual = jnp.inf
-        init_res = 0
-
-        for i in range(n_iterations):
-
-            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                                           (u_1d, v_1d, q)
-                                                          )
-
-            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
-                                             dJv_du[mask], dJv_dv[mask]])
-
-            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, q))
-
-            #print(jnp.max(rhs))
-            #raise
-
-            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
-
-
-            du = la_solver(nz_jac_values, rhs)
-
-            u_1d = u_1d+du[:(ny*nx)]
-            v_1d = v_1d+du[(ny*nx):]
-
-
-        res_final = jnp.max(jnp.abs(jnp.concatenate(
-                                    get_u_v_residuals(u_1d, v_1d, q)
-                                                   )
-                                   )
-                           )
-        print("----------")
-        print("Final residual: {}".format(res_final))
-        print("Total residual reduction factor: {}".format(init_res/res_final))
-        print("----------")
-
-        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
-
-    @solver.defjvp
-    def solver_jvp(primals, tangents):
-        q, u0, v0 = primals
-        q_dot,_,_ = tangents #who gives a shit about u0_dot and v0_dot
-        
-        #build the sparse matrix for the lhs
-        u, v = solver(q, u0, v0)
-        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
-                                                       (u.reshape(-1), v.reshape(-1), q)
-                                                      )
-        nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
-                                         dJv_du[mask], dJv_dv[mask]])
-
-        
-        #build the rhs
-        rhs = - jnp.concatenate(jax.jvp(get_u_v_residuals, 
-                        (u.reshape(-1), v.reshape(-1), q), 
-                        (jnp.zeros_like(u.reshape(-1)), jnp.zeros_like(u.reshape(-1)), q_dot)
-                       )[1]
-                               )
-        #the output of jax.jvp applied to the tangents is the same structure as the output of
-        #get_u_v_residuals, so have to concatenate these into the right shape!
-
-
-        #computing tangents
-        u_dot = la_solver(jax.lax.stop_gradient(nz_jac_values), rhs, transpose=False)
-
-        return (u, v), (u_dot[:(ny*nx)], u_dot[(ny*nx):])
-
-    return solver
-
 
 
 def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
@@ -976,6 +806,11 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     solver.defvjp(solver_fwd, solver_bwd)
 
     return solver
+
+
+
+
+
 
 
 def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
@@ -1242,8 +1077,6 @@ A = c.A_COLD
 B = 0.5 * (A**(-1/nvisc))
 
 
-
-
 lx = 150_000
 ly = 200_000
 
@@ -1308,7 +1141,7 @@ def functional(v_field_x, v_field_y, q):
     #NOTE: for things like this, you need to ensure the value isn't
     #zero where the argument is zero, because JAX can't differentiate
     #through the square-root otherwise. Silly JAX.
-    return jnp.sum(mask.reshape(-1) * jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10).reshape(-1)) * c.S_PER_YEAR
+    return jnp.sum(mask.reshape(-1) * jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10).reshape(-1))
 
 
 
@@ -1321,7 +1154,7 @@ def calculate_hvp_via_soa():
     print("solving fwd problem:")
     u_out, v_out = fwd_solver(q, u_init, v_init)
     
-    show_vel_field(u_out*c.S_PER_YEAR, v_out*c.S_PER_YEAR)
+    show_vel_field(u_out, v_out)
     
     print("solving adjoint problem:")
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
@@ -1330,11 +1163,11 @@ def calculate_hvp_via_soa():
                                       functional)
     
     
-    ###NOTE: Calving front stiffness dominating the gradient calculation
-    ###Should investigate. For now, cutting out to visualise
-    #plt.imshow(gradient[:,:35])
-    #plt.colorbar()
-    #plt.show()
+    ##NOTE: Calving front stiffness dominating the gradient calculation
+    ##Should investigate. For now, cutting out to visualise
+    plt.imshow(gradient[:,:30])
+    plt.colorbar()
+    plt.show()
     
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
@@ -1352,7 +1185,7 @@ def calculate_hvp_via_soa():
 
 def calculate_hvp_via_ad():
 
-    solver = make_newton_velocity_solver_function_custom_jvp(nr, nc,
+    solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
                                                              delta_y,
                                                              delta_x,
                                                              thk, C,
@@ -1370,7 +1203,7 @@ def calculate_hvp_via_ad():
 
     gradient = get_grad(q)
     
-    plt.imshow(gradient[:,:35])
+    plt.imshow(gradient[:,:30])
     plt.colorbar()
     plt.show()
 
@@ -1383,9 +1216,9 @@ def calculate_hvp_via_ad():
     #plt.colorbar()
     #plt.show()
     #raise
-    eps = 4e-11
+    eps = 0.01
     fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:35])
+    plt.imshow(fd_hvp[:,:30])
     plt.title("hvp via fd")
     plt.colorbar()
     plt.show()
@@ -1434,15 +1267,15 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:29])
+    plt.imshow(hvp[:,:30])
     plt.title("hvp via ad")
     plt.colorbar()
     plt.show()
     
-    #plt.imshow((fd_hvp - hvp)[:,:35])
-    #plt.title("fd-ad difference")
-    #plt.colorbar()
-    #plt.show()
+    plt.imshow((fd_hvp - hvp)[:,:30])
+    plt.title("fd-ad difference")
+    plt.colorbar()
+    plt.show()
 
 
 
