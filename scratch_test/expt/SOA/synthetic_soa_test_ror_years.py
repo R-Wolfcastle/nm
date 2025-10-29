@@ -135,9 +135,6 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         #TODO: CHECK WHICH WAY ROUND THESE COORDS GO. SHOULD BE RIGHT IF THEY ARE IJ!
         values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
 
-        jax.debug.print("x = {x}", x=x)
-        jax.debug.print("lambda_ = {x}", x=lambda_)
-
         return values_bar, b_bar
 
     petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
@@ -163,7 +160,6 @@ def interp_cc_to_fc_function(ny, nx):
         return var_ew, var_ns
 
     return jax.jit(interp_cc_to_fc)
-
 
 
 def cc_gradient_function(dy, dx):
@@ -260,7 +256,7 @@ def binary_erosion(boolean_array):
                         [1,1,1],
                         [0,1,0]], dtype=jnp.bool_)
 
-    kernel = kernel.astype(jnp.float32)
+    kernel = kernel.astype(jnp.float64)
 
     def erode_once(mask_float):
         out = jax.lax.conv_general_dilated(
@@ -274,7 +270,7 @@ def binary_erosion(boolean_array):
         )
         return (out[0,0] > 3).astype(jnp.bool_)
 
-    return erode_once(boolean_array.astype(jnp.float32))
+    return erode_once(boolean_array.astype(jnp.float64))
 
 def binary_dilation(boolean_array):
     # 3x3 cross-shaped structuring element (4-connectivity)
@@ -282,7 +278,7 @@ def binary_dilation(boolean_array):
                         [1,1,1],
                         [0,1,0]], dtype=jnp.bool_)
 
-    kernel = kernel.astype(jnp.float32)
+    kernel = kernel.astype(jnp.float64)
 
     def dilate_once(mask_float):
         out = jax.lax.conv_general_dilated(
@@ -296,11 +292,13 @@ def binary_dilation(boolean_array):
         )
         return (out[0,0] > 0).astype(jnp.bool_)
 
-    return dilate_once(boolean_array.astype(jnp.float32))
+    return dilate_once(boolean_array.astype(jnp.float64))
+
+
 #NOTE: this is not actually used...
 def extrapolate_over_cf_function(thk):
 
-    cf_adjacent_zero_ice_cells = (thk<0) & binary_dilation(thk>0)
+    cf_adjacent_zero_ice_cells = (thk==0) & binary_dilation(thk>0)
 
     ice_mask = (thk>0)
 
@@ -333,7 +331,7 @@ def extrapolate_over_cf_function(thk):
         
         u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
 
-        return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float32)
+        return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float64)
 
     return extrapolate_over_cf
 
@@ -344,15 +342,24 @@ def double_dot_contraction(A, B):
 
 
 def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
+                                      extrp_over_cf,
                                       add_rb_ghost_cells):
     def cc_vector_field_gradient(u, v):
         u = u.reshape((ny, nx))
         v = v.reshape((ny, nx))
 
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+
         u, v = add_rb_ghost_cells(u, v)
 
         dudx, dudy = cc_grad(u)
         dvdx, dvdy = cc_grad(v)
+
+        #dudx = jnp.where(thk>0, dudx, 0)
+        #dvdx = jnp.where(thk>0, dvdx, 0)
+        #dudy = jnp.where(thk>0, dudy, 0)
+        #dvdy = jnp.where(thk>0, dvdy, 0)
 
         grad_vf = jnp.zeros((ny, nx, 2, 2))
 
@@ -368,23 +375,35 @@ def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
 
 def membrane_strain_rate_function(ny, nx, dy, dx, 
                                   cc_grad,
+                                  extrapolate_over_cf,
                                   add_rb_ghost_cells):
 
     def membrane_sr_tensor(u, v):
         u = u.reshape((ny, nx))
         v = v.reshape((ny, nx))
 
+        u = extrapolate_over_cf(u)
+        v = extrapolate_over_cf(v)
+
         u, v = add_rb_ghost_cells(u, v)
 
         dudx, dudy = cc_grad(u)
         dvdx, dvdy = cc_grad(v)
+        
+        #dudx = jnp.where(thk>0, dudx, 0)
+        #dvdx = jnp.where(thk>0, dvdx, 0)
+        #dudy = jnp.where(thk>0, dudy, 0)
+        #dvdy = jnp.where(thk>0, dvdy, 0)
 
         msr_tensor = jnp.zeros((ny, nx, 2, 2))
 
-        msr_tensor = msr_tensor.at[:,:,0,0].set(2*dudx + dvdy)
+
+        #TODO: CHECK THAT FACTOR OF 4 AND 2! ARE THEY 2 AND 1 REALLY?
+        #I think this is right.
+        msr_tensor = msr_tensor.at[:,:,0,0].set(4*dudx + 2*dvdy)
         msr_tensor = msr_tensor.at[:,:,0,1].set( dudy + dvdx )
         msr_tensor = msr_tensor.at[:,:,1,0].set( dudy + dvdx )
-        msr_tensor = msr_tensor.at[:,:,1,1].set(2*dvdy + dudx)
+        msr_tensor = msr_tensor.at[:,:,1,1].set(4*dvdy + 2*dudx)
 
         return msr_tensor
 
@@ -419,6 +438,66 @@ def divergence_of_tensor_field_function(ny, nx, dy, dx):
 
         return dx_tf_xx+dy_tf_yx, dx_tf_xy+dy_tf_yy
     return jax.jit(div_tensor_field)
+
+
+def compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx, \
+                                          h_1d, beta,\
+                                          interp_cc_to_fc,\
+                                          ew_gradient,\
+                                          ns_gradient,\
+                                          cc_gradient,\
+                                          add_rflc_ghost_cells,\
+                                          add_cont_ghost_cells,\
+                                          extrp_over_cf):
+
+    def compute_linear_ssa_residuals(u_1d, v_1d, mu_ew, mu_ns, cc_rhs):
+
+        cc_rhs_x = cc_rhs[:nx*ny].reshape((ny, nx))
+        cc_rhs_y = cc_rhs[nx*ny:].reshape((ny, nx))
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        s_gnd = h + b #b is globally defined
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        s = add_cont_ghost_cells(s)
+
+        #volume_term
+        volume_x = - ( beta * u + cc_rhs_x ) * dx * dy
+        volume_y = - ( beta * v + cc_rhs_y ) * dy * dx
+
+        #momentum_term
+        u, v = add_rflc_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        #interpolate things onto face-cenres
+        h_ew, h_ns = interp_cc_to_fc(h)
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        
+        
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_linear_ssa_residuals)
 
 
 def compute_linear_ssa_residuals_function(ny, nx, dy, dx, \
@@ -531,8 +610,8 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         #quickly extrapolate velocity over calving front
         #NOTE: I'm not sure it's even really necessary to do this you know...
         #in the y-aligned calving front it only affects the ddx_ns derivatives.
-        #u = extrp_over_cf(u)
-        #v = extrp_over_cf(v)
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
         #and add the ghost cells in
         u, v = add_rflc_ghost_cells(u, v)
 
@@ -602,18 +681,63 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
     return jax.jit(compute_u_v_residuals)
 
 
-def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient):
+def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, extrp_over_cf):
     def cc_viscosity(q, u, v):
-        
+
+        #extrapolate over cf and add the ghost cells in...
+        #but these are actually donw in the cc_vector_field_gradient function
+
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
+
         vfg = cc_vector_field_gradient(u, v)
         
         mu = B * mucoef_0 * jnp.exp(q) * (vfg[:,:,0,0]**2 + vfg[:,:,1,1]**2 + vfg[:,:,0,0]*vfg[:,:,1,1] + \
                            0.25*(vfg[:,:,0,1] + vfg[:,:,1,0])**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
 
+        #NOTE: the effective viscosity isn't actually set to zero here in the ice-free regions,
+        #but wherever it's used, it should be multiplied by a zero thickness there...
+
         return mu
     return jax.jit(cc_viscosity)
 
 
+def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_rflc_ghost_cells, 
+                          interp_cc_to_fc, ew_gradient, ns_gradient, h_1d):
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_rflc_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+        
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
 
 
 def print_residual_things(residual, rhs, init_residual, i):
@@ -865,10 +989,6 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
     
 
-
-
-
-
 def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_iterations):
 
     beta_eff = C.copy()
@@ -882,7 +1002,208 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
+                                                                                   dx, cc_gradient, 
+                                                                                   extrapolate_over_cf,
+                                                                                   add_rflc_ghost_cells)
+    membrane_strain_rate                       = membrane_strain_rate_function(ny, nx, dy, dx,
+                                                                               cc_gradient,
+                                                                               extrapolate_over_cf,
+                                                                               add_rflc_ghost_cells)
+    div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx)
+
+    #calculate cell-centred viscosity based on velocity and q
+    cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, extrapolate_over_cf)
+    fc_viscosity = fc_viscosity_function(ny, nx, dy, dx, extrapolate_over_cf, add_rflc_ghost_cells,
+                                         interp_cc_to_fc, ew_gradient, ns_gradient, h_1d)
+
+    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+                                                       h_1d, beta_eff,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
+
+    linear_ssa_residuals = compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx,
+                                                       h_1d, beta_eff,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+
+
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+                                                              ksp_type="bcgs",\
+                                                              preconditioner="hypre",\
+                                                              precondition_only=False,
+                                                              monitor_ksp=False)
+
+
+    newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
+
+
+    def solve_fwd_problem(q, u_trial, v_trial):
+        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,))
+        return u.reshape((ny,nx)), v.reshape((ny,nx))
+
+
+    def solve_adjoint_problem(q, u, v, lx_trial, ly_trial,
+                              functional:callable, additional_fctl_args=None):
+        #calculate viscosity
+        mu_bar_ew, mu_bar_ns = fc_viscosity(q, u, v)
+
+        #right-hand-side (\partial_u J)
+        if additional_fctl_args is None:
+            argz = (u.reshape(-1), v.reshape(-1), q,)
+        else:
+            argz = (q, *additional_fctl_args)
+
+        dJdu, dJdv = jax.grad(functional, argnums=(0,1))(*argz)
+        rhs = - jnp.concatenate([dJdu, dJdv])
+
+
+        #solve adjoint problem
+        lx, ly = newton_solver(lx_trial.reshape(-1), ly_trial.reshape(-1),
+                               linear_ssa_residuals, 1, (mu_bar_ew, mu_bar_ns, rhs))
+
+        mu_bar = cc_viscosity(q, u, v)
+        #calculate gradient
+        dJdq = jax.grad(functional, argnums=2)(*argz) \
+               - mu_bar * h * double_dot_contraction(cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                                                           membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                                    )
+
+        return lx.reshape((ny,nx)), ly.reshape((ny,nx)), dJdq
+
+
+    def solve_soa_problem(q, u, v, lx, ly, perturbation_direction,
+                          functional:callable, 
+                          additional_fctl_args=None):
+        #calculate viscosity
+        mu_bar = cc_viscosity(q, u, v)
+        
+        #right-hand-side (\partial_u J)
+        if additional_fctl_args is None:
+            argz = (u.reshape(-1), v.reshape(-1), q)
+        else:
+            argz = (u.reshape(-1), v.reshape(-1), q, *additional_fctl_args)
+
+        
+        #solve first equation for mu
+        rhs_x, rhs_y = div_tensor_field((h * mu_bar * perturbation_direction)[...,None,None] *\
+                                        membrane_strain_rate(u.reshape(-1), v.reshape(-1)))
+        rhs = - jnp.concatenate([rhs_x.reshape(-1), rhs_y.reshape(-1)])
+
+        x_trial = jnp.zeros_like(mu_bar).reshape(-1)
+        y_trial = jnp.zeros_like(x_trial)
+
+
+        mu_x, mu_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
+                                   1, (mu_bar, rhs))
+
+
+        #solve second equation for beta
+        #NOTE: make functional essentially a function just of u,v to avoid the
+        #difficulties with what to do with q gradients
+        functional_fixed_q = lambda u, v: functional(u, v, q)
+        gradient_j = jax.grad(functional_fixed_q, argnums=(0,1))
+        direct_hvp_x, direct_hvp_y = jax.jvp(gradient_j,
+                                             (u.reshape(-1), v.reshape(-1)),
+                                             (mu_x.reshape(-1), mu_y.reshape(-1)))[1]
+        rhs_1_x, rhs_1_y = div_tensor_field((h * mu_bar * perturbation_direction)[...,None,None] *\
+                                        membrane_strain_rate(lx.reshape(-1), ly.reshape(-1))
+                                           )
+
+        rhs = - jnp.concatenate([(rhs_1_x.reshape(-1) + direct_hvp_x),
+                                 (rhs_1_y.reshape(-1) + direct_hvp_y)])
+
+        beta_x, beta_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
+                                       1, (mu_bar, rhs))
+
+
+        #calculate hessian-vector-product
+        functional_fixed_vel = lambda q: functional(u.reshape(-1), v.reshape(-1), q)
+        direct_hvp_part = jax.jvp(jax.grad(functional_fixed_vel, argnums=0),
+                                  (q,),
+                                  (perturbation_direction,))[1]
+        #NOTE: the first term in the brackets is zero if we're thinking about q rather than q
+        hvp = direct_hvp_part - mu_bar * h * (\
+              perturbation_direction * double_dot_contraction(
+                                              cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                                              membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                                             ) +\
+              double_dot_contraction(
+                            cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                            membrane_strain_rate(mu_x.reshape(-1), mu_y.reshape(-1))
+                                    ) +\
+              double_dot_contraction(
+                            cc_vector_field_gradient(beta_x.reshape(-1), beta_y.reshape(-1)),
+                            membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                    )
+                                              )
+
+        return hvp
+
+    return solve_fwd_problem, solve_adjoint_problem, solve_soa_problem
+
+
+
+
+def forward_adjoint_and_second_order_adjoint_solvers_cc_visc(ny, nx, dy, dx, h, C, n_iterations):
+
+    beta_eff = C.copy()
+    h_1d = h.reshape(-1)
+
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    extrapolate_over_cf                        = extrapolate_over_cf_function(h)
+    cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
                                                                                    dx, cc_gradient,
+                                                                                   extrapolate_over_cf,
                                                                                    add_rflc_ghost_cells)
     membrane_strain_rate                       = membrane_strain_rate_function(ny, nx, dy, dx,
                                                                                cc_gradient,
@@ -1144,7 +1465,49 @@ def functional(v_field_x, v_field_y, q):
     return jnp.sum(mask.reshape(-1) * jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10).reshape(-1))
 
 
+def calculate_gradient_via_foa():
+    fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
+                                                 nr, nc, delta_y, delta_x, thk, C, n_iterations
+                                                                                             )
+    
+    print("solving fwd problem:")
+    u_out, v_out = fwd_solver(q, u_init, v_init)
+    
+    #show_vel_field(u_out, v_out)
+    
+    print("solving adjoint problem:")
+    lx, ly, gradient = adjoint_solver(q, u_out, v_out,
+                                      jnp.zeros_like(u_out),
+                                      jnp.zeros_like(u_out),
+                                      functional)
+    return gradient
 
+def calculate_gradient_via_ad():
+
+    solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
+                                                             delta_y,
+                                                             delta_x,
+                                                             thk, C,
+                                                             n_iterations)
+
+    def reduced_functional(q):
+        u_out, v_out = solver(q, u_init, v_init)
+        return functional(u_out, v_out, q)
+
+    get_grad = jax.grad(reduced_functional)
+
+    gradient = get_grad(q)
+
+    return gradient
+
+#g_foa = calculate_gradient_via_foa()
+#g_ad = calculate_gradient_via_ad()
+#
+#plt.imshow((2*g_foa-g_ad)/g_foa, vmin=-3, vmax=3)
+#plt.colorbar()
+#plt.show()
+#
+#raise
 
 def calculate_hvp_via_soa():
     fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
@@ -1154,7 +1517,7 @@ def calculate_hvp_via_soa():
     print("solving fwd problem:")
     u_out, v_out = fwd_solver(q, u_init, v_init)
     
-    show_vel_field(u_out, v_out)
+    #show_vel_field(u_out, v_out)
     
     print("solving adjoint problem:")
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
@@ -1165,23 +1528,30 @@ def calculate_hvp_via_soa():
     
     ##NOTE: Calving front stiffness dominating the gradient calculation
     ##Should investigate. For now, cutting out to visualise
-    plt.imshow(gradient[:,:30])
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via adjoint")
     plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
+
+    plt.plot(gradient[25,:])
+    plt.ylim((-600,600))
     plt.show()
     
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
-    #plt.imshow(-hvp[:,:35], vmin=-35, vmax=2)
-    plt.imshow(hvp[:,:35])
+    plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
+    plt.title("hvp via soa")
     plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
     plt.show()
     
-    #plt.imshow(jnp.log(hvp[6:-6,6:35]))
-    #plt.colorbar()
-    #plt.show()
-
+    plt.plot(hvp[25,:])
+    plt.ylim((-10,10))
+    plt.show()
+    
 
 def calculate_hvp_via_ad():
 
@@ -1203,26 +1573,37 @@ def calculate_hvp_via_ad():
 
     gradient = get_grad(q)
     
-    plt.imshow(gradient[:,:30])
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via ad")
     plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
+
+    plt.plot(gradient[25,:])
+    plt.ylim((-600,600))
     plt.show()
 
     
     pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
 
 
-    #finite diff hvp for comparison
-    #plt.imshow(p)
-    #plt.colorbar()
-    #plt.show()
-    #raise
+    ##finite diff hvp for comparison
+    ##plt.imshow(p)
+    ##plt.colorbar()
+    ##plt.show()
+    ##raise
     eps = 0.01
     fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:30])
+    plt.imshow(fd_hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
     plt.title("hvp via fd")
     plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
     plt.show()
-    #raise
+
+    plt.plot(fd_hvp[25,:])
+    plt.ylim((-10,10))
+    plt.show()
+    ##raise
 
     #I'd have imagined it's ok to do the following:
     #      hvp = jax.vjp(get_grad, (q,), (pert_dir,))
@@ -1267,271 +1648,28 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:30])
+    plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
     plt.title("hvp via ad")
     plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
     plt.show()
     
-    plt.imshow((fd_hvp - hvp)[:,:30])
-    plt.title("fd-ad difference")
-    plt.colorbar()
+    plt.plot(hvp[25,:])
+    plt.ylim((-10,10))
     plt.show()
+    
+    #plt.imshow(jnp.where(jnp.abs(hvp)>1, ((fd_hvp - hvp)/fd_hvp[:,:]), jnp.nan), vmin=-1, vmax=1, cmap="RdBu_r")
+    #plt.title("fd-ad percentage difference")
+    #plt.colorbar()
+    #plt.show()
 
 
 
 #TODO: get full Hessian rather than HVP once and see
 #TODO: write linear version.
 
-#calculate_hvp_via_soa()
-calculate_hvp_via_ad()
-
-
-raise
-
-
-
-
-# ---- Drop-in test for the linear-solve custom VJP (PETSc wrapper) ----
-import jax
-jax.config.update("jax_enable_x64", False)
-import jax.numpy as jnp
-import numpy as np
-
-def test_linear_solver_vjp(
-    n=200,
-    alpha=2.0,
-    key_seed=0,
-    ksp_type="cg",
-    preconditioner="hypre",
-    print_details=True,
-    fd_eps=1e-6,
-    rel_tol_ok=5e-8,
-):
-    """
-    Builds a symmetric positive definite 1D Laplacian + alpha*I system in COO,
-    instantiates your PETSc linear solver wrapper (la), and verifies:
-      1) VJP wrt b (scalar FD),
-      2) VJP wrt values (directional FD),
-      3) Sign/index convention by comparing to explicit formula.
-
-    Parameters
-    ----------
-    n : int
-        Problem size.
-    alpha : float
-        Shift to make Laplacian SPD: A = Laplacian + alpha*I.
-    key_seed : int
-        RNG seed for reproducibility.
-    ksp_type : str
-        PETSc KSP type (e.g., "cg", "gmres", "bcgs").
-    preconditioner : str or None
-        PETSc preconditioner (e.g., "hypre", "ilu", or None).
-    fd_eps : float
-        Finite-difference epsilon.
-    rel_tol_ok : float
-        Relative error threshold for tests.
-    """
-
-    # --- Build SPD matrix A in COO: 1D Laplacian + alpha*I ---
-    # rows, cols, vals in 64-bit
-    row_list, col_list, val_list = [], [], []
-    for i in range(n):
-        row_list.append(i); col_list.append(i); val_list.append(2.0 + alpha)
-        if i > 0:     row_list.append(i); col_list.append(i-1); val_list.append(-1.0)
-        if i < n - 1: row_list.append(i); col_list.append(i+1); val_list.append(-1.0)
-
-    rows = jnp.array(row_list, dtype=jnp.int32)
-    cols = jnp.array(col_list, dtype=jnp.int32)
-    values = jnp.array(val_list, dtype=jnp.float64)
-    coords = jnp.stack([rows, cols])
-    shape = (n, n)
-
-    # --- Instantiate the PETSc solver wrapper from your code ---
-    # Expected signature:
-    # la = create_sparse_petsc_la_solver_with_custom_vjp(coords, shape, ksp_type, preconditioner, precondition_only=False, monitor_ksp=False)
-    la = create_sparse_petsc_la_solver_with_custom_vjp(
-        coords, shape, ksp_type=ksp_type, preconditioner=preconditioner, precondition_only=False
-    )
-
-    # --- Random RHS and upstream cotangent ---
-    key = jax.random.PRNGKey(key_seed)
-    key1, key2, key3 = jax.random.split(key, 3)
-    b = jax.random.normal(key1, (n,), dtype=jnp.float64)
-    x_bar = jax.random.normal(key2, (n,), dtype=jnp.float64)     # upstream cotangent
-    e_vals = jax.random.normal(key3, values.shape, dtype=jnp.float64)  # random dir for values FD
-    e_vals = e_vals / (jnp.linalg.norm(e_vals) + 1e-30)
-
-    # --- Define scalar functional L for testing pullbacks ---
-    # L(values, b) = < x , x_bar > with x = la(values, b)
-    def L_of_b(bb):
-        x = la(values, bb, transpose=False)
-        return jnp.vdot(x, x_bar)
-
-    def L_of_values(vv):
-        x = la(vv, b, transpose=False)
-        return jnp.vdot(x, x_bar)
-
-    # ========== (1) Test dL/db via VJP vs FD ==========
-    # VJP wrt b (keeping values fixed)
-    _, vjp_b = jax.vjp(lambda bb: la(values, bb, transpose=False), b)
-    (b_bar_pred,) = vjp_b(x_bar)
-
-    # FD along random direction on b
-    e_b = jax.random.normal(key1, b.shape, dtype=jnp.float64)
-    e_b = e_b / (jnp.linalg.norm(e_b) + 1e-30)
-    L_fd_b = (L_of_b(b + fd_eps * e_b) - L_of_b(b)) / fd_eps
-    vjp_dot_e_b = jnp.vdot(b_bar_pred, e_b)
-    rel_err_db = float(abs(L_fd_b - vjp_dot_e_b) / (abs(L_fd_b) + 1e-30))
-
-    # ========== (2) Test dL/dvalues via VJP vs FD (directional) ==========
-    _, vjp_vals = jax.vjp(lambda vv: la(vv, b, transpose=False), values)
-    (values_bar_pred,) = vjp_vals(x_bar)
-
-    L_fd_vals = (L_of_values(values + fd_eps * e_vals) - L_of_values(values)) / fd_eps
-    vjp_dot_e_vals = jnp.vdot(values_bar_pred, e_vals)
-    rel_err_dvalues = float(abs(L_fd_vals - vjp_dot_e_vals) / (abs(L_fd_vals) + 1e-30))
-
-    # ========== (3) Cross-check sign/index convention explicitly ==========
-    # Forward solution x:
-    x = la(values, b, transpose=False)
-
-    # Build explicit expressions for both sign conventions:
-    # Option (+): A^T λ = +x_bar  => b_bar_exp = +λ,  values_bar_exp = -(λ[rows]*x[cols])
-    lambda_plus = la(values, x_bar, transpose=True)
-    b_bar_exp_plus = lambda_plus
-    values_bar_exp_plus = -(lambda_plus[rows] * x[cols])
-
-    # Option (−): A^T λ = −x_bar  => b_bar_exp = −λ, values_bar_exp = +(λ[rows]*x[cols])
-    lambda_minus = la(values, -x_bar, transpose=True)
-    b_bar_exp_minus = -lambda_minus
-    values_bar_exp_minus = +(lambda_minus[rows] * x[cols])
-
-    # Compare to your VJP outputs:
-    err_plus_b = float(jnp.linalg.norm(b_bar_pred - b_bar_exp_plus) / (jnp.linalg.norm(b_bar_pred) + 1e-30))
-    err_plus_v = float(jnp.linalg.norm(values_bar_pred - values_bar_exp_plus) / (jnp.linalg.norm(values_bar_pred) + 1e-30))
-    err_minus_b = float(jnp.linalg.norm(b_bar_pred - b_bar_exp_minus) / (jnp.linalg.norm(b_bar_pred) + 1e-30))
-    err_minus_v = float(jnp.linalg.norm(values_bar_pred - values_bar_exp_minus) / (jnp.linalg.norm(values_bar_pred) + 1e-30))
-
-    if print_details:
-        print("\n--- Linear-solve VJP checks ---")
-        print(f"(1) dL/db:  rel err (FD vs VJP·e)     = {rel_err_db: .3e}")
-        print(f"(2) dL/dA:  rel err (FD-dir vs VJP·e) = {rel_err_dvalues: .3e}")
-        print("Convention check (smaller is better):")
-        print(f"  Option (+) A^T λ = +x_bar :  ||b_bar_vjp - b_bar_exp||/||·|| = {err_plus_b: .3e},  "
-              f"||values_bar_vjp - values_bar_exp||/||·|| = {err_plus_v: .3e}")
-        print(f"  Option (−) A^T λ = −x_bar :  ||b_bar_vjp - b_bar_exp||/||·|| = {err_minus_b: .3e}, "
-              f"||values_bar_vjp - values_bar_exp||/||·|| = {err_minus_v: .3e}")
-
-    # Decide which convention matches your implementation best
-    sum_plus = err_plus_b + err_plus_v
-    sum_minus = err_minus_b + err_minus_v
-    convention = "+ (A^T λ = +x_bar)" if sum_plus < sum_minus else "− (A^T λ = −x_bar)"
-    if print_details:
-        print(f"=> Your custom VJP matches **Option {convention}**")
-
-    # --- Assertions (soft) ---
-    ok = (rel_err_db < rel_tol_ok) and (rel_err_dvalues < rel_tol_ok)
-    if not ok and print_details:
-        print("WARNING: Relative errors exceed tolerance. "
-              "Consider tightening PETSc KSP tolerances and ensuring 64-bit throughout.")
-    return {
-        "rel_err_db": rel_err_db,
-        "rel_err_dvalues": rel_err_dvalues,
-        "err_plus_b": err_plus_b,
-        "err_plus_v": err_plus_v,
-        "err_minus_b": err_minus_b,
-        "err_minus_v": err_minus_v,
-        "convention": convention,
-    }
-
-# Example usage (uncomment to run):
-results = test_linear_solver_vjp()
-print(results)
-
-
-
-
-
-
-
-
-raise
-
-
-
-
-
-
-# --- Force 64-bit for the test ---
-import jax
-jax.config.update("jax_enable_x64", True)
-
-import jax.numpy as jnp
-import numpy as np
-
-# Build SPD matrix: 1D Laplacian + alpha*I in COO
-n = 200
-alpha = 2.0
-rows = []
-cols = []
-vals = []
-for i in range(n):
-    rows.append(i); cols.append(i);   vals.append(2.0 + alpha)
-    if i > 0:     rows.append(i); cols.append(i-1); vals.append(-1.0)
-    if i < n-1:   rows.append(i); cols.append(i+1); vals.append(-1.0)
-rows   = jnp.array(rows, dtype=jnp.int32)
-cols   = jnp.array(cols, dtype=jnp.int32)
-values = jnp.array(vals, dtype=jnp.float64)
-coords = jnp.stack([rows, cols])
-
-# IMPORTANT: In create_solver_object(A) set:
-# ksp.setTolerances(rtol=1e-12, atol=0.0, max_it=500)
-# and use ksp_type="cg", preconditioner="hypre" or None.
-
-la = create_sparse_petsc_la_solver_with_custom_vjp(
-    coords, (n, n), ksp_type="cg", preconditioner="hypre"
-)
-
-key = jax.random.PRNGKey(0)
-b     = jax.random.normal(key, (n,), dtype=jnp.float64)
-x_bar = jax.random.normal(jax.random.split(key, 2)[1], (n,), dtype=jnp.float64)
-
-def L_of_b(b):
-    x = la(values, b, transpose=False)       # Ax = b
-    return jnp.vdot(x, x_bar)
-
-# ---- Test dL/db ----
-_, vjp_fn = jax.vjp(lambda bb: la(values, bb, transpose=False), b)
-(b_bar_pred,) = vjp_fn(x_bar)
-
-eps = 1e-6
-e   = jax.random.normal(jax.random.split(key, 3)[2], (n,), dtype=jnp.float64)
-L_fd = (L_of_b(b + eps*e) - L_of_b(b)) / eps
-rel_err_db = float(abs(L_fd - jnp.vdot(b_bar_pred, e)) / (abs(L_fd) + 1e-30))
-print("rel err dL/db:", rel_err_db)
-
-# ---- Test a single matrix entry dL/dA_ij (Option A) ----
-def L_of_values(vals):
-    x = la(vals, b, transpose=False)
-    return jnp.vdot(x, x_bar)
-
-x          = la(values, b, transpose=False)
-lambda_opA = la(values, -x_bar, transpose=True)   # Option A: RHS = -x_bar
-k = 0
-i, j = int(coords[0, k]), int(coords[1, k])
-Abar_pred = lambda_opA[i] * x[j]                  # Option A formula
-
-eps = 1e-6
-vals_fd = values.at[k].add(eps)
-Abar_fd = (L_of_values(vals_fd) - L_of_values(values)) / eps
-rel_err_dA = float(abs(Abar_fd - Abar_pred) / (abs(Abar_fd) + 1e-30))
-print("rel err dL/dA_ij:", rel_err_dA)
-
-
-raise
-
-
-
+calculate_hvp_via_soa()
+#calculate_hvp_via_ad()
 
 
 
