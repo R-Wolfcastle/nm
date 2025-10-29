@@ -342,15 +342,24 @@ def double_dot_contraction(A, B):
 
 
 def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
+                                      extrp_over_cf,
                                       add_rb_ghost_cells):
     def cc_vector_field_gradient(u, v):
         u = u.reshape((ny, nx))
         v = v.reshape((ny, nx))
 
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+
         u, v = add_rb_ghost_cells(u, v)
 
         dudx, dudy = cc_grad(u)
         dvdx, dvdy = cc_grad(v)
+
+        #dudx = jnp.where(thk>0, dudx, 0)
+        #dvdx = jnp.where(thk>0, dvdx, 0)
+        #dudy = jnp.where(thk>0, dudy, 0)
+        #dvdy = jnp.where(thk>0, dvdy, 0)
 
         grad_vf = jnp.zeros((ny, nx, 2, 2))
 
@@ -366,19 +375,31 @@ def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
 
 def membrane_strain_rate_function(ny, nx, dy, dx, 
                                   cc_grad,
+                                  extrapolate_over_cf,
                                   add_rb_ghost_cells):
 
     def membrane_sr_tensor(u, v):
         u = u.reshape((ny, nx))
         v = v.reshape((ny, nx))
 
+        u = extrapolate_over_cf(u)
+        v = extrapolate_over_cf(v)
+
         u, v = add_rb_ghost_cells(u, v)
 
         dudx, dudy = cc_grad(u)
         dvdx, dvdy = cc_grad(v)
         
+        #dudx = jnp.where(thk>0, dudx, 0)
+        #dvdx = jnp.where(thk>0, dvdx, 0)
+        #dudy = jnp.where(thk>0, dudy, 0)
+        #dvdy = jnp.where(thk>0, dvdy, 0)
+
         msr_tensor = jnp.zeros((ny, nx, 2, 2))
 
+
+        #TODO: CHECK THAT FACTOR OF 4 AND 2! ARE THEY 2 AND 1 REALLY?
+        #I think this is right.
         msr_tensor = msr_tensor.at[:,:,0,0].set(4*dudx + 2*dvdy)
         msr_tensor = msr_tensor.at[:,:,0,1].set( dudy + dvdx )
         msr_tensor = msr_tensor.at[:,:,1,0].set( dudy + dvdx )
@@ -663,11 +684,11 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, extrp_over_cf):
     def cc_viscosity(q, u, v):
 
-        #add the ghost cells in...
-        #but this is actually done in the cc_vector_field_gradient function
+        #extrapolate over cf and add the ghost cells in...
+        #but these are actually donw in the cc_vector_field_gradient function
 
-        u = extrp_over_cf(u)
-        v = extrp_over_cf(v)
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
 
         vfg = cc_vector_field_gradient(u, v)
         
@@ -912,6 +933,10 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
 
+
+
+
+
 def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
     def solver(u_trial, v_trial, residuals_function, n_iterations, residuals_fct_args):
@@ -977,7 +1002,208 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
+                                                                                   dx, cc_gradient, 
+                                                                                   extrapolate_over_cf,
+                                                                                   add_rflc_ghost_cells)
+    membrane_strain_rate                       = membrane_strain_rate_function(ny, nx, dy, dx,
+                                                                               cc_gradient,
+                                                                               extrapolate_over_cf,
+                                                                               add_rflc_ghost_cells)
+    div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx)
+
+    #calculate cell-centred viscosity based on velocity and q
+    cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, extrapolate_over_cf)
+    fc_viscosity = fc_viscosity_function(ny, nx, dy, dx, extrapolate_over_cf, add_rflc_ghost_cells,
+                                         interp_cc_to_fc, ew_gradient, ns_gradient, h_1d)
+
+    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+                                                       h_1d, beta_eff,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
+
+    linear_ssa_residuals = compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx,
+                                                       h_1d, beta_eff,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_rflc_ghost_cells,\
+                                                       add_cont_ghost_cells,\
+                                                       extrapolate_over_cf)
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+
+
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+                                                              ksp_type="bcgs",\
+                                                              preconditioner="hypre",\
+                                                              precondition_only=False,
+                                                              monitor_ksp=False)
+
+
+    newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
+
+
+    def solve_fwd_problem(q, u_trial, v_trial):
+        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,))
+        return u.reshape((ny,nx)), v.reshape((ny,nx))
+
+
+    def solve_adjoint_problem(q, u, v, lx_trial, ly_trial,
+                              functional:callable, additional_fctl_args=None):
+        #calculate viscosity
+        mu_bar_ew, mu_bar_ns = fc_viscosity(q, u, v)
+
+        #right-hand-side (\partial_u J)
+        if additional_fctl_args is None:
+            argz = (u.reshape(-1), v.reshape(-1), q,)
+        else:
+            argz = (q, *additional_fctl_args)
+
+        dJdu, dJdv = jax.grad(functional, argnums=(0,1))(*argz)
+        rhs = - jnp.concatenate([dJdu, dJdv])
+
+
+        #solve adjoint problem
+        lx, ly = newton_solver(lx_trial.reshape(-1), ly_trial.reshape(-1),
+                               linear_ssa_residuals, 1, (mu_bar_ew, mu_bar_ns, rhs))
+
+        mu_bar = cc_viscosity(q, u, v)
+        #calculate gradient
+        dJdq = jax.grad(functional, argnums=2)(*argz) \
+               - mu_bar * h * double_dot_contraction(cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                                                           membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                                    )
+
+        return lx.reshape((ny,nx)), ly.reshape((ny,nx)), dJdq
+
+
+    def solve_soa_problem(q, u, v, lx, ly, perturbation_direction,
+                          functional:callable, 
+                          additional_fctl_args=None):
+        #calculate viscosity
+        mu_bar = cc_viscosity(q, u, v)
+        
+        #right-hand-side (\partial_u J)
+        if additional_fctl_args is None:
+            argz = (u.reshape(-1), v.reshape(-1), q)
+        else:
+            argz = (u.reshape(-1), v.reshape(-1), q, *additional_fctl_args)
+
+        
+        #solve first equation for mu
+        rhs_x, rhs_y = div_tensor_field((h * mu_bar * perturbation_direction)[...,None,None] *\
+                                        membrane_strain_rate(u.reshape(-1), v.reshape(-1)))
+        rhs = - jnp.concatenate([rhs_x.reshape(-1), rhs_y.reshape(-1)])
+
+        x_trial = jnp.zeros_like(mu_bar).reshape(-1)
+        y_trial = jnp.zeros_like(x_trial)
+
+
+        mu_x, mu_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
+                                   1, (mu_bar, rhs))
+
+
+        #solve second equation for beta
+        #NOTE: make functional essentially a function just of u,v to avoid the
+        #difficulties with what to do with q gradients
+        functional_fixed_q = lambda u, v: functional(u, v, q)
+        gradient_j = jax.grad(functional_fixed_q, argnums=(0,1))
+        direct_hvp_x, direct_hvp_y = jax.jvp(gradient_j,
+                                             (u.reshape(-1), v.reshape(-1)),
+                                             (mu_x.reshape(-1), mu_y.reshape(-1)))[1]
+        rhs_1_x, rhs_1_y = div_tensor_field((h * mu_bar * perturbation_direction)[...,None,None] *\
+                                        membrane_strain_rate(lx.reshape(-1), ly.reshape(-1))
+                                           )
+
+        rhs = - jnp.concatenate([(rhs_1_x.reshape(-1) + direct_hvp_x),
+                                 (rhs_1_y.reshape(-1) + direct_hvp_y)])
+
+        beta_x, beta_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
+                                       1, (mu_bar, rhs))
+
+
+        #calculate hessian-vector-product
+        functional_fixed_vel = lambda q: functional(u.reshape(-1), v.reshape(-1), q)
+        direct_hvp_part = jax.jvp(jax.grad(functional_fixed_vel, argnums=0),
+                                  (q,),
+                                  (perturbation_direction,))[1]
+        #NOTE: the first term in the brackets is zero if we're thinking about q rather than q
+        hvp = direct_hvp_part - mu_bar * h * (\
+              perturbation_direction * double_dot_contraction(
+                                              cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                                              membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                                             ) +\
+              double_dot_contraction(
+                            cc_vector_field_gradient(lx.reshape(-1), ly.reshape(-1)),
+                            membrane_strain_rate(mu_x.reshape(-1), mu_y.reshape(-1))
+                                    ) +\
+              double_dot_contraction(
+                            cc_vector_field_gradient(beta_x.reshape(-1), beta_y.reshape(-1)),
+                            membrane_strain_rate(u.reshape(-1), v.reshape(-1))
+                                    )
+                                              )
+
+        return hvp
+
+    return solve_fwd_problem, solve_adjoint_problem, solve_soa_problem
+
+
+
+
+def forward_adjoint_and_second_order_adjoint_solvers_cc_visc(ny, nx, dy, dx, h, C, n_iterations):
+
+    beta_eff = C.copy()
+    h_1d = h.reshape(-1)
+
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    extrapolate_over_cf                        = extrapolate_over_cf_function(h)
+    cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
                                                                                    dx, cc_gradient,
+                                                                                   extrapolate_over_cf,
                                                                                    add_rflc_ghost_cells)
     membrane_strain_rate                       = membrane_strain_rate_function(ny, nx, dy, dx,
                                                                                cc_gradient,
@@ -985,7 +1211,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx)
 
     #calculate cell-centred viscosity based on velocity and q
-    cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, extrapolate_over_cf)
+    cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
                                                        h_1d, beta_eff,\
