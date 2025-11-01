@@ -1544,8 +1544,16 @@ v_init = jnp.zeros_like(b)
 
 n_iterations = 15
 
-mucoef = jnp.ones_like(C)
-mucoef_0 = jnp.ones_like(C)
+mucoef_profile = 0.5+b_profile.copy()/2000
+mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+
+#plt.imshow(mucoef)
+#plt.colorbar()
+#plt.show()
+#raise
+
+#mucoef = jnp.ones_like(C)
+#mucoef_0 = jnp.ones_like(C)
 q = jnp.zeros_like(C)
 
 mask = jnp.ones_like(b)
