@@ -356,7 +356,7 @@ def add_ghost_cells_fcts(ny, nx):
     return jax.jit(add_reflection_ghost_cells), jax.jit(add_continuation_ghost_cells)
     
 def add_ghost_cells_periodic_dirichlet_function(ny, nx):
-    def add_periodic_ghost_cells_x_dirchlet_ghost_cells_y(u_int):
+    def add_ghost_cells_periodic_x_dirchlet_y(u_int):
 
         u = jnp.zeros((ny+2, nx+2))
         u = u.at[1:-1,1:-1].set(u_int)
@@ -368,7 +368,21 @@ def add_ghost_cells_periodic_dirichlet_function(ny, nx):
         u = u.at[-1,:].set(-u[-2,:])
 
         return u
-    return jax.jit(add_periodic_ghost_cells_x_dirchlet_ghost_cells_y)
+    return jax.jit(add_ghost_cells_periodic_x_dirchlet_y)
+
+def add_ghost_cells_periodic_continuation_function(ny, nx):
+    def add_ghost_cells_periodic_x_continuation_y(u_int):
+        u = jnp.zeros((ny+2, nx+2))
+        u = u.at[1:-1,1:-1].set(u_int)
+        #left/right edges: periodic bcs
+        u = u.at[:, 0].set(u[:,-2])
+        u = u.at[:,-1].set(u[:, 1])
+        #top/bottom edges: continuation bcs
+        u = u.at[0, :].set(u[1, :])
+        u = u.at[-1,:].set(u[-2,:])
+        return u
+    return jax.jit(add_ghost_cells_periodic_x_continuation_y)
+
 
 def binary_erosion(boolean_array):
     # 3x3 cross-shaped structuring element (4-connectivity)
@@ -576,7 +590,7 @@ def compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx, \
                                           ns_gradient,\
                                           cc_gradient,\
                                           add_uv_ghost_cells,\
-                                          add_h_ghost_cells,\
+                                          add_s_ghost_cells,\
                                           extrapolate_over_cf):
 
     def compute_linear_ssa_residuals(u_1d, v_1d, mu_ew, mu_ns, cc_rhs):
@@ -593,11 +607,13 @@ def compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx, \
         volume_y = - ( beta * v + cc_rhs_y ) * dy * dx
 
         #momentum_term
-        u, v = add_uv_ghost_cells(u, v)
+        u = add_uv_ghost_cells(u)
+        v = add_uv_ghost_cells(v)
 
         #get thickness on the faces
-        h = add_h_ghost_cells(h)
+        h = add_s_ghost_cells(h)
         h_ew, h_ns = interp_cc_to_fc(h)
+        
 
         #various face-centred derivatives
         dudx_ew, dudy_ew = ew_gradient(u)
@@ -960,10 +976,12 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
     #functions for various things:
-    interp_cc_to_fc                            = interp_cc_to_fc_function(ny, nx)
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx)
+    add_uv_ghost_cells                         = add_ghost_cells_periodic_dirichlet_function(ny,nx)
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
@@ -971,14 +989,15 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                        interp_cc_to_fc,\
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
-                                                       add_rflc_ghost_cells,\
-                                                       add_cont_ghost_cells,\
+                                                       add_uv_ghost_cells,\
+                                                       add_scalar_ghost_cells,\
                                                        extrapolate_over_cf)
-
+    
 
     #############
     #setting up bvs and coords for a single block of the jacobian
-    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=True)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -1130,7 +1149,8 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
-    def solver(u_trial, v_trial, residuals_function, n_iterations, residuals_fct_args, coordinates):
+    #def solver(u_trial, v_trial, residuals_function, n_iterations, residuals_fct_args, coordinates):
+    def solver(u_trial, v_trial, residuals_function, n_iterations, residuals_fct_args):
 
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
@@ -1139,17 +1159,17 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
         init_res = 0
 
 
-        test_la_solver = create_sparse_petsc_la_solver_test((2*ny*nx, 2*ny*nx), monitor_ksp=True)
+        #test_la_solver = create_sparse_petsc_la_solver_test((2*ny*nx, 2*ny*nx), monitor_ksp=True)
 
 
         for i in range(n_iterations):
-            #dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(residuals_function,
-            #                                               (u_1d, v_1d,
-            #                                                *residuals_fct_args)
-            #                                              )
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(residuals_function,
+                                                           (u_1d, v_1d,
+                                                            *residuals_fct_args)
+                                                          )
 
-            #nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
-            #                                 dJv_du[mask], dJv_dv[mask]])
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
 
 
 
@@ -1172,24 +1192,24 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
 
 
-            ####NOTE: DENSE JACOBIAN COMPUTATION TO ISOLATE BUG
-            ((Juu, Jvu), (Juv, Jvv)) = jax.jacrev(residuals_function, argnums=(0,1))(u_1d, v_1d,
-                                                                                     *residuals_fct_args)
-            
-            top = jnp.concatenate([Juu, Juv], axis=1)
-            bot = jnp.concatenate([Jvu, Jvv], axis=1)
-            J_full = jnp.concatenate([top, bot], axis=0)
-            
+            #####NOTE: DENSE JACOBIAN COMPUTATION TO ISOLATE BUG
+            #((Juu, Jvu), (Juv, Jvv)) = jax.jacrev(residuals_function, argnums=(0,1))(u_1d, v_1d,
+            #                                                                         *residuals_fct_args)
+            #
+            #top = jnp.concatenate([Juu, Juv], axis=1)
+            #bot = jnp.concatenate([Jvu, Jvv], axis=1)
+            #J_full = jnp.concatenate([top, bot], axis=0)
+            #
 
-            mask = J_full != 0.0
-            rows, cols = jnp.where(mask)
-            rows = rows.astype(jnp.int32)
-            cols = cols.astype(jnp.int32)
-            coords = jnp.stack([rows, cols], axis=0)
-            vals = J_full[cols, rows]
+            #mask = J_full != 0.0
+            #rows, cols = jnp.where(mask)
+            #rows = rows.astype(jnp.int32)
+            #cols = cols.astype(jnp.int32)
+            #coords = jnp.stack([rows, cols], axis=0)
+            #vals = J_full[cols, rows]
 
 
-            #########################
+            ##########################
 
 
             old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
@@ -1198,8 +1218,8 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
             #print("‖J du - rhs‖_inf =", np.linalg.norm(lin_res, ord=np.inf))
 
 
-            #du = la_solver(nz_jac_values, rhs)
-            du = test_la_solver(vals, rhs, coords)
+            du = la_solver(nz_jac_values, rhs)
+            #du = test_la_solver(vals, rhs, coords)
             #du = jnp.linalg.solve(J_full, rhs)
 
             u_1d = u_1d+du[:(ny*nx)]
@@ -1231,6 +1251,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
     add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny,nx)
     add_uv_ghost_cells                         = add_ghost_cells_periodic_dirichlet_function(ny,nx)
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
@@ -1246,7 +1267,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     #calculate cell-centred viscosity based on velocity and q
     cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient)
     fc_viscosity = fc_viscosity_function(ny, nx, dy, dx, extrapolate_over_cf, add_uv_ghost_cells,
-                                         add_cont_ghost_cells,
+                                         add_scalar_ghost_cells,
                                          interp_cc_to_fc, ew_gradient, ns_gradient, h_1d)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
@@ -1255,25 +1276,16 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_uv_ghost_cells,\
-                                                       add_cont_ghost_cells,\
+                                                       add_scalar_ghost_cells,\
                                                        extrapolate_over_cf)
     
-    #get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
-    #                                                   h_1d, beta_eff,\
-    #                                                   interp_cc_to_fc,\
-    #                                                   ew_gradient, ns_gradient,\
-    #                                                   cc_gradient,\
-    #                                                   add_uv_ghost_cells,\
-    #                                                   add_cont_ghost_cells,\
-    #                                                   extrapolate_over_cf)
-
     linear_ssa_residuals = compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx,\
                                                        h_1d, beta_eff,\
                                                        interp_cc_to_fc,\
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
-                                                       add_rflc_ghost_cells,\
-                                                       add_cont_ghost_cells,\
+                                                       add_uv_ghost_cells,\
+                                                       add_scalar_ghost_cells,\
                                                        extrapolate_over_cf)
 
     linear_ssa_residuals_no_rhs = compute_linear_ssa_residuals_function_fc_visc_no_rhs(
@@ -1283,13 +1295,14 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_uv_ghost_cells,\
-                                                       add_cont_ghost_cells,\
+                                                       add_scalar_ghost_cells,\
                                                        extrapolate_over_cf
                                                                                       )
 
     #############
     #setting up bvs and coords for a single block of the jacobian
-    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1)
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=True)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -1337,7 +1350,8 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     #picard_solver = make_picard_solver(ny, nx, sparse_jacrev, mask, la_solver, get_u_v_residuals, fc_visc)
 
     def solve_fwd_problem(q, u_trial, v_trial):
-        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,), coords)
+        #u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,), coords)
+        u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,))
         return u.reshape((ny,nx)), v.reshape((ny,nx))
 
 
@@ -1377,6 +1391,13 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
             argz = (q, *additional_fctl_args)
 
         dJdu, dJdv = jax.grad(functional, argnums=(0,1))(*argz)
+
+        #plt.imshow(dJdu.reshape((nr,nc)))
+        #plt.show()
+        #plt.imshow(dJdv.reshape((nr,nc)))
+        #plt.show()
+        #raise
+
         rhs = - jnp.concatenate([dJdu, dJdv])
 
 
@@ -1462,8 +1483,8 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
         return hvp
 
-    #return solve_fwd_problem, solve_adjoint_problem, solve_soa_problem
-    return solve_fwd_problem_picard, solve_adjoint_problem, solve_soa_problem
+    return solve_fwd_problem, solve_adjoint_problem, solve_soa_problem
+    #return solve_fwd_problem_picard, solve_adjoint_problem, solve_soa_problem
 
 
 
@@ -1478,83 +1499,113 @@ A = c.A_COLD
 B = 0.5 * (A**(-1/nvisc))
 
 
-#lx = 128_000
-#ly = 32_000
-
-#lx = 16_384
-#ly = 4_096
-#resolution = 256 #m
-
-lx = 150_000
-ly = 150_000
-resolution = 3_000 #m
-
-
-nr = int(ly/resolution)
-nc = int(lx/resolution)
-
-lx = nc*resolution
-ly = nr*resolution
-
-
-#nr, nc = 64, 64
-#nr, nc = 96*2, 64*2
+def twisty_stream():
+    lx = 180_000
+    ly = 180_000
+    resolution = 3_000 #m
+    
+    
+    stencil_radius = 1
+    stencil_width = 2*stencil_radius+1
+    
+    nr = int(ly/resolution)
+    nc = int(lx/resolution)
+    
+    assert nc % stencil_width == 0, "domain must be tileable by stencil width in periodic bcs case"
+    
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(0, ly, nr)
+    
+    delta_x = x[1]-x[0]
+    delta_y = y[1]-y[0]
 
 
-x = jnp.linspace(0, lx, nc)
-y = jnp.linspace(0, ly, nr)
+    thk = jnp.zeros((nr,nc)) + 1000
+    #want a slope of 0.5 degrees.
+    sine_0pt5 = 0.0087265
+    
+    #b_profile = 1000 - 500*x/lx
+    b_profile = 1000 - sine_0pt5*x
+    b = jnp.zeros((nr, nc)) + b_profile
+    
+    
+    xs, ys = jnp.meshgrid(x,y)
+    R = ly
+    m = 0.25
+    C = 1e3 * (1 + 5e-3 + jnp.sin(2*jnp.pi*(ys+R/4)/R + m*jnp.sin(2*jnp.pi*xs/R)))
+    C = jnp.flipud(C)
+    
+    #mucoef_profile = 0.5+b_profile.copy()/2000
+    mucoef_profile = 1
+    mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+    
+    #plt.imshow(mucoef)
+    #plt.colorbar()
+    #plt.show()
+    #raise
+    
+    #mucoef = jnp.ones_like(C)
+    #mucoef_0 = jnp.ones_like(C)
+    q = jnp.zeros_like(C)
+    
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
 
 
-delta_x = x[1]-x[0]
-delta_y = y[1]-y[0]
+def infinite_straight_stream():
+    lx = 180_000
+    ly = 60_000
+    resolution = 1_000 #m
+    
+    stencil_radius = 1
+    stencil_width = 2*stencil_radius+1
+    
+    nr = int(ly/resolution)
+    nc = int(lx/resolution)
+    
+    assert nc % stencil_width == 0, "domain must be tileable by stencil width in periodic bcs case"
+    
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(0, ly, nr)
+    
+    delta_x = x[1]-x[0]
+    delta_y = y[1]-y[0]
 
-thk = jnp.zeros((nr,nc)) + 1000
 
-#want a slope of 0.5 degrees.
-sine_0pt5 = 0.0087265
+    thk = jnp.zeros((nr,nc)) + 1000
+    #want a slope of 0.5 degrees.
+    sine_0pt5 = 0.0087265
+    
+    #b_profile = 1000 - 500*x/lx
+    b_profile = 1000 - sine_0pt5*x
+    b = jnp.zeros((nr, nc)) + b_profile
+    
+    
+    C = jnp.zeros_like(b)+10
+    
+    mucoef_profile = 1
+    mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+    
+    #plt.imshow(mucoef)
+    #plt.colorbar()
+    #plt.show()
+    #raise
+    
+    #mucoef = jnp.ones_like(C)
+    #mucoef_0 = jnp.ones_like(C)
+    q = jnp.zeros_like(C)
+    
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
 
-#b_profile = 1000 - 500*x/lx
-b_profile = 1000 - sine_0pt5*x
-b = jnp.zeros((nr, nc)) + b_profile
 
-#C = jnp.zeros_like(b)#5#+5e3
-#C = C.at[:5,:].set(1e16)
-#C = C.at[-5:,:].set(1e16)
-#C = C.at[:4, :].set(1e16)
-#C = C.at[:, :4].set(1e16)
-#C = C.at[-4:,:].set(1e16)
-#C = jnp.where(thk==0, 1, C)
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = twisty_stream()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = infinite_straight_stream()
 
-
-xs, ys = jnp.meshgrid(x,y)
-R = 160_000
-m = 0.25
-C = 1e5 * (1 + 5e-5 + jnp.sin(2*jnp.pi*ys/R + m*jnp.sin(2*jnp.pi*xs/R)))
-C = jnp.flipud(C)
-
-#plt.imshow(C)
-#plt.show()
-#raise
-
-#plt.imshow(jnp.log10(C))
-#plt.show()
 
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_iterations = 15
+n_iterations = 8
 
-mucoef_profile = 0.5+b_profile.copy()/2000
-mucoef_0 = jnp.zeros_like(b)+mucoef_profile
-
-#plt.imshow(mucoef)
-#plt.colorbar()
-#plt.show()
-#raise
-
-#mucoef = jnp.ones_like(C)
-#mucoef_0 = jnp.ones_like(C)
-q = jnp.zeros_like(C)
 
 mask = jnp.ones_like(b)
 
@@ -1617,8 +1668,7 @@ def calculate_hvp_via_soa():
     print("solving fwd problem:")
     u_out, v_out = fwd_solver(q, u_init, v_init)
     
-    show_vel_field(u_out, v_out)
-    raise
+    #show_vel_field(u_out, v_out)
     
     print("solving adjoint problem:")
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
@@ -1662,9 +1712,8 @@ def calculate_hvp_via_ad():
                                                              thk, C,
                                                              n_iterations)
 
-#    u_out, v_out = solver(q, u_init, v_init)
-#    plt.imshow(u_out)
-#    plt.show()
+    u_out, v_out = solver(q, u_init, v_init)
+    show_vel_field(u_out, v_out)
     
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
@@ -1695,7 +1744,7 @@ def calculate_hvp_via_ad():
     ##raise
     eps = 0.01
     fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
+    plt.imshow(fd_hvp[:,:], vmin=-10, vmax=10, cmap="twilight_shifted")
     plt.title("hvp via fd")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -1749,7 +1798,7 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-10, vmax=10, cmap="twilight_shifted")
     plt.title("hvp via ad")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)

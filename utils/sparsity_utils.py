@@ -259,7 +259,7 @@ def make_sparse_jacrev_fct_shared_basis(basis_vectors, i_coord_sets, j_coord_set
     return sparse_jacrev#, densify_sparse_jac
 
 
-def basis_vectors_and_coords_2d_square_stencil(nr, nc, r=2):
+def basis_vectors_and_coords_2d_square_stencil(nr, nc, r=2, periodic_x=False):
     #NOTE: Need to think about speed and memory efficiency in this function.
     #E.g. defining intermediate functions to limit the scope of intermediate
     #variables. I also wonder whether I need to be creating so many dense arrays.
@@ -274,9 +274,9 @@ def basis_vectors_and_coords_2d_square_stencil(nr, nc, r=2):
     #...of 3 gives a 49-point stencil etc
 
     # width of the patch of the grid surrounding each colour
-    # = stencil with plus half a stencil width plus one
+    # = stencil width plus half a stencil width plus one
     # = (2*r + 1) + r + 1
-    colour_patch_width = 3*r + 2
+    #colour_patch_width = 3*r + 2 #NOTE: don't need this
 
     #You just have to colour the domain in patches of the same size as the stencil
     stencil_width = 2*r + 1
@@ -302,7 +302,7 @@ def basis_vectors_and_coords_2d_square_stencil(nr, nc, r=2):
 
     #Need to know, when you do the vjp, what the coordinates are 
     #of the resulting non-zero values of the row vectors
-    j_coordinates_guess = jnp.arange(nr*nc, dtype=jnp.int32)
+    #j_coordinates_guess = jnp.arange(nr*nc, dtype=jnp.int32) #NOTE: don't actually need this
     #j_coords = jnp.zeros((stencil_width**2, nr*nc), dtype=jnp.int32)
     #i_coords = jnp.zeros((stencil_width**2, nr*nc), dtype=jnp.int32)
     j_coords = []
@@ -325,11 +325,28 @@ def basis_vectors_and_coords_2d_square_stencil(nr, nc, r=2):
         #errors if coordinate values exceed 16_777_216. Irritating bug.
         colour_coordinates = jnp.zeros((nr*nc,), dtype=jnp.int32)\
                              .at[colour_indices].set(colour_indices+1)
-    
+
         #2D version, padded by a stencil radius
-        ccs_padded = jnp.pad(colour_coordinates.reshape(nr, nc),\
-                     pad_width=((r, r),(r, r)),\
-                     mode='constant', constant_values=0)
+        if periodic_x:
+            #NOTE: this will only work, unfortunately, if the domain is exactly tileable
+            #in x by the stencil. Else the stencil doesn't wrap nicely and we're screwed.
+            #There is a way to do it, I'm sure. But I'm fed up.
+            assert nc % stencil_width == 0, "Domain must be tileable in x by stencil width"
+
+            # Pad rows (y-direction) with zeros
+            ccs_y_padded = jnp.pad(colour_coordinates.reshape(nr, nc),\
+                         pad_width=((r, r),(0, 0)),\
+                         mode='constant', constant_values=0)
+        
+            # Manually wrap columns (x-direction)
+            left = ccs_y_padded[:, -r:]
+            right = ccs_y_padded[:, :r]
+            ccs_padded = jnp.concatenate([left, ccs_y_padded, right], axis=1)
+        else:
+            # Non-periodic in both directions
+            ccs_padded = jnp.pad(colour_coordinates.reshape(nr, nc),\
+                         pad_width=((r, r),(r, r)),\
+                         mode='constant', constant_values=0)
 
         #fill a stencil-radius around each node of colour with the index of that colour
         i_coordinates = jnp.zeros((nr, nc), dtype=jnp.int32)
