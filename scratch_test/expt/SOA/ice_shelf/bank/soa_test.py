@@ -383,6 +383,12 @@ def add_ghost_cells_periodic_continuation_function(ny, nx):
         return u
     return jax.jit(add_ghost_cells_periodic_x_continuation_y)
 
+def apply_scalar_ghost_cells_to_vector(scalar_ghost_function):
+    def apply(u,v):
+        u = scalar_ghost_function(u)
+        v = scalar_ghost_function(v)
+        return u, v
+    return jnp.jit(apply)
 
 def binary_erosion(boolean_array):
     # 3x3 cross-shaped structuring element (4-connectivity)
@@ -432,12 +438,12 @@ def binary_dilation(boolean_array):
     return dilate_once(boolean_array.astype(jnp.float64))
 
 
-def extrapolate_over_cf_function(thk):
-    def extrapolate_over_cf(cc_field):
-        return cc_field
-    return jax.jit(extrapolate_over_cf)
+#def extrapolate_over_cf_function(thk):
+#    def extrapolate_over_cf(cc_field):
+#        return cc_field
+#    return jax.jit(extrapolate_over_cf)
 
-def extrapolate_over_cf_function_nonuniform_thk(thk):
+def extrapolate_over_cf_function(thk):
     
     cf_adjacent_zero_ice_cells = (thk==0) & binary_dilation(thk>0)
 
@@ -470,7 +476,8 @@ def extrapolate_over_cf_function_nonuniform_thk(thk):
             (ice_mask_shift_right==1).astype(int),
         ])
         
-        u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+        u_extrap_boundary = 2 * neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+        #Think about it... 
 
         return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float64)
 
@@ -492,9 +499,7 @@ def cc_vector_field_gradient_function(ny, nx, dy, dx, cc_grad,
         u = extrp_over_cf(u)
         v = extrp_over_cf(v)
 
-        u = add_uv_ghost_cells(u)
-        v = add_uv_ghost_cells(v)
-
+        u, v = add_uv_ghost_cells(u, v)
 
         dudx, dudy = cc_grad(u)
         dvdx, dvdy = cc_grad(v)
@@ -528,9 +533,7 @@ def membrane_strain_rate_function(ny, nx, dy, dx,
         u = extrapolate_over_cf(u)
         v = extrapolate_over_cf(v)
 
-        u = add_uv_ghost_cells(u)
-        v = add_uv_ghost_cells(v)
-
+        u, v = add_uv_ghost_cells(u, v)
 
         dudx, dudy = cc_grad(u)
         dvdx, dvdy = cc_grad(v)
@@ -608,14 +611,12 @@ def compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx, \
         volume_y = - ( beta * v + cc_rhs_y ) * dy * dx
 
         #momentum_term
-        u = add_uv_ghost_cells(u)
-        v = add_uv_ghost_cells(v)
+        u, v = add_uv_ghost_cells(u, v)
 
         #get thickness on the faces
         h = add_s_ghost_cells(h)
         h_ew, h_ns = interp_cc_to_fc(h)
         
-
         #various face-centred derivatives
         dudx_ew, dudy_ew = ew_gradient(u)
         dvdx_ew, dvdy_ew = ew_gradient(v)
@@ -681,8 +682,7 @@ def compute_linear_ssa_residuals_function_fc_visc_no_rhs(ny, nx, dy, dx, \
         volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
         
         #momentum_term
-        u = add_uv_ghost_cells(u)
-        v = add_uv_ghost_cells(v)
+        u, v = add_uv_ghost_cells(u, v)
 
         #get thickness on the faces
         h = add_s_ghost_cells(h)
@@ -756,8 +756,7 @@ def compute_u_v_residuals_function_linear_mu(ny, nx, dy, dx, \
         u = extrp_over_cf(u)
         v = extrp_over_cf(v)
         #momentum_term
-        u = add_uv_ghost_cells(u)
-        v = add_uv_ghost_cells(v)
+        u, v = add_uv_ghost_cells(u, v)
 
         #interpolate things onto face-cenres
         h = add_s_ghost_cells(h)
@@ -838,8 +837,7 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         u = extrp_over_cf(u)
         v = extrp_over_cf(v)
         #momentum_term
-        u = add_uv_ghost_cells(u)
-        v = add_uv_ghost_cells(v)
+        u, v = add_uv_ghost_cells(u, v)
 
         #various face-centred derivatives
         dudx_ew, dudy_ew = ew_gradient(u)
@@ -925,8 +923,7 @@ def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         u = extrp_over_cf(u)
         v = extrp_over_cf(v)
         #and add the ghost cells in
-        u = add_uv_ghost_cells(u)
-        v = add_uv_ghost_cells(v)
+        u, v = add_uv_ghost_cells(u, v)
 
         #various face-centred derivatives
         dudx_ew, dudy_ew = ew_gradient(u)
@@ -975,14 +972,15 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     beta_eff = C.copy()
     h_1d = h.reshape(-1)
 
-
     #functions for various things:
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
     add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx)
-    add_uv_ghost_cells                         = add_ghost_cells_periodic_dirichlet_function(ny,nx)
+    #add_uv_ghost_cells                         = apply_scalar_ghost_cells_to_vector(
+    #                                                add_ghost_cells_periodic_dirichlet_function(ny,nx)
+    #                                             )
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
@@ -998,7 +996,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
-                                                                                  periodic_x=True)
+                                                                                  periodic_x=False)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -1150,7 +1148,6 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
-    #def solver(u_trial, v_trial, residuals_function, n_iterations, residuals_fct_args, coordinates):
     def solver(u_trial, v_trial, residuals_function, n_iterations, residuals_fct_args):
 
         u_1d = u_trial.copy().reshape(-1)
@@ -1158,11 +1155,7 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
         
         residual = jnp.inf
         init_res = 0
-
-
-        #test_la_solver = create_sparse_petsc_la_solver_test((2*ny*nx, 2*ny*nx), monitor_ksp=True)
-
-
+        
         for i in range(n_iterations):
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(residuals_function,
                                                            (u_1d, v_1d,
@@ -1178,65 +1171,24 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
             rhs = -jnp.concatenate(residuals_function(u_1d, v_1d,
                                                       *residuals_fct_args))
 
-            ##jax.debug.print("nz jac vals: {x}", x=nz_jac_values)
-            #dense_jac = jnp.zeros((2*ny*nx, 2*ny*nx))
-            #dense_jac = dense_jac.at[coordinates[0], coordinates[1]].set(nz_jac_values)
-            ##jax.debug.print("{x}", x=(nz_jac_values.shape, coordinates.shape))
-            ##raise
 
-            #jax.debug.print("{x}", x=dense_jac)
-            ##jax.debug.print("rhs: {x}", x=rhs)
-
-            #dense_jac_2 = jax.jacrev(residuals_function, argnums=(0,1))(u_1d, v_1d, q)
-            #jax.debug.print("{x}", x=dense_jac_2)
-            #raise
-
-
-
-            #####NOTE: DENSE JACOBIAN COMPUTATION TO ISOLATE BUG
-            #((Juu, Jvu), (Juv, Jvv)) = jax.jacrev(residuals_function, argnums=(0,1))(u_1d, v_1d,
-            #                                                                         *residuals_fct_args)
-            #
-            #top = jnp.concatenate([Juu, Juv], axis=1)
-            #bot = jnp.concatenate([Jvu, Jvv], axis=1)
-            #J_full = jnp.concatenate([top, bot], axis=0)
-            #
-
-            #mask = J_full != 0.0
-            #rows, cols = jnp.where(mask)
-            #rows = rows.astype(jnp.int32)
-            #cols = cols.astype(jnp.int32)
-            #coords = jnp.stack([rows, cols], axis=0)
-            #vals = J_full[cols, rows]
-
-
-            ##########################
-
-            #NOTE: could uncomment if wanting to print stuff
-            #old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
-
-            #lin_res = J_full @ du - rhs
-            #print("‖J du - rhs‖_inf =", np.linalg.norm(lin_res, ord=np.inf))
-
+            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
 
             du = la_solver(nz_jac_values, rhs)
-            #du = test_la_solver(vals, rhs, coords)
-            #du = jnp.linalg.solve(J_full, rhs)
 
             u_1d = u_1d+du[:(ny*nx)]
             v_1d = v_1d+du[(ny*nx):]
 
 
-        #NOTE: could uncomment if wanting to print stuff
-        #res_final = jnp.max(jnp.abs(jnp.concatenate(
-        #                            residuals_function(u_1d, v_1d, *residuals_fct_args)
-        #                                           )
-        #                           )
-        #                   )
-        #print("----------")
-        #print("Final residual: {}".format(res_final))
-        #print("Total residual reduction factor: {}".format(init_res/res_final))
-        #print("----------")
+        res_final = jnp.max(jnp.abs(jnp.concatenate(
+                                    residuals_function(u_1d, v_1d, *residuals_fct_args)
+                                                   )
+                                   )
+                           )
+        print("----------")
+        print("Final residual: {}".format(res_final))
+        print("Total residual reduction factor: {}".format(init_res/res_final))
+        print("----------")
 
         return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
@@ -1252,9 +1204,11 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    add_rflc_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
     add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny,nx)
-    add_uv_ghost_cells                         = add_ghost_cells_periodic_dirichlet_function(ny,nx)
+    #add_uv_ghost_cells                         = apply_scalar_ghost_cells_to_vector(
+    #                                                add_ghost_cells_periodic_dirichlet_function(ny,nx)
+    #                                             )
     extrapolate_over_cf                        = extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
                                                                                    dx, cc_gradient, 
@@ -1265,7 +1219,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                                                extrapolate_over_cf,
                                                                                add_uv_ghost_cells)
     div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx,
-                                                                                     periodic_x=True)
+                                                                                     periodic_x=False)
 
     #calculate cell-centred viscosity based on velocity and q
     cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient)
@@ -1305,7 +1259,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
-                                                                                  periodic_x=True)
+                                                                                  periodic_x=False)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -1498,19 +1452,17 @@ A = c.A_COLD
 B = 0.5 * (A**(-1/nvisc))
 
 
-def twisty_stream():
-    lx = 180_000
-    ly = 180_000
-    resolution = 2_000 #m
+def ice_shelf():
+    lx = 150_000
+    ly = 200_000
     
-    
-    stencil_radius = 1
-    stencil_width = 2*stencil_radius+1
+    resolution = 2000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)
     
-    assert nc % stencil_width == 0, "domain must be tileable by stencil width in periodic bcs case"
+    lx = nr*resolution
+    ly = nc*resolution
     
     x = jnp.linspace(0, lx, nc)
     y = jnp.linspace(0, ly, nr)
@@ -1518,95 +1470,40 @@ def twisty_stream():
     delta_x = x[1]-x[0]
     delta_y = y[1]-y[0]
 
+    thk_profile = 500# - 300*x/lx
+    thk = jnp.zeros((nr, nc))+thk_profile
+    thk = thk.at[:, -1:].set(0)
+    
+    b = jnp.zeros_like(thk)-600
+    
+    mucoef = jnp.ones_like(thk)
+    
+    C = jnp.zeros_like(thk)
+    C = C.at[:4, :].set(1e16)
+    C = C.at[:, :4].set(1e16)
+    C = C.at[-4:,:].set(1e16)
+    C = jnp.where(thk==0, 1, C)
 
-    thk = jnp.zeros((nr,nc)) + 1000
-    #want a slope of 0.5 degrees.
-    sine_0pt5 = 0.0087265
-    
-    #b_profile = 1000 - 500*x/lx
-    b_profile = 1000 - sine_0pt5*x
-    b = jnp.zeros((nr, nc)) + b_profile
-    
-    
-    xs, ys = jnp.meshgrid(x,y)
-    R = ly
-    m = 0.25
-    C = 1e3 * (1 + 5e-3 + jnp.sin(2*jnp.pi*(ys+R/4)/R + m*jnp.sin(2*jnp.pi*xs/R)))
-    C = jnp.flipud(C)
-    
     #mucoef_profile = 0.5+b_profile.copy()/2000
     mucoef_profile = 1
     mucoef_0 = jnp.zeros_like(b)+mucoef_profile
     
-    #plt.imshow(mucoef)
-    #plt.colorbar()
-    #plt.show()
-    #raise
-    
-    #mucoef = jnp.ones_like(C)
-    #mucoef_0 = jnp.ones_like(C)
     q = jnp.zeros_like(C)
     
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
 
 
-def infinite_straight_stream():
-    lx = 180_000
-    ly = 60_000
-    resolution = 1_000 #m
-    
-    stencil_radius = 1
-    stencil_width = 2*stencil_radius+1
-    
-    nr = int(ly/resolution)
-    nc = int(lx/resolution)
-    
-    assert nc % stencil_width == 0, "domain must be tileable by stencil width in periodic bcs case"
-    
-    x = jnp.linspace(0, lx, nc)
-    y = jnp.linspace(0, ly, nr)
-    
-    delta_x = x[1]-x[0]
-    delta_y = y[1]-y[0]
-
-
-    thk = jnp.zeros((nr,nc)) + 1000
-    #want a slope of 0.5 degrees.
-    sine_0pt5 = 0.0087265
-    
-    #b_profile = 1000 - 500*x/lx
-    b_profile = 1000 - sine_0pt5*x
-    b = jnp.zeros((nr, nc)) + b_profile
-    
-    
-    C = jnp.zeros_like(b)+10
-    
-    mucoef_profile = 1
-    mucoef_0 = jnp.zeros_like(b)+mucoef_profile
-    
-    #plt.imshow(mucoef)
-    #plt.colorbar()
-    #plt.show()
-    #raise
-    
-    #mucoef = jnp.ones_like(C)
-    #mucoef_0 = jnp.ones_like(C)
-    q = jnp.zeros_like(C)
-    
-    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
-
-
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = twisty_stream()
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = infinite_straight_stream()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = ice_shelf()
 
 
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_iterations = 8
+n_iterations = 10
 
-
-mask = jnp.ones_like(b)
+mask = jnp.where(thk>0,1,0)
+mask = binary_erosion(mask)
+mask = binary_erosion(mask)
 
 def functional(v_field_x, v_field_y, q):
     #NOTE: for things like this, you need to ensure the value isn't
@@ -1676,18 +1573,18 @@ def calculate_hvp_via_soa():
                                       functional)
     
     
-    #plt.imshow(gradient[:,:])
-    #plt.title("gradient via adjoint")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via adjoint")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
 
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
     #plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
-    plt.imshow(hvp[:,:], vmin=-1.5, vmax=1.5, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-15, vmax=15, cmap="twilight_shifted")
     plt.title("hvp via soa")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -1734,7 +1631,7 @@ def calculate_hvp_via_ad():
     ##raise
     eps = 0.01
     fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
+    plt.imshow(fd_hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
     plt.title("hvp via fd")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -1788,7 +1685,7 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
     plt.title("hvp via ad")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -1806,8 +1703,12 @@ def calculate_hvp_via_ad():
 
 
 
-#calculate_hvp_via_soa()
 #calculate_hvp_via_ad()
+calculate_hvp_via_soa()
+
+
+raise
+
 
 
 def make_hvp_ad_fct():
@@ -1860,7 +1761,7 @@ def make_hvp_soa_fct():
 
 #function for computing hvp from perturbation direction
 #hessian_vector_product = make_hvp_ad_fct()
-hessian_vector_product_soa = make_hvp_soa_fct()
+#hessian_vector_product_soa = make_hvp_soa_fct()
 
 
 
