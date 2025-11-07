@@ -537,7 +537,11 @@ def membrane_strain_rate_function(ny, nx, dy, dx,
         dudx, dudy = cc_grad(u)
         dvdx, dvdy = cc_grad(v)
         
-        
+        #dudx = jnp.where(thk>0, dudx, 0)
+        #dvdx = jnp.where(thk>0, dvdx, 0)
+        #dudy = jnp.where(thk>0, dudy, 0)
+        #dvdy = jnp.where(thk>0, dvdy, 0)
+
         msr_tensor = jnp.zeros((ny, nx, 2, 2))
 
 
@@ -566,21 +570,25 @@ def divergence_of_tensor_field_function(ny, nx, dy, dx, periodic_x=False):
         #NOTE: This is done assuming basically everything of interest and its
         #gradient is zero at the boundaries
 
-        dx_tf_xx = jnp.zeros((shape_0, shape_1))
-        dx_tf_xx = dx_tf_xx.at[:,1:-1].set((tf_xx[:,2:] - tf_xx[:,:-2])/(2*dx))
+        if periodic_x:
+            dx_tf_xx = jnp.zeros((shape_0, shape_1))
+            dx_tf_xx = dx_tf_xx.at[:,1:-1].set((tf_xx[:,2:] - tf_xx[:,:-2])/(2*dx))
     
-        dx_tf_xy = jnp.zeros((shape_0, shape_1))
-        dx_tf_xy = dx_tf_xy.at[:,1:-1].set((tf_xy[:,2:] - tf_xy[:,:-2])/(2*dx))
+            dx_tf_xy = jnp.zeros((shape_0, shape_1))
+            dx_tf_xy = dx_tf_xy.at[:,1:-1].set((tf_xy[:,2:] - tf_xy[:,:-2])/(2*dx))
+        else:
+            dx_tf_xx = jnp.zeros((shape_0, shape_1))
+            dx_tf_xx = dx_tf_xx.at[:,1:-1].set((tf_xx[:,2:] - tf_xx[:,:-2])/(2*dx))
+    
+            dx_tf_xy = jnp.zeros((shape_0, shape_1))
+            dx_tf_xy = dx_tf_xy.at[:,1:-1].set((tf_xy[:,2:] - tf_xy[:,:-2])/(2*dx))
+
         
         dy_tf_yx = jnp.zeros((shape_0, shape_1))
         dy_tf_yx = dy_tf_yx.at[1:-1,:].set((tf_yx[:-2,:] - tf_yx[2:,:])/(2*dy))
         
         dy_tf_yy = jnp.zeros((shape_0, shape_1))
         dy_tf_yy = dy_tf_yy.at[1:-1,:].set((tf_yy[:-2,:] - tf_yy[2:,:])/(2*dy))
-        
-        if periodic_x:
-            dx_tf_xx = dx_tf_xx.at[:,0].set((tf_xx[:,1] - tf_xx[:,-1])/(2*dx))
-            dx_tf_xx = dx_tf_xx.at[:,-1].set((tf_xx[:,0] - tf_xx[:,-2])/(2*dx))
 
         return dx_tf_xx+dy_tf_yx, dx_tf_xy+dy_tf_yy
     return jax.jit(div_tensor_field)
@@ -1265,8 +1273,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                                                cc_gradient,
                                                                                extrapolate_over_cf,
                                                                                add_uv_ghost_cells)
-    div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx,
-                                                                                     periodic_x=True)
+    div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx)
 
     #calculate cell-centred viscosity based on velocity and q
     cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient)
@@ -1396,7 +1403,12 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
         dJdu, dJdv = jax.grad(functional, argnums=(0,1))(*argz)
 
-        
+        #plt.imshow(dJdu.reshape((nr,nc)))
+        #plt.show()
+        #plt.imshow(dJdv.reshape((nr,nc)))
+        #plt.show()
+        #raise
+
         rhs = - jnp.concatenate([dJdu, dJdv])
 
 
@@ -1418,7 +1430,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                           functional:callable, 
                           additional_fctl_args=None):
         #calculate viscosity
-        mu_bar = cc_viscosity(q, u, v)
+        #mu_bar = cc_viscosity(q, u, v)
         mu_bar_ew, mu_bar_ns = fc_viscosity(q, u, v)
         
         #right-hand-side (\partial_u J)
@@ -1502,7 +1514,7 @@ B = 0.5 * (A**(-1/nvisc))
 def twisty_stream():
     lx = 180_000
     ly = 180_000
-    resolution = 1_000 #m
+    resolution = 3_000 #m
     
     
     stencil_radius = 1
@@ -1677,21 +1689,30 @@ def calculate_hvp_via_soa():
                                       functional)
     
     
-    #plt.imshow(gradient[:,:])
-    #plt.title("gradient via adjoint")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    ##NOTE: Calving front stiffness dominating the gradient calculation
+    ##Should investigate. For now, cutting out to visualise
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via adjoint")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
 
+    plt.plot(gradient[25,:])
+    plt.ylim((-600,600))
+    plt.show()
+    
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
-    #plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
-    plt.imshow(hvp[:,:], vmin=-1.5, vmax=1.5, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
     plt.title("hvp via soa")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
+    
+    plt.plot(hvp[25,:])
+    plt.ylim((-10,10))
     plt.show()
     
 
@@ -1704,7 +1725,7 @@ def calculate_hvp_via_ad():
                                                              n_iterations)
 
     u_out, v_out = solver(q, u_init, v_init)
-    #show_vel_field(u_out, v_out)
+    show_vel_field(u_out, v_out)
     
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
@@ -1714,15 +1735,15 @@ def calculate_hvp_via_ad():
 
     gradient = get_grad(q)
     
-    #plt.imshow(gradient[:,:])
-    #plt.title("gradient via ad")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via ad")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
 
-    #plt.plot(gradient[25,:])
-    #plt.ylim((-600,600))
-    #plt.show()
+    plt.plot(gradient[25,:])
+    plt.ylim((-600,600))
+    plt.show()
 
     
     pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
@@ -1735,15 +1756,15 @@ def calculate_hvp_via_ad():
     ##raise
     eps = 0.01
     fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
+    plt.imshow(fd_hvp[:,:], vmin=-10, vmax=10, cmap="twilight_shifted")
     plt.title("hvp via fd")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
     plt.show()
 
-    #plt.plot(fd_hvp[25,:])
-    #plt.ylim((-10,10))
-    #plt.show()
+    plt.plot(fd_hvp[25,:])
+    plt.ylim((-10,10))
+    plt.show()
     ##raise
 
     #I'd have imagined it's ok to do the following:
@@ -1789,15 +1810,15 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-10, vmax=10, cmap="twilight_shifted")
     plt.title("hvp via ad")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
     plt.show()
     
-    #plt.plot(hvp[25,:])
-    #plt.ylim((-10,10))
-    #plt.show()
+    plt.plot(hvp[25,:])
+    plt.ylim((-10,10))
+    plt.show()
     
     #plt.imshow(jnp.where(jnp.abs(hvp)>1, ((fd_hvp - hvp)/fd_hvp[:,:]), jnp.nan), vmin=-1, vmax=1, cmap="RdBu_r")
     #plt.title("fd-ad percentage difference")
@@ -1809,8 +1830,8 @@ def calculate_hvp_via_ad():
 #TODO: get full Hessian rather than HVP once and see
 #TODO: write linear version.
 
-#calculate_hvp_via_soa()
-calculate_hvp_via_ad()
+calculate_hvp_via_soa()
+#calculate_hvp_via_ad()
 
 
 
