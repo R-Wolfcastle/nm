@@ -432,8 +432,6 @@ def binary_dilation(boolean_array):
     return dilate_once(boolean_array.astype(jnp.float64))
 
 
-#NOTE: this is not actually used...
-
 def extrapolate_over_cf_function(thk):
     def extrapolate_over_cf(cc_field):
         return cc_field
@@ -1214,8 +1212,8 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
 
             ##########################
 
-
-            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
+            #NOTE: could uncomment if wanting to print stuff
+            #old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
 
             #lin_res = J_full @ du - rhs
             #print("‖J du - rhs‖_inf =", np.linalg.norm(lin_res, ord=np.inf))
@@ -1229,15 +1227,16 @@ def generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver):
             v_1d = v_1d+du[(ny*nx):]
 
 
-        res_final = jnp.max(jnp.abs(jnp.concatenate(
-                                    residuals_function(u_1d, v_1d, *residuals_fct_args)
-                                                   )
-                                   )
-                           )
-        print("----------")
-        print("Final residual: {}".format(res_final))
-        print("Total residual reduction factor: {}".format(init_res/res_final))
-        print("----------")
+        #NOTE: could uncomment if wanting to print stuff
+        #res_final = jnp.max(jnp.abs(jnp.concatenate(
+        #                            residuals_function(u_1d, v_1d, *residuals_fct_args)
+        #                                           )
+        #                           )
+        #                   )
+        #print("----------")
+        #print("Final residual: {}".format(res_final))
+        #print("Total residual reduction factor: {}".format(init_res/res_final))
+        #print("----------")
 
         return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
@@ -1502,7 +1501,7 @@ B = 0.5 * (A**(-1/nvisc))
 def twisty_stream():
     lx = 180_000
     ly = 180_000
-    resolution = 1_000 #m
+    resolution = 2_000 #m
     
     
     stencil_radius = 1
@@ -1806,11 +1805,104 @@ def calculate_hvp_via_ad():
 
 
 
-#TODO: get full Hessian rather than HVP once and see
-#TODO: write linear version.
 
 #calculate_hvp_via_soa()
-calculate_hvp_via_ad()
+#calculate_hvp_via_ad()
+
+
+def make_hvp_ad_fct():
+    solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
+                                                             delta_y,
+                                                             delta_x,
+                                                             thk, C,
+                                                             n_iterations)
+    def reduced_functional(q):
+        u_out, v_out = solver(q, u_init, v_init)
+        return functional(u_out, v_out, q)
+
+    get_grad = jax.grad(reduced_functional)
+
+    def hess_vec_product(q, perturbation):
+        return jax.grad(lambda m: jnp.vdot(get_grad(m), perturbation))(q)
+
+    _, vjp_grad = jax.vjp(get_grad, q)
+    
+    def hessian_vector_product(pert_dir):
+        (hvp,) = vjp_grad(pert_dir.reshape((nr,nc)))
+        return hvp
+
+    return hessian_vector_product
+
+
+def make_hvp_soa_fct():
+    fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
+                                             nr, nc, delta_y, delta_x, thk, C, n_iterations
+                                                                                             )
+    
+    print("solving fwd problem:")
+    u_out, v_out = fwd_solver(q, u_init, v_init)
+    
+    #show_vel_field(u_out, v_out)
+    
+    print("solving adjoint problem:")
+    lx, ly, gradient = adjoint_solver(q, u_out, v_out,
+                                      jnp.zeros_like(u_out),
+                                      jnp.zeros_like(u_out),
+                                      functional)
+    
+    
+    def hessian_vector_product(pert_dir):
+        hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir.reshape((nr,nc)), functional)
+        return hvp
+
+    return hessian_vector_product
+    
+
+#function for computing hvp from perturbation direction
+#hessian_vector_product = make_hvp_ad_fct()
+hessian_vector_product_soa = make_hvp_soa_fct()
+
+
+
+
+
+import numpy as np
+from scipy.sparse.linalg import LinearOperator, eigsh
+
+n = nr * nc
+dtype = np.float64
+
+# JIT-compile and warm up once to avoid recompiles in the loop
+#HVP_jit = jax.jit(lambda x: HVP(x.reshape(nr, nc)).reshape(-1))
+#_ = HVP_jit(np.zeros(n))   # warmup
+
+#H = LinearOperator(
+#    shape=(n, n), dtype=dtype,
+#    matvec=lambda x: np.array(hessian_vector_product(x))  # ensure ndarray to avoid device transfers
+#)
+H = LinearOperator(
+    shape=(n, n), dtype=dtype,
+    matvec=lambda x: np.array(hessian_vector_product_soa(x))  # ensure ndarray to avoid device transfers
+)
+
+# Largest algebraic eigenvalues (most positive)
+k = 20  # or 1000
+w, V = eigsh(H, k=k, which='LA', tol=1e-6, maxiter=None)  # V[:, i] is eigenvector of w[i]
+
+# If you actually want largest magnitude (could pick big negative too), use which='LM'.
+# Normalize or reshape as needed:
+eigvals = w
+eigvecs = V.reshape(nr, nc, k)
+
+for i in range(k):
+    plt.imshow(eigvecs[...,i])
+    plt.colorbar()
+    plt.title("lambda={}".format(eigvals[i]))
+    plt.savefig("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/ts_evec_soa_{}.png".format(i))
+    plt.close()
+
+plt.plot(eigvals[::-1])
+plt.show()
 
 
 

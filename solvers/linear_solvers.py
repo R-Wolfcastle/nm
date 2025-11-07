@@ -9,10 +9,113 @@ import sys
 
 #local apps
 sys.path.insert(1, './')
-from sparsity_utils import dodgy_coo_to_csr
+from sparsity_utils import scipy_coo_to_csr,\
+                           dodgy_coo_to_csr
 
 
-def sparse_linear_solve(values, coordinates, jac_shape, b, x0, mode="jax-native"):
+def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
+                                    ksp_type='gmres', preconditioner='hypre',\
+                                    precondition_only=False, monitor_ksp=False):
+
+    comm = PETSc.COMM_WORLD
+    size = comm.Get_size()
+    
+    def construct_ab(values, b, transpose):
+        if transpose:
+            iptr, j, values = scipy_coo_to_csr(values, coordinates[::-1,:],\
+                                           jac_shape, return_decomposition=True)
+        else:
+            iptr, j, values = scipy_coo_to_csr(values, coordinates,\
+                                           jac_shape, return_decomposition=True)
+        #rows_local = int(jac_shape[0] / size)
+
+        A = PETSc.Mat().createAIJ(size=jac_shape, \
+                                  csr=(iptr.astype(np.int32), j.astype(np.int32), values),\
+                                  comm=comm)
+        
+        b = PETSc.Vec().createWithArray(b, comm=comm)
+        return A, b
+
+    
+    def create_solver_object(A):
+        
+        #set ksp iterations
+        opts = PETSc.Options()
+        opts['ksp_max_it'] = 20
+        if monitor_ksp:
+            opts['ksp_monitor'] = None
+        opts['ksp_rtol'] = 1e-20
+        
+        # Create a linear solver
+        ksp = PETSc.KSP().create()
+        ksp.setType(ksp_type)
+
+        ksp.setOperators(A)
+        ksp.setFromOptions()
+
+        if preconditioner is not None:
+            #assessing if preconditioner is doing anything:
+            #print((A*x - b).norm())
+
+            if preconditioner == 'hypre':
+                pc = ksp.getPC()
+                pc.setType('hypre')
+                pc.setHYPREType('boomeramg')
+            else:
+                pc = ksp.getPC()
+                pc.setType(preconditioner)
+        
+            return ksp, pc
+        else:
+            return ksp, None
+
+
+    @partial(jax.custom_vjp, nondiff_argnums=(2,))
+    def petsc_sparse_la_solver(values, b, transpose=False):
+    
+        A, b = construct_ab(values, b, transpose)
+        x = b.duplicate()
+        
+        ksp, pc = create_solver_object(A)
+
+        if precondition_only:
+            pc.apply(b, x)
+        else:
+            ksp.solve(b, x)
+        
+        x_jnp = jnp.array(x.getArray())
+
+        return x_jnp
+
+    
+    def la_solver_fwd(values, b, transpose=False):
+        solution = petsc_sparse_la_solver(values, b, transpose=transpose)
+        return solution, (values, b, solution)
+
+
+    #NOTE: the nondiff_argnums=(2,) thing shunts the transpose ragument to the front.
+    def linear_solve_bwd(transpose, res, x_bar):
+        #NOTE: The sign convention here is correct, despite what people say...
+        #It just follows the documentation rather than "textbook" versions.
+        values, b, x = res
+
+        lambda_ = petsc_sparse_la_solver(values, -x_bar, transpose=True)
+
+        b_bar = -lambda_.reshape(b.shape) #ensure same shape as input b.
+
+        #sparse version of jnp.outer(x,lambda_)
+        #TODO: CHECK WHICH WAY ROUND THESE COORDS GO. SHOULD BE RIGHT IF THEY ARE IJ!
+        values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
+
+        return values_bar, b_bar
+
+    petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
+
+    return petsc_sparse_la_solver
+
+
+
+def basic_sparse_linear_solve(values, coordinates, jac_shape, b, x0, mode="jax-native"):
 
     match mode:
         case "jax_bicgstab":
