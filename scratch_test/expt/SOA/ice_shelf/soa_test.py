@@ -475,7 +475,12 @@ def extrapolate_over_cf_function(thk):
             (ice_mask_shift_right==1).astype(int),
         ])
         
-        u_extrap_boundary = 2 * neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+
+        #NOTE: STEPH!!
+        #Including this factor of 2 screws the gradient as computed by the HVP, but fixes
+        #the gradient as computed by the adjoint models. Make of that what you will...
+        #u_extrap_boundary = 2 * neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+        u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
         #Think about it... 
 
         return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float64)
@@ -1389,13 +1394,13 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
         mu_bar = cc_viscosity(q, u, v)
 
-        plt.imshow(mu_bar)
-        plt.colorbar()
-        plt.show()
+        #plt.imshow(mu_bar)
+        #plt.colorbar()
+        #plt.show()
 
-        plt.imshow(mu_bar_ns)
-        plt.colorbar()
-        plt.show()
+        #plt.imshow(mu_bar_ns)
+        #plt.colorbar()
+        #plt.show()
 
 
         #calculate gradient
@@ -1743,7 +1748,7 @@ def calculate_hvp_via_ad():
 
 
 
-#calculate_hvp_via_ad()
+calculate_hvp_via_ad()
 calculate_hvp_via_soa()
 
 
