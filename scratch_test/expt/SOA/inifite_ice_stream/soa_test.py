@@ -1608,12 +1608,18 @@ n_iterations = 8
 
 mask = jnp.ones_like(b)
 
+reference_speed_solution = jnp.load("../../../../bits_of_data/soa_misc/speed_solution.np.npy")
+
+def functional_with_data(v_field_x, v_field_y, q):
+    return jnp.sum(mask.reshape(-1) * \
+           ((jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-20).reshape(-1)-reference_speed_solution.reshape(-1))**2)
+                   )
+
 def functional(v_field_x, v_field_y, q):
     #NOTE: for things like this, you need to ensure the value isn't
     #zero where the argument is zero, because JAX can't differentiate
     #through the square-root otherwise. Silly JAX.
     return jnp.sum(mask.reshape(-1) * jnp.sqrt(v_field_x**2 + v_field_y**2 + 1e-10).reshape(-1))
-
 
 def calculate_gradient_via_foa():
     fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
@@ -1629,7 +1635,7 @@ def calculate_gradient_via_foa():
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
                                       jnp.zeros_like(u_out),
                                       jnp.zeros_like(u_out),
-                                      functional)
+                                      functional_with_data)
     return gradient
 
 def calculate_gradient_via_ad():
@@ -1642,7 +1648,7 @@ def calculate_gradient_via_ad():
 
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
-        return functional(u_out, v_out, q)
+        return functional_with_data(u_out, v_out, q)
 
     get_grad = jax.grad(reduced_functional)
 
@@ -1673,18 +1679,18 @@ def calculate_hvp_via_soa():
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
                                       jnp.zeros_like(u_out),
                                       jnp.zeros_like(u_out),
-                                      functional)
+                                      functional_with_data)
     
     
-    #plt.imshow(gradient[:,:])
-    #plt.title("gradient via adjoint")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via adjoint")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
 
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
-    hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
+    hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional_with_data)
     
     #plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
     plt.imshow(hvp[:,:], vmin=-1.5, vmax=1.5, cmap="twilight_shifted")
@@ -1704,28 +1710,37 @@ def calculate_hvp_via_ad():
 
     u_out, v_out = solver(q, u_init, v_init)
     #show_vel_field(u_out, v_out)
+
+    #speed = jnp.sqrt(u_out**2+v_out**2)
+    #jnp.save("../../../../bits_of_data/soa_misc/speed_solution.np", speed)
     
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
-        return functional(u_out, v_out, q)
+        return functional_with_data(u_out, v_out, q)
 
     get_grad = jax.grad(reduced_functional)
 
     gradient = get_grad(q)
     
-    #plt.imshow(gradient[:,:])
-    #plt.title("gradient via ad")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via ad")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
+
+    raise
 
     #plt.plot(gradient[25,:])
     #plt.ylim((-600,600))
     #plt.show()
 
     
-    pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
+    #pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
+    pert_dir = jnp.load("../../../../bits_of_data/soa_misc/pert_dir.np.npy")
 
+    
+    #jnp.save("../../../../bits_of_data/soa_misc/pert_dir.np", pert_dir)
+    #raise
 
     ##finite diff hvp for comparison
     ##plt.imshow(p)
@@ -1818,7 +1833,7 @@ def make_hvp_ad_fct():
                                                              n_iterations)
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
-        return functional(u_out, v_out, q)
+        return functional_with_data(u_out, v_out, q)
 
     get_grad = jax.grad(reduced_functional)
 
@@ -1848,18 +1863,18 @@ def make_hvp_soa_fct():
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
                                       jnp.zeros_like(u_out),
                                       jnp.zeros_like(u_out),
-                                      functional)
+                                      functional_with_data)
     
     
     def hessian_vector_product(pert_dir):
-        hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir.reshape((nr,nc)), functional)
+        hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir.reshape((nr,nc)), functional_with_data)
         return hvp
 
     return hessian_vector_product
     
 
 #function for computing hvp from perturbation direction
-#hessian_vector_product = make_hvp_ad_fct()
+hessian_vector_product = make_hvp_ad_fct()
 hessian_vector_product_soa = make_hvp_soa_fct()
 
 
@@ -1886,7 +1901,7 @@ H = LinearOperator(
 )
 
 # Largest algebraic eigenvalues (most positive)
-k = 20  # or 1000
+k = 4  # or 1000
 w, V = eigsh(H, k=k, which='LA', tol=1e-6, maxiter=None)  # V[:, i] is eigenvector of w[i]
 
 # If you actually want largest magnitude (could pick big negative too), use which='LM'.
@@ -1898,7 +1913,7 @@ for i in range(k):
     plt.imshow(eigvecs[...,i])
     plt.colorbar()
     plt.title("lambda={}".format(eigvals[i]))
-    plt.savefig("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/ts_evec_soa_{}.png".format(i))
+    plt.savefig("../../../..//bits_of_data/hessian_evecs_etc/dataish_version/ts_evec_soa_{}.png".format(i))
     plt.close()
 
 plt.plot(eigvals[::-1])

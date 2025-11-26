@@ -391,12 +391,12 @@ def apply_scalar_ghost_cells_to_vector(scalar_ghost_function):
 
 def binary_erosion(boolean_array):
     # 3x3 cross-shaped structuring element (4-connectivity)
-    #kernel = jnp.array([[1,1,1],
-    #                    [1,1,1],
-    #                    [1,1,1]], dtype=jnp.bool_)
-    kernel = jnp.array([[0,1,0],
+    kernel = jnp.array([[1,1,1],
                         [1,1,1],
-                        [0,1,0]], dtype=jnp.bool_)
+                        [1,1,1]], dtype=jnp.bool_)
+    #kernel = jnp.array([[0,1,0],
+    #                    [1,1,1],
+    #                    [0,1,0]], dtype=jnp.bool_)
 
     kernel = kernel.astype(jnp.float64)
 
@@ -410,7 +410,7 @@ def binary_erosion(boolean_array):
             padding='SAME',
             dimension_numbers=('NCHW','OIHW','NCHW')
         )
-        return (out[0,0] > 3).astype(jnp.bool_)
+        return (out[0,0] > 8).astype(jnp.bool_)
 
     return erode_once(boolean_array.astype(jnp.float64))
 
@@ -442,24 +442,25 @@ def binary_dilation(boolean_array):
 #        return cc_field
 #    return jax.jit(extrapolate_over_cf)
 
+def safe_neighbours(cc_field):
+    # cc_field shape (ny, nx)
+    up    = jnp.pad(cc_field, ((0,1),(0,0)))[1: , :]   # shifted up
+    down  = jnp.pad(cc_field, ((1,0),(0,0)))[:-1, :]   # shifted down
+    left  = jnp.pad(cc_field, ((0,0),(0,1)))[:, 1: ]   # shifted left
+    right = jnp.pad(cc_field, ((0,0),(1,0)))[:, :-1]   # shifted right
+    return up, down, left, right
+
 def extrapolate_over_cf_function(thk):
     
     cf_adjacent_zero_ice_cells = (thk==0) & binary_dilation(thk>0)
 
     ice_mask = (thk>0)
 
-    ice_mask_shift_up    = jnp.roll(ice_mask, -1, axis=0)
-    ice_mask_shift_down  = jnp.roll(ice_mask,  1, axis=0)
-    ice_mask_shift_left  = jnp.roll(ice_mask, -1, axis=1)
-    ice_mask_shift_right = jnp.roll(ice_mask,  1, axis=1)
-    
+    ice_mask_shift_up, ice_mask_shift_down, ice_mask_shift_left, ice_mask_shift_right = safe_neighbours(ice_mask)
 
     def extrapolate_over_cf(cc_field):
 
-        u_shift_up    = jnp.roll(cc_field, -1, axis=0)
-        u_shift_down  = jnp.roll(cc_field,  1, axis=0)
-        u_shift_left  = jnp.roll(cc_field, -1, axis=1)
-        u_shift_right = jnp.roll(cc_field,  1, axis=1)
+        u_shift_up, u_shift_down, u_shift_left, u_shift_right = safe_neighbours(cc_field)
         
         neighbour_values = jnp.stack([
             jnp.where(ice_mask_shift_up   ==1, u_shift_up,    0),
@@ -473,54 +474,34 @@ def extrapolate_over_cf_function(thk):
             (ice_mask_shift_down ==1).astype(int),
             (ice_mask_shift_left ==1).astype(int),
             (ice_mask_shift_right==1).astype(int),
-        ])
+        ]).sum(axis=0)
+        neighbour_counts = jnp.where(neighbour_counts == 0, 1, neighbour_counts)
         
 
         #NOTE: STEPH!!
         #Including this factor of 2 screws the gradient as computed by the HVP, but fixes
         #the gradient as computed by the adjoint models. Make of that what you will...
         #u_extrap_boundary = 2 * neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
-        u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+        u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts
+        u_extrap_boundary = jnp.where(neighbour_counts==0, 0, u_extrap_boundary)
         #Think about it... 
 
         return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float64)
 
     return extrapolate_over_cf
 
-#NOTE: NOT FINISHED!!!!
-#TODO: FINISH!!!
-def adjust_fc_value_at_cf_function(thk):
-    
-    calving_front_cells = (thk>0) & ~binary_erosion(thk>0)
 
-    def extrapolate_over_cf(cc_field):
-
-        u_shift_up    = jnp.roll(cc_field, -1, axis=0)
-        u_shift_down  = jnp.roll(cc_field,  1, axis=0)
-        u_shift_left  = jnp.roll(cc_field, -1, axis=1)
-        u_shift_right = jnp.roll(cc_field,  1, axis=1)
-        
-        neighbour_values = jnp.stack([
-            jnp.where(ice_mask_shift_up   ==1, u_shift_up,    0),
-            jnp.where(ice_mask_shift_down ==1, u_shift_down,  0),
-            jnp.where(ice_mask_shift_left ==1, u_shift_left,  0),
-            jnp.where(ice_mask_shift_right==1, u_shift_right, 0),
-        ])
-        
-        neighbour_counts = jnp.stack([
-            (ice_mask_shift_up   ==1).astype(int),
-            (ice_mask_shift_down ==1).astype(int),
-            (ice_mask_shift_left ==1).astype(int),
-            (ice_mask_shift_right==1).astype(int),
-        ])
-        
-        u_extrap_boundary = 2 * neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
-        #Think about it... 
-
-        return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float64)
-
-    return extrapolate_over_cf
-
+#test_thk = jnp.ones((10,10))
+#test_thk = test_thk.at[:,-1].set(0)
+#test_array = jnp.ones_like(test_thk)*jnp.linspace(0,8,10)
+#test_array = test_array.at[:,-1].set(0)
+#print(test_array)
+#
+#e = extrapolate_over_cf_function(test_thk)
+#
+#ta_ex = e(test_array)
+#print(ta_ex)
+#raise
 
 @jax.jit
 def double_dot_contraction(A, B):
@@ -874,6 +855,8 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
 
         #obvs not going to do anything in the no-cf case
         u = extrp_over_cf(u)
+        #jax.debug.print("{x}",x=u[:,-3:])
+
         v = extrp_over_cf(v)
         #momentum_term
         u, v = add_uv_ghost_cells(u, v)
@@ -1078,6 +1061,9 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
     @custom_vjp
     def solver(q, u_trial, v_trial):
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
 
@@ -1123,6 +1109,9 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
     def solver_fwd(q, u_trial, v_trial):
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+        
         u, v = solver(q, u_trial, v_trial)
 
         dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
@@ -1342,6 +1331,9 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     #picard_solver = make_picard_solver(ny, nx, sparse_jacrev, mask, la_solver, get_u_v_residuals, fc_visc)
 
     def solve_fwd_problem(q, u_trial, v_trial):
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+        
         #u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,), coords)
         u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,))
         return u.reshape((ny,nx)), v.reshape((ny,nx))
@@ -1501,7 +1493,7 @@ def ice_shelf():
     lx = 150_000
     ly = 200_000
     
-    resolution = 2000 #m
+    resolution = 4000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -1549,6 +1541,10 @@ n_iterations = 10
 mask = jnp.where(thk>0,1,0)
 mask = binary_erosion(mask)
 mask = binary_erosion(mask)
+mask = binary_erosion(mask)
+mask = mask.astype(int)
+#print(mask)
+#raise
 
 def functional(v_field_x, v_field_y, q):
     #NOTE: for things like this, you need to ensure the value isn't
@@ -1626,6 +1622,7 @@ def calculate_hvp_via_soa():
 
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
+    pert_dir = pert_dir.at[:,-3:].set(0)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
     #plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
@@ -1655,19 +1652,19 @@ def calculate_hvp_via_ad():
 
     gradient = get_grad(q)
     
-    #plt.imshow(gradient[:,:])
-    #plt.title("gradient via ad")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via ad")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
 
     #plt.plot(gradient[25,:])
     #plt.ylim((-600,600))
     #plt.show()
 
     
-    pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
-
+    pert_dir = gradient.copy() / (jnp.linalg.norm(gradient)*10)
+    pert_dir = pert_dir.at[:,-3:].set(0)
 
     ##finite diff hvp for comparison
     ##plt.imshow(p)
