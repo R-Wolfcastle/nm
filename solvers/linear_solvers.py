@@ -1,7 +1,14 @@
 """A set of linear solvers for the linear system Ax = b."""
 
+#1st party
+from pathlib import Path
+import sys
+from functools import partial
+
 #3rd party
+import jax
 import jax.numpy as jnp
+import numpy as np
 from petsc4py import PETSc
 
 #native
@@ -12,6 +19,8 @@ sys.path.insert(1, './')
 from sparsity_utils import scipy_coo_to_csr,\
                            dodgy_coo_to_csr
 
+
+jax.config.update("jax_enable_x64", True)
 
 def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
                                     ksp_type='gmres', preconditioner='hypre',\
@@ -41,7 +50,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         
         #set ksp iterations
         opts = PETSc.Options()
-        opts['ksp_max_it'] = 20
+        opts['ksp_max_it'] = 40
         if monitor_ksp:
             opts['ksp_monitor'] = None
         opts['ksp_rtol'] = 1e-20
@@ -112,7 +121,6 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
     petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
 
     return petsc_sparse_la_solver
-
 
 
 def basic_sparse_linear_solve(values, coordinates, jac_shape, b, x0, mode="jax-native"):

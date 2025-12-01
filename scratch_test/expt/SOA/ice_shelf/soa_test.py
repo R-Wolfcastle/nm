@@ -70,7 +70,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         
         #set ksp iterations
         opts = PETSc.Options()
-        opts['ksp_max_it'] = 20
+        opts['ksp_max_it'] = 40
         if monitor_ksp:
             opts['ksp_monitor'] = None
         opts['ksp_rtol'] = 1e-20
@@ -469,22 +469,26 @@ def extrapolate_over_cf_function(thk):
             jnp.where(ice_mask_shift_right==1, u_shift_right, 0),
         ])
         
-        neighbour_counts = jnp.stack([
-            (ice_mask_shift_up   ==1).astype(int),
-            (ice_mask_shift_down ==1).astype(int),
-            (ice_mask_shift_left ==1).astype(int),
-            (ice_mask_shift_right==1).astype(int),
-        ]).sum(axis=0)
-        neighbour_counts = jnp.where(neighbour_counts == 0, 1, neighbour_counts)
-        
+        #neighbour_counts = jnp.stack([
+        #    (ice_mask_shift_up   ==1).astype(int),
+        #    (ice_mask_shift_down ==1).astype(int),
+        #    (ice_mask_shift_left ==1).astype(int),
+        #    (ice_mask_shift_right==1).astype(int),
+        #]).sum(axis=0)
+        #neighbour_counts = jnp.where(neighbour_counts == 0, 1, neighbour_counts)
+        #
 
-        #NOTE: STEPH!!
-        #Including this factor of 2 screws the gradient as computed by the HVP, but fixes
-        #the gradient as computed by the adjoint models. Make of that what you will...
-        #u_extrap_boundary = 2 * neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
-        u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts
-        u_extrap_boundary = jnp.where(neighbour_counts==0, 0, u_extrap_boundary)
-        #Think about it... 
+        ##NOTE: STEPH!!
+        ##Including this factor of 2 screws the gradient as computed by the HVP, but fixes
+        ##the gradient as computed by the adjoint models. Make of that what you will...
+        ##u_extrap_boundary = 2 * neighbour_values.sum(axis=0) / neighbour_counts.sum(axis=0)
+        #u_extrap_boundary = neighbour_values.sum(axis=0) / neighbour_counts
+        #u_extrap_boundary = jnp.where(neighbour_counts==0, 0, u_extrap_boundary)
+        ##Think about it... 
+        
+        u_extrap_boundary = jnp.take_along_axis(neighbour_values,
+                                                jnp.argmax(jnp.abs(neighbour_values), axis=0)[None, ...],
+                                                axis=0)[0]
 
         return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float64)
 
@@ -1509,7 +1513,7 @@ def ice_shelf():
 
     thk_profile = 500# - 300*x/lx
     thk = jnp.zeros((nr, nc))+thk_profile
-    thk = thk.at[:, -1:].set(0)
+    thk = thk.at[:, -2:].set(0)
     
     b = jnp.zeros_like(thk)-600
     
@@ -1622,7 +1626,7 @@ def calculate_hvp_via_soa():
 
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
-    pert_dir = pert_dir.at[:,-3:].set(0)
+    pert_dir = pert_dir.at[:,-4:].set(0)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
     #plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
@@ -1664,7 +1668,7 @@ def calculate_hvp_via_ad():
 
     
     pert_dir = gradient.copy() / (jnp.linalg.norm(gradient)*10)
-    pert_dir = pert_dir.at[:,-3:].set(0)
+    pert_dir = pert_dir.at[:,-4:].set(0)
 
     ##finite diff hvp for comparison
     ##plt.imshow(p)
