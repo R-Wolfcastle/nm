@@ -50,7 +50,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         
         #set ksp iterations
         opts = PETSc.Options()
-        opts['ksp_max_it'] = 40
+        opts['ksp_max_it'] = 100
         if monitor_ksp:
             opts['ksp_monitor'] = None
         opts['ksp_rtol'] = 1e-20
@@ -91,7 +91,12 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
             pc.apply(b, x)
         else:
             ksp.solve(b, x)
+      
         
+        reason = ksp.getConvergedReason()
+        print("KSP converged reason:", reason)
+
+
         x_jnp = jnp.array(x.getArray())
 
         return x_jnp

@@ -3,6 +3,21 @@ import jax
 import jax.numpy as jnp
 
 
+
+DIRS = jnp.array([
+    [-1,  0],  # N
+    [ 1,  0],  # S
+    [ 0, -1],  # W
+    [ 0,  1],  # E
+    [-1, -1],  # NW
+    [-1,  1],  # NE
+    [ 1, -1],  # SW
+    [ 1,  1],  # SE
+], dtype=jnp.int32)
+
+
+
+
 def interp_cc_with_ghosts_to_fc_function(ny, nx):
     def interp_cc_to_fc(var):
         
@@ -212,7 +227,7 @@ def safe_neighbours(cc_field):
     right = jnp.pad(cc_field, ((0,0),(1,0)))[:, :-1]   # shifted right
     return up, down, left, right
 
-def extrapolate_over_cf_function(thk):
+def nn_extrapolate_over_cf_function(thk):
     
     cf_adjacent_zero_ice_cells = (thk==0) & binary_dilation(thk>0)
 
@@ -300,6 +315,79 @@ def extrapolate_over_cf_dynamic_thickness(cc_field, thk):
 def cf_cells(thk):
     return (thk>0) & ~binary_erosion(thk>0)
 
+
+def linear_extrapolate_over_cf_dynamic_thickness(cc_field, thk):
+    """
+    Extrapolate into ocean cells adjacent to ice by linear extrapolation along
+    the direction with the longest contiguous ice run.
+
+    u1 is value in last ice filled cell
+    u2 is value one cell inside that
+
+    u_extrp = 2*u1 - u2
+    """
+
+    ice_mask = (thk>0)
+    cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(thk>0)
+
+    # Gather u1 and u2 for all directions
+    u1 = jnp.stack([jnp.roll(jnp.roll(cc_field, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
+    u2 = jnp.stack([jnp.roll(jnp.roll(cc_field, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
+
+    # Check ice availability for u1 and u2
+    has_1 = jnp.stack([jnp.roll(jnp.roll(ice_mask, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
+    has_2 = jnp.stack([jnp.roll(jnp.roll(ice_mask, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
+
+    # Score = number of available ice cells inward (prefer directions with both u1 and u2)
+    score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+
+    # Pick best direction
+    best_k = jnp.argmax(score, axis=0)
+
+    # Extrapolate: if has_2 then 2*u1 - u2 else u1
+    u_extrap_dirs = jnp.where(has_2, 2.0*u1 - u2, u1)
+    u_extrap = jnp.take_along_axis(u_extrap_dirs, best_k[None, ...], axis=0)[0]
+
+    return jnp.where(cf_adjacent_zero_ice_cells, u_extrap, cc_field)
+
+
+def linear_extrapolate_over_cf_function(thk):
+    """
+    Extrapolate into ocean cells adjacent to ice by linear extrapolation along
+    the direction with the longest contiguous ice run.
+
+    u1 is value in last ice filled cell
+    u2 is value one cell inside that
+
+    u_extrp = 2*u1 - u2
+    """
+
+    ice_mask = (thk>0)
+    cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(thk>0)
+
+    @jax.jit
+    def linear_extrapolate_over_cf(cc_field):
+    
+        # Gather u1 and u2 for all directions
+        u1 = jnp.stack([jnp.roll(jnp.roll(cc_field, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
+        u2 = jnp.stack([jnp.roll(jnp.roll(cc_field, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
+    
+        # Check ice availability for u1 and u2
+        has_1 = jnp.stack([jnp.roll(jnp.roll(ice_mask, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
+        has_2 = jnp.stack([jnp.roll(jnp.roll(ice_mask, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
+    
+        # Score = number of available ice cells inward (prefer directions with both u1 and u2)
+        score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+    
+        # Pick best direction
+        best_k = jnp.argmax(score, axis=0)
+    
+        # Extrapolate: if has_2 then 2*u1 - u2 else u1
+        u_extrap_dirs = jnp.where(has_2, 2.0*u1 - u2, u1)
+        u_extrap = jnp.take_along_axis(u_extrap_dirs, best_k[None, ...], axis=0)[0]
+    
+        return jnp.where(cf_adjacent_zero_ice_cells, u_extrap, cc_field)
+    return linear_extrapolate_over_cf
 
 
 

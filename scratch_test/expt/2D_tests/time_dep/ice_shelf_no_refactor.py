@@ -52,18 +52,24 @@ np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.i
 
 
 
-def make_fo_upwind_residual_function(nx, ny, dx, dy, vel_bcs="rflc"):
+def make_implicit_advect_scalar_field_fou_residuals_function(nx, ny, dx, dy, vel_bcs="rflc"):
     if vel_bcs!="rflc":
         raise "Add the 2 lines of code to enable periodic bcs you lazy bastard, Trys."
 
     cc_to_fc = interp_cc_with_ghosts_to_fc_function(ny, nx)
     add_reflection_ghost_cells, add_cont_ghost_cells = add_ghost_cells_fcts(ny, nx)
 
-    def fo_upwind_residual_function(u, v, scalar_field, scalar_field_old, source, delta_t):
+    def implicit_advect_scalar_field_fou_residuals(u, v, scalar_field,
+                                                   scalar_field_current,
+                                                   source, delta_t, thickness):
 
-        u, v = add_reflection_ghost_cells(u,v)
-        h = add_cont_ghost_cells(scalar_field)
+        u = linear_extrapolate_over_cf_dynamic_thickness(u, thickness)
+        v = linear_extrapolate_over_cf_dynamic_thickness(v, thickness)
+        h = linear_extrapolate_over_cf_dynamic_thickness(scalar_field_current, thickness)
         
+        u, v = add_reflection_ghost_cells(u,v)
+        h = add_cont_ghost_cells(h)
+     
         u_fc_ew, _ = cc_to_fc(u)
         _, v_fc_ns = cc_to_fc(v)
 
@@ -71,18 +77,19 @@ def make_fo_upwind_residual_function(nx, ny, dx, dy, vel_bcs="rflc"):
         v_signs = jnp.where(v_fc_ns>0, 1, -1)
 
         h_fc_fou_ew = jnp.where(u_fc_ew>0, h[1:-1,:-1], h[1:-1, 1:])
-        h_fc_fou_ns = jnp.where(v_fc_ew>0, h[1:, 1:-1], h[-1:,1:-1])
+        h_fc_fou_ns = jnp.where(v_fc_ns>0, h[1:, 1:-1], h[-1:,1:-1])
 
-        volume_term = ( (scalar_field - scalar_field_old)/delta_t - source ) * dx * dy
-        x_term = (u_fc_ew[:,1:]*h_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*h_fc_fou_ew[:,:-1])*dy
-        y_term = (u_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - u_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx
+        ew_flux = u_fc_ew*h_fc_fou_ew
+        ns_flux = v_fc_ns*h_fc_fou_ns
 
+        #remove those ghost cells again!
+        h = h[1:-1,1:-1]
 
-        #To stop the calving front advancing, need to ensure no flux into ice-free cells
-        #might as well kill all components there tbh...
-        return jnp.where(thk>1e-2, volume_term - x_term - y_term, 0)
-    return fo_upwind_residual_function
+        return ((scalar_field - h)/delta_t - source)*dx*dy +\
+                (u_fc_ew[:,1:]*h_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*h_fc_fou_ew[:,:-1])*dy +\
+                (v_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx
 
+    return implicit_advect_scalar_field_fou_residuals
 
 
 def make_advect_scalar_field_fou_function(nx, ny, dx, dy, vel_bcs="rflc"):
@@ -94,13 +101,13 @@ def make_advect_scalar_field_fou_function(nx, ny, dx, dy, vel_bcs="rflc"):
 
     def advect_scalar_field_fou(u, v, scalar_field, source, delta_t, thickness):
 
-        u = extrapolate_over_cf_dynamic_thickness(u, thickness)
-        v = extrapolate_over_cf_dynamic_thickness(v, thickness)
-        h = extrapolate_over_cf_dynamic_thickness(scalar_field, thickness)
+        u = linear_extrapolate_over_cf_dynamic_thickness(u, thickness)
+        v = linear_extrapolate_over_cf_dynamic_thickness(v, thickness)
+        h = linear_extrapolate_over_cf_dynamic_thickness(scalar_field, thickness)
         
         u, v = add_reflection_ghost_cells(u,v)
         h = add_cont_ghost_cells(h)
-        
+     
         u_fc_ew, _ = cc_to_fc(u)
         _, v_fc_ns = cc_to_fc(v)
 
@@ -110,9 +117,8 @@ def make_advect_scalar_field_fou_function(nx, ny, dx, dy, vel_bcs="rflc"):
         h_fc_fou_ew = jnp.where(u_fc_ew>0, h[1:-1,:-1], h[1:-1, 1:])
         h_fc_fou_ns = jnp.where(v_fc_ns>0, h[1:, 1:-1], h[-1:,1:-1])
 
-        ##make flux out of final cells same as flux into them
-        #cf_cells_ = cf_cells(thickness)[1:-1,1:-1]
-        #h_fc_fou_ew = jnp.where()
+        ew_flux = u_fc_ew*h_fc_fou_ew
+        ns_flux = v_fc_ns*h_fc_fou_ns
 
         #remove those ghost cells again!
         h = h[1:-1,1:-1]
@@ -264,7 +270,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     #add_uv_ghost_cells                         = apply_scalar_ghost_cells_to_vector(
     #                                                add_ghost_cells_periodic_dirichlet_function(ny,nx)
     #                                             )
-    extrapolate_over_cf                        = extrapolate_over_cf_dynamic_thickness
+    extrapolate_over_cf                        = linear_extrapolate_over_cf_dynamic_thickness
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
                                                        beta_eff,\
@@ -432,6 +438,186 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
 
 
+def make_coupled_implicit_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
+                                                                     C, n_iterations):
+
+    beta_eff = C.copy()
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx)
+    #add_uv_ghost_cells                         = apply_scalar_ghost_cells_to_vector(
+    #                                                add_ghost_cells_periodic_dirichlet_function(ny,nx)
+    #                                             )
+    extrapolate_over_cf                        = linear_extrapolate_over_cf_dynamic_thickness
+
+    get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
+                                                       beta_eff,\
+                                                       interp_cc_to_fc,\
+                                                       ew_gradient, ns_gradient,\
+                                                       cc_gradient,\
+                                                       add_uv_ghost_cells,\
+                                                       add_scalar_ghost_cells,\
+                                                       extrapolate_over_cf)
+    
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=False)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+                                                              ksp_type="bcgs",\
+                                                              preconditioner="hypre",\
+                                                              precondition_only=False)
+
+
+
+    @custom_vjp
+    def solver(q, u_trial, v_trial, h):
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+
+        h_1d = h.copy().reshape(-1)
+        u_1d = u_trial.copy().reshape(-1)
+        v_1d = v_trial.copy().reshape(-1)
+
+        residual = jnp.inf
+        init_res = 0
+
+        for i in range(n_iterations):
+
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+                                                           (u_1d, v_1d, q, h_1d)
+                                                          )
+
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+
+            rhs = -jnp.concatenate(get_u_v_residuals(u_1d, v_1d, q, h_1d))
+
+            #print(jnp.max(rhs))
+            #raise
+
+            old_residual, residual, init_res = print_residual_things(residual, rhs, init_res, i)
+
+
+            du = la_solver(nz_jac_values, rhs)
+
+            u_1d = u_1d+du[:(ny*nx)]
+            v_1d = v_1d+du[(ny*nx):]
+
+
+        res_final = jnp.max(jnp.abs(jnp.concatenate(
+                                    get_u_v_residuals(u_1d, v_1d, q, h_1d)
+                                                   )
+                                   )
+                           )
+        print("----------")
+        print("Final residual: {}".format(res_final))
+        print("Total residual reduction factor: {}".format(init_res/res_final))
+        print("----------")
+        
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+
+
+    def solver_fwd(q, u_trial, v_trial, h):
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+        
+        u, v = solver(q, u_trial, v_trial, h)
+
+        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+                                                       (u.reshape(-1), v.reshape(-1), q, h.reshape(-1))
+                                                      )
+        dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+
+        fwd_residuals = (u, v, dJ_dvel_nz_values, q, h)
+        #fwd_residuals = (u, v, q)
+
+        return (u, v), fwd_residuals
+
+
+    def solver_bwd(res, cotangent):
+        
+        u, v, dJ_dvel_nz_values, q, h = res
+        #u, v, q = res
+
+        u_bar, v_bar = cotangent
+        
+
+        #dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_u_v_residuals, \
+        #                                               (u.reshape(-1), v.reshape(-1), q)
+        #                                              )
+        #dJ_dvel_nz_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+        #                                     dJv_du[mask], dJv_dv[mask]])
+
+
+        lambda_ = la_solver(dJ_dvel_nz_values,
+                            -jnp.concatenate([u_bar, v_bar]),
+                            transpose=True)
+
+        lambda_u = lambda_[:(ny*nx)]
+        lambda_v = lambda_[(ny*nx):]
+
+
+        #phi_bar = (dG/dphi)^T lambda
+        _, pullback_function = jax.vjp(get_u_v_residuals,
+                                         u.reshape(-1), v.reshape(-1), q, h.reshape(-1)
+                                      )
+        _, _, mu_bar = pullback_function((lambda_u, lambda_v))
+        
+#        #bwd has to return a tuple of cotangents for each primal input
+#        #of solver, so have to return this 1-tuple:
+#        return (mu_bar.reshape((ny, nx)), )
+
+        #I wonder if I can get away with just returning None for u_trial_bar, v_trial_bar, h_bar...
+        return (mu_bar.reshape((ny, nx)), None, None, None)
+
+
+    solver.defvjp(solver_fwd, solver_bwd)
+
+    return solver
+
 
 
 ##NOTE: make everything linear by changing to 1
@@ -514,7 +700,7 @@ for i in range(10):
     ui, vi = vel_solver(q, ui, vi, hi)
     #show_vel_field(u_out, v_out)
     hi = thickness_update(ui, vi, hi, 0, timestep, hi)
-plt.plot(hi[25,:])
+plt.plot(hi[10,:])
 plt.show()
 plt.imshow(hi, vmin=0, vmax=500)
 plt.show()
