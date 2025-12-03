@@ -522,6 +522,13 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient):
     return jax.jit(cc_viscosity)
 
 
+
+
+
+
+
+
+
 def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
                           add_mucoef_ghost_cells,
                           interp_cc_to_fc, ew_gradient, ns_gradient, h_1d, B):
@@ -559,4 +566,44 @@ def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
         return mu_ew, mu_ns
-    return jax.jit(fc_viscosity)
+ 
+
+
+ def fc_viscosity_function_not_fixed_thk(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+                          add_mucoef_ghost_cells,
+                          interp_cc_to_fc, ew_gradient, ns_gradient, B):
+    def fc_viscosity(q, u, v, h):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_mucoef_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+        
+        #calculate face-centred viscosity:
+        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)

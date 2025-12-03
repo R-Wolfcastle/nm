@@ -64,16 +64,14 @@ if &shortmess =~ 'A'
 else
   set shortmess=aoO
 endif
-badd +489 ice_shelf_no_refactor.py
-badd +1 ice_shelf.py
-badd +1642 ../../SOA/ice_shelf/soa_test.py
-badd +20 ../../../../solvers/nonlinear_solvers.py
-badd +45 ../../../../solvers/residuals.py
-badd +261 ../../../../utils/grid.py
+badd +704 ice_shelf.py
+badd +319 ../../../../utils/grid.py
+badd +49 ../../../../solvers/linear_solvers.py
+badd +196 ../../../../utils/sparsity_utils.py
 argglobal
 %argdel
-$argadd ice_shelf_no_refactor.py
-edit ice_shelf_no_refactor.py
+$argadd ice_shelf.py
+edit ice_shelf.py
 let s:save_splitbelow = &splitbelow
 let s:save_splitright = &splitright
 set splitbelow splitright
@@ -93,6 +91,140 @@ set winwidth=1
 exe 'vert 1resize ' . ((&columns * 79 + 79) / 158)
 exe 'vert 2resize ' . ((&columns * 78 + 79) / 158)
 argglobal
+setlocal autoindent
+setlocal backupcopy=
+setlocal nobinary
+setlocal nobreakindent
+setlocal breakindentopt=
+setlocal bufhidden=
+setlocal buflisted
+setlocal buftype=
+setlocal nocindent
+setlocal cinkeys=0{,0},0),0],:,!^F,o,O,e
+setlocal cinoptions=
+setlocal cinscopedecls=public,protected,private
+setlocal cinwords=if,else,while,do,for,switch
+setlocal colorcolumn=
+setlocal comments=b:#,fb:-
+setlocal commentstring=#\ %s
+setlocal complete=.,w,b,u,t,i
+setlocal concealcursor=inc
+setlocal conceallevel=2
+setlocal completefunc=
+setlocal nocopyindent
+setlocal cryptmethod=
+setlocal nocursorbind
+setlocal nocursorcolumn
+setlocal nocursorline
+setlocal cursorlineopt=both
+setlocal define=^\\s*\\(def\\|class\\)
+setlocal dictionary=
+setlocal nodiff
+setlocal equalprg=
+setlocal errorformat=
+setlocal expandtab
+if &filetype != 'python'
+setlocal filetype=python
+endif
+setlocal fillchars=
+setlocal fixendofline
+setlocal foldcolumn=0
+setlocal foldenable
+setlocal foldexpr=0
+setlocal foldignore=#
+setlocal foldlevel=0
+setlocal foldmarker={{{,}}}
+setlocal foldmethod=manual
+setlocal foldminlines=1
+setlocal foldnestmax=20
+setlocal foldtext=foldtext()
+setlocal formatexpr=
+setlocal formatoptions=tcq
+setlocal formatlistpat=^\\s*\\d\\+[\\]:.)}\\t\ ]\\s*
+setlocal formatprg=
+setlocal grepprg=
+setlocal iminsert=0
+setlocal imsearch=-1
+setlocal include=^\\s*\\(from\\|import\\)
+setlocal includeexpr=substitute(substitute(substitute(v:fname,b:grandparent_match,b:grandparent_sub,''),b:parent_match,b:parent_sub,''),b:child_match,b:child_sub,'g')
+setlocal indentexpr=python#GetIndent(v:lnum)
+setlocal indentkeys=0{,0},0),0],:,!^F,o,O,e,<:>,=elif,=except
+setlocal noinfercase
+setlocal iskeyword=@,48-57,_,192-255
+setlocal keywordprg=python3\ -m\ pydoc
+setlocal nolinebreak
+setlocal nolisp
+setlocal lispoptions=
+setlocal lispwords=
+setlocal nolist
+setlocal listchars=
+setlocal makeencoding=
+setlocal makeprg=
+setlocal matchpairs=(:),{:},[:]
+setlocal modeline
+setlocal modifiable
+setlocal nrformats=bin,octal,hex
+set number
+setlocal number
+setlocal numberwidth=4
+setlocal omnifunc=
+setlocal path=
+setlocal nopreserveindent
+setlocal nopreviewwindow
+setlocal quoteescape=\\
+setlocal noreadonly
+setlocal norelativenumber
+setlocal noscrollbind
+setlocal scrolloff=-1
+setlocal shiftwidth=4
+setlocal noshortname
+setlocal showbreak=
+setlocal sidescrolloff=-1
+setlocal signcolumn=auto
+setlocal nosmartindent
+setlocal nosmoothscroll
+setlocal softtabstop=4
+setlocal nospell
+setlocal spellcapcheck=[.?!]\\_[\\])'\"\	\ ]\\+
+setlocal spellfile=
+setlocal spelllang=en
+setlocal spelloptions=
+setlocal statusline=
+setlocal suffixesadd=.py
+setlocal swapfile
+setlocal synmaxcol=3000
+if &syntax != 'python'
+setlocal syntax=python
+endif
+setlocal tabstop=4
+setlocal tagcase=
+setlocal tagfunc=
+setlocal tags=
+setlocal termwinkey=
+setlocal termwinscroll=10000
+setlocal termwinsize=
+setlocal textwidth=0
+setlocal thesaurus=
+setlocal thesaurusfunc=
+setlocal noundofile
+setlocal undolevels=-123456
+setlocal virtualedit=
+setlocal wincolor=
+setlocal nowinfixheight
+setlocal nowinfixwidth
+setlocal wrap
+setlocal wrapmargin=0
+silent! normal! zE
+let &fdl = &fdl
+let s:l = 704 - ((34 * winheight(0) + 23) / 46)
+if s:l < 1 | let s:l = 1 | endif
+keepjumps exe s:l
+normal! zt
+keepjumps 704
+normal! 021|
+wincmd w
+argglobal
+if bufexists(fnamemodify("../../../../utils/grid.py", ":p")) | buffer ../../../../utils/grid.py | else | edit ../../../../utils/grid.py | endif
 balt ice_shelf.py
 setlocal autoindent
 setlocal backupcopy=
@@ -151,7 +283,7 @@ setlocal imsearch=-1
 setlocal include=^\\s*\\(from\\|import\\)
 setlocal includeexpr=substitute(substitute(substitute(v:fname,b:grandparent_match,b:grandparent_sub,''),b:parent_match,b:parent_sub,''),b:child_match,b:child_sub,'g')
 setlocal indentexpr=python#GetIndent(v:lnum)
-setlocal indentkeys=0{,0},0),0],:,0#,!^F,o,O,e,<:>,=elif,=except
+setlocal indentkeys=0{,0},0),0],:,!^F,o,O,e,<:>,=elif,=except
 setlocal noinfercase
 setlocal iskeyword=@,48-57,_,192-255
 setlocal keywordprg=python3\ -m\ pydoc
@@ -219,148 +351,14 @@ setlocal wrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 513 - ((32 * winheight(0) + 23) / 46)
+let s:l = 572 - ((31 * winheight(0) + 23) / 46)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 513
-normal! 017|
+keepjumps 572
+normal! 040|
 wincmd w
-argglobal
-if bufexists(fnamemodify("../../../../utils/grid.py", ":p")) | buffer ../../../../utils/grid.py | else | edit ../../../../utils/grid.py | endif
-balt ice_shelf_no_refactor.py
-setlocal autoindent
-setlocal backupcopy=
-setlocal nobinary
-setlocal nobreakindent
-setlocal breakindentopt=
-setlocal bufhidden=
-setlocal buflisted
-setlocal buftype=
-setlocal nocindent
-setlocal cinkeys=0{,0},0),0],:,!^F,o,O,e
-setlocal cinoptions=
-setlocal cinscopedecls=public,protected,private
-setlocal cinwords=if,else,while,do,for,switch
-setlocal colorcolumn=
-setlocal comments=b:#,fb:-
-setlocal commentstring=#\ %s
-setlocal complete=.,w,b,u,t,i
-setlocal concealcursor=inc
-setlocal conceallevel=2
-setlocal completefunc=
-setlocal nocopyindent
-setlocal cryptmethod=
-setlocal nocursorbind
-setlocal nocursorcolumn
-setlocal nocursorline
-setlocal cursorlineopt=both
-setlocal define=^\\s*\\(def\\|class\\)
-setlocal dictionary=
-setlocal nodiff
-setlocal equalprg=
-setlocal errorformat=
-setlocal expandtab
-if &filetype != 'python'
-setlocal filetype=python
-endif
-setlocal fillchars=
-setlocal fixendofline
-setlocal foldcolumn=0
-setlocal foldenable
-setlocal foldexpr=0
-setlocal foldignore=#
-setlocal foldlevel=0
-setlocal foldmarker={{{,}}}
-setlocal foldmethod=manual
-setlocal foldminlines=1
-setlocal foldnestmax=20
-setlocal foldtext=foldtext()
-setlocal formatexpr=
-setlocal formatoptions=tcq
-setlocal formatlistpat=^\\s*\\d\\+[\\]:.)}\\t\ ]\\s*
-setlocal formatprg=
-setlocal grepprg=
-setlocal iminsert=0
-setlocal imsearch=-1
-setlocal include=^\\s*\\(from\\|import\\)
-setlocal includeexpr=substitute(substitute(substitute(v:fname,b:grandparent_match,b:grandparent_sub,''),b:parent_match,b:parent_sub,''),b:child_match,b:child_sub,'g')
-setlocal indentexpr=python#GetIndent(v:lnum)
-setlocal indentkeys=0{,0},0),0],:,0#,!^F,o,O,e,<:>,=elif,=except
-setlocal noinfercase
-setlocal iskeyword=@,48-57,_,192-255
-setlocal keywordprg=python3\ -m\ pydoc
-setlocal nolinebreak
-setlocal nolisp
-setlocal lispoptions=
-setlocal lispwords=
-setlocal nolist
-setlocal listchars=
-setlocal makeencoding=
-setlocal makeprg=
-setlocal matchpairs=(:),{:},[:]
-setlocal modeline
-setlocal modifiable
-setlocal nrformats=bin,octal,hex
-set number
-setlocal number
-setlocal numberwidth=4
-setlocal omnifunc=
-setlocal path=
-setlocal nopreserveindent
-setlocal nopreviewwindow
-setlocal quoteescape=\\
-setlocal noreadonly
-setlocal norelativenumber
-setlocal noscrollbind
-setlocal scrolloff=-1
-setlocal shiftwidth=4
-setlocal noshortname
-setlocal showbreak=
-setlocal sidescrolloff=-1
-setlocal signcolumn=auto
-setlocal nosmartindent
-setlocal nosmoothscroll
-setlocal softtabstop=4
-setlocal nospell
-setlocal spellcapcheck=[.?!]\\_[\\])'\"\	\ ]\\+
-setlocal spellfile=
-setlocal spelllang=en
-setlocal spelloptions=
-setlocal statusline=
-setlocal suffixesadd=.py
-setlocal swapfile
-setlocal synmaxcol=3000
-if &syntax != 'python'
-setlocal syntax=python
-endif
-setlocal tabstop=4
-setlocal tagcase=
-setlocal tagfunc=
-setlocal tags=
-setlocal termwinkey=
-setlocal termwinscroll=10000
-setlocal termwinsize=
-setlocal textwidth=0
-setlocal thesaurus=
-setlocal thesaurusfunc=
-setlocal noundofile
-setlocal undolevels=-123456
-setlocal virtualedit=
-setlocal wincolor=
-setlocal nowinfixheight
-setlocal nowinfixwidth
-setlocal wrap
-setlocal wrapmargin=0
-silent! normal! zE
-let &fdl = &fdl
-let s:l = 258 - ((11 * winheight(0) + 23) / 46)
-if s:l < 1 | let s:l = 1 | endif
-keepjumps exe s:l
-normal! zt
-keepjumps 258
-normal! 0
-wincmd w
+2wincmd w
 exe 'vert 1resize ' . ((&columns * 79 + 79) / 158)
 exe 'vert 2resize ' . ((&columns * 78 + 79) / 158)
 tabnext 1
