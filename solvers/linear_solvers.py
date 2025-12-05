@@ -24,7 +24,8 @@ jax.config.update("jax_enable_x64", True)
 
 def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
                                     ksp_type='gmres', preconditioner='hypre',\
-                                    precondition_only=False, monitor_ksp=False):
+                                    precondition_only=False, monitor_ksp=False,\
+                                    ksp_max_iter=40):
 
     comm = PETSc.COMM_WORLD
     size = comm.Get_size()
@@ -50,10 +51,14 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
         
         #set ksp iterations
         opts = PETSc.Options()
-        opts['ksp_max_it'] = 40
+        opts['ksp_max_it'] = ksp_max_iter
+
+        opts['ksp_norm_type'] = "unpreconditioned"
+        #opts['ksp_norm_type'] = "preconditioned"
+
         if monitor_ksp:
             opts['ksp_monitor'] = None
-            opts['ksp_converged_reason'] = None
+            #opts['ksp_converged_reason'] = None
             #opts['ksp_view'] = None
         opts['ksp_rtol'] = 1e-20
         
@@ -86,7 +91,8 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
     
         A, b = construct_ab(values, b, transpose)
         x = b.duplicate()
-        
+        #x.set(0)
+
         ksp, pc = create_solver_object(A)
 
         if precondition_only:

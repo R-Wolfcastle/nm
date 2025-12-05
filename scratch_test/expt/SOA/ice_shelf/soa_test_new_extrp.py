@@ -437,7 +437,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
     add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx)
     #add_uv_ghost_cells                         = apply_scalar_ghost_cells_to_vector(
     #                                                add_ghost_cells_periodic_dirichlet_function(ny,nx)
     #                                             )
@@ -449,7 +449,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_uv_ghost_cells,\
-                                                       add_scalar_ghost_cells,\
+                                                       add_cont_ghost_cells,\
                                                        extrapolate_over_cf)
     
 
@@ -493,7 +493,8 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
                                                               ksp_type="gmres",\
                                                               preconditioner="hypre",\
-                                                              precondition_only=False)
+                                                              precondition_only=False,\
+                                                              ksp_max_iter=40)
 
 
 
@@ -693,7 +694,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
     #calculate cell-centred viscosity based on velocity and q
     cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient)
     fc_viscosity = fc_viscosity_function(ny, nx, dy, dx, extrapolate_over_cf, add_uv_ghost_cells,
-                                         add_scalar_ghost_cells,
+                                         add_cont_ghost_cells,
                                          interp_cc_to_fc, ew_gradient, ns_gradient, h_1d)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
@@ -702,7 +703,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_uv_ghost_cells,\
-                                                       add_scalar_ghost_cells,\
+                                                       add_cont_ghost_cells,\
                                                        extrapolate_over_cf)
     
     linear_ssa_residuals = compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx,\
@@ -711,7 +712,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_uv_ghost_cells,\
-                                                       add_scalar_ghost_cells,\
+                                                       add_cont_ghost_cells,\
                                                        extrapolate_over_cf)
 
     linear_ssa_residuals_no_rhs = compute_linear_ssa_residuals_function_fc_visc_no_rhs(
@@ -721,7 +722,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
                                                        ew_gradient, ns_gradient,\
                                                        cc_gradient,\
                                                        add_uv_ghost_cells,\
-                                                       add_scalar_ghost_cells,\
+                                                       add_cont_ghost_cells,\
                                                        extrapolate_over_cf
                                                                                       )
 
@@ -763,12 +764,13 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, C, n_ite
 
    
 
-
+    #Note the insane number of ksp iterations!!!!!! Ill conditioned matrices in SOA cals.
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
                                                               ksp_type="gmres",\
                                                               preconditioner="hypre",\
                                                               precondition_only=False,
-                                                              monitor_ksp=True)
+                                                              monitor_ksp=False,\
+                                                              ksp_max_iter=400)
 
 
     newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
@@ -986,9 +988,9 @@ v_init = jnp.zeros_like(b)
 n_iterations = 10
 
 mask = jnp.where(thk>0,1,0)
-mask = binary_erosion(mask)
-mask = binary_erosion(mask)
-mask = binary_erosion(mask)
+#mask = binary_erosion(mask)
+#mask = binary_erosion(mask)
+#mask = binary_erosion(mask)
 mask = mask.astype(int)
 #print(mask)
 #raise
@@ -1089,7 +1091,7 @@ def calculate_hvp_via_ad():
                                                              n_iterations)
 
     u_out, v_out = solver(q, u_init, v_init)
-    #show_vel_field(u_out, v_out)
+    show_vel_field(u_out, v_out)
     
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
@@ -1192,11 +1194,11 @@ def calculate_hvp_via_ad():
 
 
 
-#calculate_hvp_via_ad()
-#calculate_hvp_via_soa()
+calculate_hvp_via_ad()
+calculate_hvp_via_soa()
 
 
-#raise
+raise
 
 
 solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
@@ -1207,16 +1209,16 @@ solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
 
 #u_out, v_out = solver(q, u_init, v_init)
 #show_vel_field(u_out, v_out)
-#raise
-#jnp.save("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u_big.npy", u_out)
-#jnp.save("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v_big.npy", v_out)
+##raise
+#jnp.save("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u_big_new.npy", u_out)
+#jnp.save("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v_big_new.npy", v_out)
 #raise
 
 #u_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u_big.npy")
 #v_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v_big.npy")
 
-u_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u.npy")
-v_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v.npy")
+u_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u_big_new.npy")
+v_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v_big_new.npy")
 
 #show_vel_field(u_data, v_data)
 
@@ -1313,7 +1315,7 @@ for i in range(k):
     plt.imshow(eigvecs[...,i])
     plt.colorbar()
     plt.title("lambda={}".format(eigvals[i]))
-    plt.savefig("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/ts_evec_soa_small_{}.png".format(i))
+    plt.savefig("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/ts_evec_soa_big_new_new_{}.png".format(i))
     plt.close()
 
 plt.plot(eigvals[::-1])

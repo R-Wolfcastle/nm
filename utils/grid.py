@@ -227,6 +227,38 @@ def safe_neighbours(cc_field):
     right = jnp.pad(cc_field, ((0,0),(1,0)))[:, :-1]   # shifted right
     return up, down, left, right
 
+
+def stack_safe_shifted(cc_field):
+    # Pad with 2 cells on all sides so we can slice safely
+    cc_field_pad = jnp.pad(cc_field, ((2, 2), (2, 2)), constant_values=0)
+
+    # 1-cell shifts (cardinal + diagonals)
+    u1 = jnp.stack([
+        cc_field_pad[1:-3, 2:-2],  # up 1
+        cc_field_pad[3:-1, 2:-2],  # down 1
+        cc_field_pad[2:-2, 1:-3],  # left 1
+        cc_field_pad[2:-2, 3:-1],  # right 1
+        cc_field_pad[1:-3, 1:-3],  # up-left 1
+        cc_field_pad[1:-3, 3:-1],  # up-right 1
+        cc_field_pad[3:-1, 1:-3],  # down-left 1
+        cc_field_pad[3:-1, 3:-1],  # down-right 1
+    ])
+
+    # 2-cell shifts (cardinal + diagonals)
+    u2 = jnp.stack([
+        cc_field_pad[0:-4, 2:-2],  # up 2
+        cc_field_pad[4:,   2:-2],  # down 2
+        cc_field_pad[2:-2, 0:-4],  # left 2
+        cc_field_pad[2:-2, 4:],    # right 2
+        cc_field_pad[0:-4, 0:-4],  # up-left 2
+        cc_field_pad[0:-4, 4:],    # up-right 2
+        cc_field_pad[4:,   0:-4],  # down-left 2
+        cc_field_pad[4:,   4:],    # down-right 2
+    ])
+
+    return u1, u2
+
+
 def nn_extrapolate_over_cf_function(thk):
     
     cf_adjacent_zero_ice_cells = (thk==0) & binary_dilation(thk>0)
@@ -330,15 +362,9 @@ def linear_extrapolate_over_cf_dynamic_thickness(cc_field, thk):
     ice_mask = (thk>0)
     cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(thk>0)
 
-    # Gather u1 and u2 for all directions
-    u1 = jnp.stack([jnp.roll(jnp.roll(cc_field, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
-    u2 = jnp.stack([jnp.roll(jnp.roll(cc_field, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
+    u1, u2 = stack_safe_shifted(cc_field)
+    has_1, has_2 = stack_safe_shifted(ice_mask)
 
-    # Check ice availability for u1 and u2
-    has_1 = jnp.stack([jnp.roll(jnp.roll(ice_mask, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
-    has_2 = jnp.stack([jnp.roll(jnp.roll(ice_mask, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
-
-    # Score = number of available ice cells inward (prefer directions with both u1 and u2)
     score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
 
     # Pick best direction
@@ -365,16 +391,15 @@ def linear_extrapolate_over_cf_function(thk):
     ice_mask = (thk>0)
     cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(thk>0)
 
+
+    
     @jax.jit
     def linear_extrapolate_over_cf(cc_field):
-    
-        # Gather u1 and u2 for all directions
-        u1 = jnp.stack([jnp.roll(jnp.roll(cc_field, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
-        u2 = jnp.stack([jnp.roll(jnp.roll(cc_field, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
-    
-        # Check ice availability for u1 and u2
-        has_1 = jnp.stack([jnp.roll(jnp.roll(ice_mask, di, axis=0), dj, axis=1) for di, dj in DIRS], axis=0)
-        has_2 = jnp.stack([jnp.roll(jnp.roll(ice_mask, 2*di, axis=0), 2*dj, axis=1) for di, dj in DIRS], axis=0)
+
+        cc_field_pad = jnp.pad(cc_field, ((2,2),(2,2)), constant_values=0)
+        
+        u1, u2 = stack_safe_shifted(cc_field)
+        has_1, has_2 = stack_safe_shifted(ice_mask)
     
         # Score = number of available ice cells inward (prefer directions with both u1 and u2)
         score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
@@ -569,41 +594,41 @@ def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
  
 
 
- def fc_viscosity_function_not_fixed_thk(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
-                          add_mucoef_ghost_cells,
-                          interp_cc_to_fc, ew_gradient, ns_gradient, B):
-    def fc_viscosity(q, u, v, h):
-        mucoef = mucoef_0*jnp.exp(q)
-        mucoef = add_mucoef_ghost_cells(mucoef)
-        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-        
-        u = u.reshape((ny, nx))
-        v = v.reshape((ny, nx))
-        h = h_1d.reshape((ny, nx))
+ #def fc_viscosity_function_not_fixed_thk(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+ #                         add_mucoef_ghost_cells,
+ #                         interp_cc_to_fc, ew_gradient, ns_gradient, B):
+ #   def fc_viscosity(q, u, v, h):
+ #       mucoef = mucoef_0*jnp.exp(q)
+ #       mucoef = add_mucoef_ghost_cells(mucoef)
+ #       mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+ #       
+ #       u = u.reshape((ny, nx))
+ #       v = v.reshape((ny, nx))
+ #       h = h_1d.reshape((ny, nx))
 
-        u = extrp_over_cf(u)
-        v = extrp_over_cf(v)
-        #and add the ghost cells in
-        u, v = add_uv_ghost_cells(u, v)
+ #       u = extrp_over_cf(u)
+ #       v = extrp_over_cf(v)
+ #       #and add the ghost cells in
+ #       u, v = add_uv_ghost_cells(u, v)
 
-        #various face-centred derivatives
-        dudx_ew, dudy_ew = ew_gradient(u)
-        dvdx_ew, dvdy_ew = ew_gradient(v)
-        dudx_ns, dudy_ns = ns_gradient(u)
-        dvdx_ns, dvdy_ns = ns_gradient(v)
-        
-        #calculate face-centred viscosity:
-        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
-        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+ #       #various face-centred derivatives
+ #       dudx_ew, dudy_ew = ew_gradient(u)
+ #       dvdx_ew, dvdy_ew = ew_gradient(v)
+ #       dudx_ns, dudy_ns = ns_gradient(u)
+ #       dvdx_ns, dvdy_ns = ns_gradient(v)
+ #       
+ #       #calculate face-centred viscosity:
+ #       mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+ #                   0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+ #       mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+ #                   0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
 
-        #to account for calving front boundary condition, set effective viscosities
-        #of faces of all cells with zero thickness to zero:
-        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
-        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
-        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
-        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+ #       #to account for calving front boundary condition, set effective viscosities
+ #       #of faces of all cells with zero thickness to zero:
+ #       mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+ #       mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+ #       mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+ #       mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
-        return mu_ew, mu_ns
-    return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)
+ #       return mu_ew, mu_ns
+ #   return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)
