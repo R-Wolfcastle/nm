@@ -9,7 +9,7 @@ import jax.scipy.linalg as lalg
 from jax.scipy.optimize import minimize
 
 #local apps
-sys.path.insert(1, "../utils/")
+sys.path.insert(1, "/Users/eetss/new_model_code/src/nm/utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\
@@ -17,7 +17,7 @@ from sparsity_utils import scipy_coo_to_csr,\
 import constants_years as c
 from grid import *
 
-sys.path.insert(1, "./")
+sys.path.insert(1, "/Users/eetss/new_model_code/src/nm/solvers/")
 import residuals as rdl
 from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp
 from residuals import *
