@@ -29,6 +29,11 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
 
     comm = PETSc.COMM_WORLD
     size = comm.Get_size()
+
+    #NOTE: INITIALISE THIS HERE AS IT IS EXPENSIVE AND THEN FILL LATER
+    #A = PETSc.Mat().createAIJ(size=jac_shape,\
+    #        csr=(iptr.astype(np.int32), j.astype(np.int32), values),\
+    #        comm=comm)
     
     def construct_ab(values, b, transpose):
         if transpose:
