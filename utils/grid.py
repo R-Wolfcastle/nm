@@ -1,8 +1,13 @@
+#1st party
+import sys
+
 #3rd party
 import jax
 import jax.numpy as jnp
 
-
+#local apps
+sys.path.insert(0,"./")
+import constants_years as c
 
 DIRS = jnp.array([
     [-1,  0],  # N
@@ -532,13 +537,13 @@ def divergence_of_tensor_field_function(ny, nx, dy, dx, periodic_x=False):
     return jax.jit(div_tensor_field)
 
 
-def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient):
+def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0):
     def cc_viscosity(q, u, v):
 
         vfg = cc_vector_field_gradient(u, v)
         
-        mu = B * mucoef_0 * jnp.exp(q) * (vfg[:,:,0,0]**2 + vfg[:,:,1,1]**2 + vfg[:,:,0,0]*vfg[:,:,1,1] + \
-                           0.25*(vfg[:,:,0,1] + vfg[:,:,1,0])**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+        mu = c.B_COLD * mucoef_0 * jnp.exp(q) * (vfg[:,:,0,0]**2 + vfg[:,:,1,1]**2 + vfg[:,:,0,0]*vfg[:,:,1,1] + \
+                           0.25*(vfg[:,:,0,1] + vfg[:,:,1,0])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         #NOTE: the effective viscosity isn't actually set to zero here in the ice-free regions,
         #but wherever it's used, it should be multiplied by a zero thickness there...
@@ -556,7 +561,7 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient):
 
 def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
                           add_mucoef_ghost_cells,
-                          interp_cc_to_fc, ew_gradient, ns_gradient, h_1d, B):
+                          interp_cc_to_fc, ew_gradient, ns_gradient, h_1d, mucoef_0):
     def fc_viscosity(q, u, v):
         mucoef = mucoef_0*jnp.exp(q)
         mucoef = add_mucoef_ghost_cells(mucoef)
@@ -578,10 +583,10 @@ def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         dvdx_ns, dvdy_ns = ns_gradient(v)
         
         #calculate face-centred viscosity:
-        mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
-        mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+        mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         #to account for calving front boundary condition, set effective viscosities
         #of faces of all cells with zero thickness to zero:
@@ -591,6 +596,7 @@ def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
         return mu_ew, mu_ns
+    return fc_viscosity
  
 
 
@@ -619,9 +625,9 @@ def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
  #       
  #       #calculate face-centred viscosity:
  #       mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
- #                   0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+ #                   0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
  #       mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
- #                   0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/nvisc - 1))
+ #                   0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
  #       #to account for calving front boundary condition, set effective viscosities
  #       #of faces of all cells with zero thickness to zero:
