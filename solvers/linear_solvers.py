@@ -15,7 +15,7 @@ from petsc4py import PETSc
 import sys
 
 #local apps
-sys.path.insert(1, '/Users/eetss/new_model_code/src/nm/utils/')
+sys.path.insert(1, '/Users/eartsu/new_model/testing/utils/')
 from sparsity_utils import scipy_coo_to_csr,\
                            dodgy_coo_to_csr
 

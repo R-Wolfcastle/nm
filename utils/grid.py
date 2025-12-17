@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 
 #local apps
-sys.path.insert(0,"/Users/eetss/new_model_code/src/nm/utils/")
+sys.path.insert(0,"/Users/eartsu/new_model/testing/nm/utils/")
 import constants_years as c
 
 DIRS = jnp.array([

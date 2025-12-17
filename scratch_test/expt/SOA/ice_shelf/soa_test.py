@@ -4,23 +4,23 @@ import sys
 import time
 from functools import partial
 
-##local apps
-sys.path.insert(1, "../../../../utils/")
-from sparsity_utils import scipy_coo_to_csr,\
-                           basis_vectors_and_coords_2d_square_stencil,\
-                           make_sparse_jacrev_fct_new,\
-                           make_sparse_jacrev_fct_shared_basis
+#local apps
+sys.path.insert(1, "../../../../utils")
+from sparsity_utils import (scipy_coo_to_csr,
+                           basis_vectors_and_coords_2d_square_stencil,
+                           make_sparse_jacrev_fct_new, make_sparse_jacrev_fct_shared_basis)
+
 import constants_years as c
 #import constants as c
-from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
-                           create_gif_from_png_fps, create_high_quality_gif_from_pngfps,\
-                           create_imageio_gif, create_webp_from_pngs, create_gif_global_palette
+from plotting_stuff import (show_vel_field, make_gif, show_damage_field,
+                           create_gif_from_png_fps, create_high_quality_gif_from_pngfps,
+                           create_imageio_gif, create_webp_from_pngs, create_gif_global_palette)
 from grid import *
 
-sys.path.insert(1, "../../../../solvers/")
+sys.path.insert(1, "../../../../solvers")
 from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp
-from nonlinear_solvers import forward_adjoint_and_second_order_adjoint_solvers,\
-        make_newton_velocity_solver_function_custom_vjp
+from nonlinear_solvers import (forward_adjoint_and_second_order_adjoint_solvers,
+        make_newton_velocity_solver_function_custom_vjp)
 
 #3rd party
 from petsc4py import PETSc
@@ -52,7 +52,7 @@ def ice_shelf():
     lx = 150_000
     ly = 200_000
     
-    resolution = 4_000 #m
+    resolution = 1_000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)

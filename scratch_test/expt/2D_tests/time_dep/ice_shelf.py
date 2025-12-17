@@ -4,11 +4,11 @@ import sys
 import time
 
 ##local apps
-sys.path.insert(1, "/Users/eetss/new_model_code/src/nm/solvers/")
+sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
 from nonlinear_solvers import make_newton_coupled_solver_function,\
         make_newton_velocity_solver_function_custom_vjp_dynamic_thk
 
-sys.path.insert(1, "/Users/eetss/new_model_code/src/nm/utils/")
+sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
                            create_gif_from_png_fps, create_high_quality_gif_from_pngfps,\
                            create_imageio_gif, create_webp_from_pngs, create_gif_global_palette
@@ -42,7 +42,7 @@ def ice_shelf():
     lx = 160_000
     ly = 200_000
     
-    resolution = 2000 #m
+    resolution = 1000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)
