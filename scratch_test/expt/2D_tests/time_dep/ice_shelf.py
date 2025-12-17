@@ -15,7 +15,6 @@ from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
 
 
 #3rd party
-
 import jax
 import jax.numpy as jnp
 from jax import jacfwd, jacrev
