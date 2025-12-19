@@ -7,7 +7,8 @@ import time
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
 from nonlinear_solvers import make_newton_coupled_solver_function,\
         make_newton_velocity_solver_function_custom_vjp_dynamic_thk,\
-        make_newton_velocity_solver_function_custom_vjp
+        make_newton_velocity_solver_function_custom_vjp,\
+        make_picard_velocity_solver_function_custom_vjp
 
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -92,11 +93,13 @@ def mucoef_rifted(x,y,resolution):
     mucoef = jnp.where(((y > W1) & (y < W1 + W2)), 0.25, mucoef)
     #(lower) damage parallel to shear margin @y = W - W1
     mucoef = jnp.where(((y > W - W1 - W2) & (y < W - W1)), 0.5, mucoef)
+
+    mucoef = jnp.flipud(mucoef)
             
     return mucoef
 
 
-def beta(x, y, resolution):
+def stickiness(x, y, resolution):
     BETA_MAX = 2.0e+3
     BETA_MID = 1.0e+3
     
@@ -114,11 +117,8 @@ def beta(x, y, resolution):
     W3 = W - W1 + W2
 
     beta = jnp.zeros_like(x)+BETA_MAX
+    #beta = jnp.where(((y > W1) & (y < W - W1)), 0.01 * BETA_MID * (1.0 + jnp.cos(16.0 * jnp.pi * x/L)), beta)
     beta = jnp.where(((y > W1) & (y < W - W1)), BETA_MID * (1.0 + jnp.cos(16.0 * jnp.pi * x/L)), beta)
-
-    beta = beta.at[:1,:].set(1e12)
-    beta = beta.at[-1:,:].set(1e12)
-    beta = beta.at[:,:1].set(1e12)
 
     return beta
 
@@ -144,29 +144,36 @@ def wonky_stream():
     thk = jnp.zeros((nr,nc)) + 512 - 256*x/lx
     thk = thk.at[:,-2:].set(0)
     b = jnp.zeros((nr, nc)) - 256 - 256*x/lx
+
    
-    C = beta(xx, yy, resolution)
+    C = stickiness(xx, yy, resolution)
     
-    grounded = jnp.where((b+thk)>thk*(1-0.917), 1, 0)
+    grounded = jnp.where((b+thk)>thk*(1-0.917/1.027), 1, 0)
     C = jnp.where((grounded>0) | (thk==0), C, 0)
     
     C = C.at[:1,:].set(1e12)
     C = C.at[-1:,:].set(1e12)
     C = C.at[:,:1].set(1e12)
     
+
+    surface = jnp.maximum(thk+b, thk * (1-c.RHO_I/c.RHO_W))
+
+    b = jnp.where(C>1e11, 0.01+surface-thk, b)
+    
     mucoef_0 = mucoef_rifted(xx, yy, resolution)
 
     q = jnp.zeros_like(C)
 
+    ice_mask = jnp.where(thk>0, 1, 0)
 
-    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
+
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask
 
 
 
     
 
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = wonky_stream()
-
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask = wonky_stream()
 
 #plt.imshow(b)
 #plt.colorbar()
@@ -177,27 +184,37 @@ lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = wonky_stream()
 #plt.imshow(mucoef_0)
 #plt.show()
 #
-plt.imshow(C, vmin=0, vmax=2000)
-plt.show()
-
-raise
+#plt.imshow(C, vmin=0, vmax=2000)
+#plt.show()
+#
+#raise
 
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_iterations = 10
+n_iterations = 50
 
 
 
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
+#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
+#                                                         delta_y, delta_x,
+#                                                         thk, b, C,
+#                                                         n_iterations,
+#                                                         mucoef_0)
+#
+#u_out, v_out = solver(q, u_init, v_init)
+#show_vel_field(u_out, v_out, cmap="RdYlBu_r")
+
+solver = make_picard_velocity_solver_function_custom_vjp(nr, nc,
                                                          delta_y, delta_x,
-                                                         thk, b, C,
+                                                         b, ice_mask,
                                                          n_iterations,
-                                                         mucoef_0)
+                                                         mucoef_0, 
+                                                         sliding="basic_weertman")
 
-u_out, v_out = solver(q, u_init, v_init)
+u_out, v_out = solver(q, C, u_init, v_init, thk)
 
-show_vel_field(u_out, v_out)
+show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=2500)
 raise
 
 

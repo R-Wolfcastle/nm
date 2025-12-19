@@ -555,8 +555,71 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0):
 
 
 
+def beta_function(b, mode="linear"):
+    if mode=="linear":
+        def beta(C, u, v, h):
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+
+            #beta =  jnp.where(s_gnd>s_flt, C, 0)
+            beta =  jnp.where(True, C, 0)
+
+            return beta
+    
+    if mode=="basic_weertman":
+        def beta(C, u, v, h):
+            speed = jnp.sqrt(u**2 + v**2 + 1e-12)
+            beta = C * (speed ** (-2/3))
+
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+
+            beta =  jnp.where(s_gnd>s_flt, beta, 0)
+            #beta =  jnp.where(True, C, 0)
+
+            return beta
+
+    return jax.jit(beta)
 
 
+def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+                          add_mucoef_ghost_cells,
+                          interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0):
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_mucoef_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+        
+        #calculate face-centred viscosity:
+        mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+
+        return mu_ew, mu_ns
+    return fc_viscosity
+ 
 
 
 def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,

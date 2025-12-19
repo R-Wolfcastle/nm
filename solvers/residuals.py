@@ -40,6 +40,77 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
 
+def compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,\
+                                          interp_cc_to_fc,
+                                          ew_gradient,\
+                                          ns_gradient,\
+                                          cc_gradient,\
+                                          add_uv_ghost_cells,\
+                                          add_s_ghost_cells,\
+                                          extrapolate_over_cf):
+
+    def compute_linear_ssa_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta):
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        s_gnd = h + b #b is globally defined
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+        
+        s = add_s_ghost_cells(s)
+        #jax.debug.print("s: {x}",x=s)
+
+        dsdx, dsdy = cc_gradient(s)
+        #jax.debug.print("dsdx: {x}",x=dsdx)
+        #sneakily fudge this:
+        dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
+        dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
+        dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
+        dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
+        dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
+        dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
+        dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
+        dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+
+
+        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
+
+
+
+
+        #momentum_term
+        u, v = add_uv_ghost_cells(u, v)
+
+        #get thickness on the faces
+        h = add_s_ghost_cells(h)
+        h_ew, h_ns = interp_cc_to_fc(h)
+        
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        
+        
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_linear_ssa_residuals)
 
 def compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx, \
                                           h_1d, beta,\
@@ -86,7 +157,6 @@ def compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx, \
                  2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
                  2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
                  2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
-        
         
         x_mom_residual = visc_x + volume_x
         y_mom_residual = visc_y + volume_y
@@ -199,6 +269,110 @@ def make_fo_upwind_residual_function(nx, ny, dx, dy, vel_bcs="rflc"):
         return jnp.where(thk>1e-2, volume_term - x_term - y_term, 0)
     return fo_upwind_residual_function
 
+
+def compute_ssa_uv_residuals_function(ny, nx, dy, dx, b,
+                                   beta_fct, ice_mask,
+                                   interp_cc_to_fc,
+                                   ew_gradient,
+                                   ns_gradient,
+                                   cc_gradient,
+                                   add_uv_ghost_cells,
+                                   add_s_ghost_cells,
+                                   extrp_over_cf, mucoef_0):
+    
+    def compute_uv_residuals(u_1d, v_1d, q, C, h_1d):
+
+        mucoef = mucoef_0*jnp.exp(q)
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+
+        s_gnd = h + b #b is globally defined
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        s = add_s_ghost_cells(s)
+        #jax.debug.print("s: {x}",x=s)
+
+        dsdx, dsdy = cc_gradient(s)
+        #jax.debug.print("dsdx: {x}",x=dsdx)
+        #sneakily fudge this:
+        dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
+        dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
+        dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
+        dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
+        dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
+        dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
+        dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
+        dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+
+
+        beta = beta_fct(C, u, v, h)
+
+        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
+
+
+        #obvs not going to do anything in the no-cf case
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #momentum_term
+        u, v = add_uv_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+
+        #interpolate things onto face-cenres
+        h = add_s_ghost_cells(h)
+        h_ew, h_ns = interp_cc_to_fc(h)
+        #remove those ghost cells again!
+        h = h[1:-1,1:-1]
+
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        #jax.debug.print("mucoef_ew = {x}",x=mucoef_ew)
+
+        #calculate face-centred viscosity:
+        mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        #Again, shouldn't do owt when there's no calving front
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+        
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
+
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_uv_residuals)
+
+
+
 def compute_u_v_residuals_function_dynamic_thk(ny, nx, dy, dx, \
                                    b, beta,\
                                    interp_cc_to_fc,\
@@ -221,7 +395,7 @@ def compute_u_v_residuals_function_dynamic_thk(ny, nx, dy, dx, \
         s_gnd = h + b #b is globally defined
         s_flt = h * (1-c.RHO_I/c.RHO_W)
         s = jnp.maximum(s_gnd, s_flt)
-        
+
         s = add_s_ghost_cells(s)
         #jax.debug.print("s: {x}",x=s)
 
@@ -337,6 +511,8 @@ def compute_u_v_residuals_function(ny, nx, dy, dx, \
         dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
         dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
         dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+
+        #speed = jnp.sqrt(u**2 + v**2 + 1e-16)
 
         volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
