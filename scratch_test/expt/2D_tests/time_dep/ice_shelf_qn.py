@@ -6,7 +6,9 @@ import time
 ##local apps
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
 from nonlinear_solvers import make_newton_coupled_solver_function,\
-        make_newton_velocity_solver_function_custom_vjp_dynamic_thk
+        make_newton_velocity_solver_function_custom_vjp_dynamic_thk,\
+        make_picard_velocity_solver_function_custom_vjp,\
+        make_couple_quasi_newton_solver_function
 
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -41,7 +43,7 @@ def ice_shelf():
     lx = 160_000
     ly = 200_000
     
-    resolution = 1000 #m
+    resolution = 2000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -76,6 +78,132 @@ def ice_shelf():
     q = jnp.zeros_like(C)
     
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
+
+
+
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = tiny_ice_shelf()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = ice_shelf()
+
+
+u_init = jnp.zeros_like(b) + 100
+v_init = jnp.zeros_like(b)
+
+n_iterations = 40
+
+
+ice_mask = jnp.where(thk>0, 1, 0)
+
+
+#vel_solver = make_picard_velocity_solver_function_custom_vjp(nr, nc,
+#                                                         delta_y,
+#                                                         delta_x,
+#                                                         b, ice_mask,
+#                                                         n_iterations, mucoef_0)
+#
+#ui = u_init.copy()
+#vi = v_init.copy()
+#
+#ui, vi = vel_solver(q, C, ui, vi, thk)
+#
+#show_vel_field(ui, vi)
+#raise
+
+
+timestep = 100 #year
+
+
+
+def expl_ts():
+    vel_solver = make_newton_velocity_solver_function_custom_vjp_dynamic_thk(nr, nc,
+                                                             delta_y,
+                                                             delta_x,
+                                                             C, b,
+                                                             n_iterations, mucoef_0)
+    
+    thickness_update = make_advect_scalar_field_fou_function(nc, nr, 
+                                                             delta_x, delta_y,
+                                                             vel_bcs="rflc")
+    
+    
+    
+    ui = u_init.copy()
+    vi = v_init.copy()
+    hi = thk.copy()
+    for i in range(10):
+        ui, vi = vel_solver(q, ui, vi, hi)
+        #show_vel_field(u_out, v_out)
+        hi = thickness_update(ui, vi, hi, 0, timestep, hi)
+    #plt.plot(hi[10,:])
+    #plt.show()
+    plt.imshow(hi, vmin=0, vmax=500)
+    plt.show()
+
+
+def impl_ts():
+    uvh_solver = make_couple_quasi_newton_solver_function(nr, nc,
+                                                     delta_y,
+                                                     delta_x,
+                                                     b, ice_mask,
+                                                     n_iterations, mucoef_0)
+    
+    vel_solver = make_picard_velocity_solver_function_custom_vjp(nr, nc,
+                                                             delta_y,
+                                                             delta_x,
+                                                             b, ice_mask,
+                                                             n_iterations, mucoef_0)
+    
+    ui = u_init.copy()
+    vi = v_init.copy()
+    
+    ui, vi = vel_solver(q, C, ui, vi, thk)
+    
+    #show_vel_field(ui, vi)
+
+
+
+    hi = thk.copy()
+
+    for i in range(10):
+        ui, vi, hi = uvh_solver(q, C, ui, vi, hi, timestep)
+
+        show_vel_field(ui,vi)
+
+        plt.imshow(hi, vmin=0, vmax=500)
+        plt.show()
+
+#expl_ts()
+impl_ts()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def tiny_ice_shelf():
@@ -116,86 +244,4 @@ def tiny_ice_shelf():
     q = jnp.zeros_like(C)
     
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
-
-
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = tiny_ice_shelf()
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = ice_shelf()
-
-
-u_init = jnp.zeros_like(b) + 100
-v_init = jnp.zeros_like(b)
-
-n_iterations = 10
-
-
-timestep = 10 #year
-
-
-
-def expl_ts():
-    vel_solver = make_newton_velocity_solver_function_custom_vjp_dynamic_thk(nr, nc,
-                                                             delta_y,
-                                                             delta_x,
-                                                             C, b,
-                                                             n_iterations, mucoef_0)
-    
-    thickness_update = make_advect_scalar_field_fou_function(nc, nr, 
-                                                             delta_x, delta_y,
-                                                             vel_bcs="rflc")
-    
-    
-    
-    ui = u_init.copy()
-    vi = v_init.copy()
-    hi = thk.copy()
-    for i in range(10):
-        ui, vi = vel_solver(q, ui, vi, hi)
-        #show_vel_field(u_out, v_out)
-        hi = thickness_update(ui, vi, hi, 0, timestep, hi)
-    #plt.plot(hi[10,:])
-    #plt.show()
-    plt.imshow(hi, vmin=0, vmax=500)
-    plt.show()
-
-
-def impl_ts():
-    uvh_solver = make_newton_coupled_solver_function(nr, nc,
-                                                     delta_y,
-                                                     delta_x,
-                                                     C, b,
-                                                     n_iterations, mucoef_0)
-    
-    vel_solver = make_newton_velocity_solver_function_custom_vjp_dynamic_thk(nr, nc,
-                                                             delta_y,
-                                                             delta_x,
-                                                             C, b,
-                                                             n_iterations, mucoef_0)
-   
-    ui = u_init.copy()
-    vi = v_init.copy()
-
-    ui, vi = vel_solver(q, ui, vi, thk)
-    #show_vel_field(ui,vi)
-
-    hi = thk.copy()
-
-    for i in range(10):
-        ui, vi, hi = uvh_solver(q, ui, vi, hi, 0, timestep)
-
-        show_vel_field(ui,vi)
-
-        plt.imshow(hi, vmin=0, vmax=500)
-        plt.show()
-
-#expl_ts()
-impl_ts()
-
-
-
-
-
-
-
-
-
 
