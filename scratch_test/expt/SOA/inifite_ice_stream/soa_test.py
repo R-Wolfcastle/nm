@@ -5,7 +5,7 @@ import time
 from functools import partial
 
 ##local apps
-sys.path.insert(1, "../../../../utils/")
+sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\
@@ -1501,7 +1501,7 @@ B = 0.5 * (A**(-1/nvisc))
 def twisty_stream():
     lx = 180_000
     ly = 180_000
-    resolution = 2_000 #m
+    resolution = 1_000 #m
     
     
     stencil_radius = 1
@@ -1608,7 +1608,12 @@ n_iterations = 8
 
 mask = jnp.ones_like(b)
 
-reference_speed_solution = jnp.load("../../../../bits_of_data/soa_misc/speed_solution.np.npy")
+#reference_speed_solution = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/soa_misc/speed_solution.np.npy")
+
+u_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/u_big_new.npy")
+v_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/v_big_new.npy")
+
+reference_speed_solution = jnp.sqrt(u_data**2 + v_data**2)
 
 def functional_with_data(v_field_x, v_field_y, q):
     return jnp.sum(mask.reshape(-1) * \
@@ -1673,7 +1678,7 @@ def calculate_hvp_via_soa():
     print("solving fwd problem:")
     u_out, v_out = fwd_solver(q, u_init, v_init)
     
-    #show_vel_field(u_out, v_out)
+    show_vel_field(u_out, v_out)
     
     print("solving adjoint problem:")
     lx, ly, gradient = adjoint_solver(q, u_out, v_out,
@@ -1736,7 +1741,7 @@ def calculate_hvp_via_ad():
 
     
     #pert_dir = gradient / (jnp.linalg.norm(gradient)*10)
-    pert_dir = jnp.load("../../../../bits_of_data/soa_misc/pert_dir.np.npy")
+    pert_dir = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/soa_misc/pert_dir.np.npy")
 
     
     #jnp.save("../../../../bits_of_data/soa_misc/pert_dir.np", pert_dir)
@@ -1875,7 +1880,7 @@ def make_hvp_soa_fct():
 
 #function for computing hvp from perturbation direction
 hessian_vector_product = make_hvp_ad_fct()
-hessian_vector_product_soa = make_hvp_soa_fct()
+#hessian_vector_product = make_hvp_soa_fct()
 
 
 
@@ -1897,7 +1902,7 @@ dtype = np.float64
 #)
 H = LinearOperator(
     shape=(n, n), dtype=dtype,
-    matvec=lambda x: np.array(hessian_vector_product_soa(x))  # ensure ndarray to avoid device transfers
+    matvec=lambda x: np.array(hessian_vector_product(x))  # ensure ndarray to avoid device transfers
 )
 
 # Largest algebraic eigenvalues (most positive)
@@ -1913,8 +1918,11 @@ for i in range(k):
     plt.imshow(eigvecs[...,i])
     plt.colorbar()
     plt.title("lambda={}".format(eigvals[i]))
-    plt.savefig("../../../..//bits_of_data/hessian_evecs_etc/dataish_version/ts_evec_soa_{}.png".format(i))
+    plt.savefig("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/ts_evec_ad_{}.png".format(i))
     plt.close()
+
+print("done")
+raise
 
 plt.plot(eigvals[::-1])
 plt.show()

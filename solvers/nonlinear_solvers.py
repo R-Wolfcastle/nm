@@ -47,8 +47,9 @@ def make_newton_coupled_solver_function(ny, nx, dy, dx, C, b, n_iterations, muco
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     get_uvh_residuals = rdl.compute_uvh_residuals_function(ny, nx, dy, dx,\
                                                        b,\
                                                        beta_eff,\
@@ -219,8 +220,9 @@ def make_newton_velocity_solver_function_custom_vjp_dynamic_thk(ny, nx, dy, dx,\
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     extrapolate_over_cf                        = linear_extrapolate_over_cf_dynamic_thickness
 
     get_u_v_residuals = compute_u_v_residuals_function_dynamic_thk(ny, nx, dy, dx,\
@@ -237,7 +239,7 @@ def make_newton_velocity_solver_function_custom_vjp_dynamic_thk(ny, nx, dy, dx,\
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
-                                                                                  periodic_x=False)
+                                                                                  periodic_x=periodic)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -406,8 +408,9 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(h)
 
     get_u_v_residuals = compute_u_v_residuals_function(ny, nx, dy, dx,\
@@ -424,7 +427,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
-                                                                                  periodic_x=False)
+                                                                                  periodic_x=periodic)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -590,8 +593,9 @@ def make_couple_quasi_newton_solver_function(ny, nx, dy, dx,
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
     
 
@@ -752,20 +756,19 @@ def make_couple_quasi_newton_solver_function(ny, nx, dy, dx,
     return solver
 
 
-
-
-def make_picard_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
-                                                    b, ice_mask, n_iterations,
-                                                    mucoef_0, sliding="linear",
-                                                    periodic=False):
+def make_diva_velocity_solver_function(ny, nx, dy, dx,
+                                       b, ice_mask, n_iterations,
+                                       mucoef_0, sliding="linear",
+                                       periodic=False):
 
 
     #functions for various things:
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
     
 
@@ -801,7 +804,150 @@ def make_picard_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
-                                                                                  periodic_x=False)
+                                                                                  periodic_x=periodic)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),
+                                                              ksp_type="gmres",
+                                                              preconditioner="hypre",
+                                                              precondition_only=False,
+                                                              ksp_max_iter=60,
+                                                              monitor_ksp=False)
+
+
+
+    def solver(q, C, u_trial, v_trial, h):
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+
+        u_1d = u_trial.copy().reshape(-1)
+        v_1d = v_trial.copy().reshape(-1)
+        h_1d = h.copy().reshape(-1)
+
+        residual = jnp.inf
+        init_res = 0
+
+        for i in range(n_iterations):
+
+            mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
+            beta = beta_fct(C, u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_linear_ssa,
+                                                 (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta)
+                                                          )
+
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+           
+            #nz_jac_values = jnp.where(jnp.abs(nz_jac_values) < 1e-10, 0.0, nz_jac_values)
+            #jax.debug.print("{x}", x=nz_jac_values)
+
+            rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
+
+            
+            du = la_solver(nz_jac_values, rhs)
+
+            u_1d = u_1d + du[:(ny*nx)]
+            v_1d = v_1d + du[(ny*nx):]
+            
+            rhs_new = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
+            if i==0:
+                initial_residual = jnp.max(rhs)
+            print(f"linear residual reduction factor: {jnp.max(jnp.abs(rhs))/jnp.max(jnp.abs(rhs_new))}")
+
+        final_residual = jnp.max(jnp.abs(rhs_new))
+
+        print("----------")
+        print("Final residual: {}".format(final_residual))
+        print("Total residual reduction factor: {}".format(initial_residual/final_residual))
+        print("----------")
+        
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+    return solver
+
+
+def make_picard_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
+                                                    b, ice_mask, n_iterations,
+                                                    mucoef_0, sliding="linear",
+                                                    periodic=False):
+
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
+    extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
+    
+
+    viscosity_fct = fc_viscosity_function_new(ny, nx, dy, dx, 
+                                                   extrapolate_over_cf,
+                                                   add_uv_ghost_cells,
+                                                   add_scalar_ghost_cells,
+                                                   interp_cc_to_fc,
+                                                   ew_gradient, ns_gradient,
+                                                   ice_mask, mucoef_0)
+    beta_fct = beta_function(b, sliding)
+
+    get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,
+                                                       interp_cc_to_fc,
+                                                       ew_gradient, ns_gradient,
+                                                       cc_gradient,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells,
+                                                       extrapolate_over_cf)
+    
+    get_uv_residuals_nonlinear_ssa = compute_ssa_uv_residuals_function(
+                                                       ny, nx, dy, dx, b,
+                                                       beta_fct, ice_mask,
+                                                       interp_cc_to_fc,
+                                                       ew_gradient, ns_gradient,
+                                                       cc_gradient,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells,
+                                                       extrapolate_over_cf, mucoef_0)
+
+    
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=periodic)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -1022,10 +1168,8 @@ def forward_adjoint_and_second_order_adjoint_solvers_picard(ny, nx, dy, dx, h, b
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    if periodic:
-        pass
-    else:
-        add_uv_ghost_cells, add_sc_ghost_cells = add_ghost_cells_fcts(ny, nx)
+        
+    add_uv_ghost_cells, add_sc_ghost_cells     = add_ghost_cells_fcts(ny, nx, periodic=periodic)
 
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
@@ -1037,7 +1181,7 @@ def forward_adjoint_and_second_order_adjoint_solvers_picard(ny, nx, dy, dx, h, b
                                                                                extrapolate_over_cf,
                                                                                add_uv_ghost_cells)
     div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx,
-                                                                                     periodic_x=False)
+                                                                                     periodic_x=periodic)
 
     #calculate cell-centred viscosity based on velocity and q
     cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0)
@@ -1077,7 +1221,7 @@ def forward_adjoint_and_second_order_adjoint_solvers_picard(ny, nx, dy, dx, h, b
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
-                                                                                  periodic_x=False)
+                                                                                  periodic_x=periodic)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -1284,10 +1428,12 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
-    if periodic:
-        pass
-    else:
-        add_uv_ghost_cells, add_sc_ghost_cells = add_ghost_cells_fcts(ny, nx)
+    
+    add_uv_ghost_cells, add_sc_ghost_cells     = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    #if periodic:
+    #    add_uv_ghost_cells, add_sc_ghost_cells = add_ghost_cells_fcts_funny_periodic_stream_case(ny, nx)
+    #else:
+    #    add_uv_ghost_cells, add_sc_ghost_cells = add_ghost_cells_fcts(ny, nx)
 
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(h)
     cc_vector_field_gradient                   = cc_vector_field_gradient_function(ny, nx, dy,
@@ -1299,7 +1445,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
                                                                                extrapolate_over_cf,
                                                                                add_uv_ghost_cells)
     div_tensor_field                           = divergence_of_tensor_field_function(ny, nx, dy, dx,
-                                                                                     periodic_x=False)
+                                                                                     periodic_x=periodic)
 
     #calculate cell-centred viscosity based on velocity and q
     cc_viscosity = cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0)
@@ -1339,7 +1485,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
-                                                                                  periodic_x=False)
+                                                                                  periodic_x=periodic)
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))

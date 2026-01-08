@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 
 
-sys.path.insert(1, "../../../utils/")
+sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import *
 
 

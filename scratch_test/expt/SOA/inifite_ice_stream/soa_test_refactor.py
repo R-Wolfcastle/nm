@@ -89,7 +89,59 @@ def ice_shelf():
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
 
 
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = ice_shelf()
+def twisty_stream():
+    lx = 180_000
+    ly = 180_000
+    resolution = 1_000 #m
+    
+    
+    stencil_radius = 1
+    stencil_width = 2*stencil_radius+1
+    
+    nr = int(ly/resolution)
+    nc = int(lx/resolution)
+    
+    assert nc % stencil_width == 0, "domain must be tileable by stencil width in periodic bcs case"
+    
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(0, ly, nr)
+    
+    delta_x = x[1]-x[0]
+    delta_y = y[1]-y[0]
+
+
+    thk = jnp.zeros((nr,nc)) + 1000
+    #want a slope of 0.5 degrees.
+    sine_0pt5 = 0.0087265
+    
+    #b_profile = 1000 - 500*x/lx
+    b_profile = 1000 - sine_0pt5*x
+    b = jnp.zeros((nr, nc)) + b_profile
+    
+    
+    xs, ys = jnp.meshgrid(x,y)
+    R = ly
+    m = 0.25
+    C = 1e3 * (1 + 5e-3 + jnp.sin(2*jnp.pi*(ys+R/4)/R + m*jnp.sin(2*jnp.pi*xs/R)))
+    C = jnp.flipud(C)
+
+    
+    #mucoef_profile = 0.5+b_profile.copy()/2000
+    mucoef_profile = 1
+    mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+    
+    #plt.imshow(mucoef)
+    #plt.colorbar()
+    #plt.show()
+    #raise
+    
+    #mucoef = jnp.ones_like(C)
+    #mucoef_0 = jnp.ones_like(C)
+    q = jnp.zeros_like(C)
+    
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
+
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = twisty_stream()
 
 
 u_init = jnp.zeros_like(b) + 100
@@ -98,12 +150,8 @@ v_init = jnp.zeros_like(b)
 n_iterations = 10
 
 mask = jnp.where(thk>0,1,0)
-#mask = binary_erosion(mask)
-#mask = binary_erosion(mask)
-#mask = binary_erosion(mask)
 mask = mask.astype(int)
-#print(mask)
-#raise
+
 
 def functional(v_field_x, v_field_y, q):
     #NOTE: for things like this, you need to ensure the value isn't
@@ -114,7 +162,7 @@ def functional(v_field_x, v_field_y, q):
 
 def calculate_gradient_via_foa():
     fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
-                                      nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0
+                          nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0, periodic=True
                                                                                              )
     
     print("solving fwd problem:")
@@ -135,7 +183,8 @@ def calculate_gradient_via_ad():
                                                              delta_y,
                                                              delta_x,
                                                              thk, b, C,
-                                                             n_iterations, mucoef_0)
+                                                             n_iterations, mucoef_0,
+                                                             periodic=True)
 
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
@@ -146,6 +195,11 @@ def calculate_gradient_via_ad():
     gradient = get_grad(q)
 
     return gradient
+
+
+#calculate_gradient_via_foa()
+#raise
+
 
 #g_foa = calculate_gradient_via_foa()
 #g_ad = calculate_gradient_via_ad()
@@ -158,7 +212,7 @@ def calculate_gradient_via_ad():
 
 def calculate_hvp_via_soa():
     fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
-                                      nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0
+                       nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0, periodic=True
                                                                                              )
     
     print("solving fwd problem:")
@@ -184,8 +238,7 @@ def calculate_hvp_via_soa():
     #pert_dir = pert_dir.at[:,-4:].set(0)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
-    #plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
-    plt.imshow(hvp[:,:], vmin=-15, vmax=15, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
     plt.title("hvp via soa")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -198,7 +251,8 @@ def calculate_hvp_via_ad():
                                                              delta_y,
                                                              delta_x,
                                                              thk, b, C,
-                                                             n_iterations, mucoef_0)
+                                                             n_iterations, mucoef_0,
+                                                             periodic=True)
 
     u_out, v_out = solver(q, u_init, v_init)
     show_vel_field(u_out, v_out)
@@ -286,7 +340,8 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-10, vmax=10, cmap="twilight_shifted")
+    #plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
     plt.title("hvp via ad")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -306,41 +361,58 @@ def calculate_hvp_via_ad():
 
 #calculate_hvp_via_ad()
 #calculate_hvp_via_soa()
-#
-#
+
+
 #raise
 
 
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
-                                                         delta_y,
-                                                         delta_x,
-                                                         thk, b, C,
-                                                         n_iterations, mucoef_0)
 
+
+
+
+
+
+#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
+#                                                         delta_y,
+#                                                         delta_x,
+#                                                         thk, b, C,
+#                                                         n_iterations, mucoef_0,
+#                                                         periodic=True)
+#
 #u_out, v_out = solver(q, u_init, v_init)
 #show_vel_field(u_out, v_out)
 ##raise
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/u_big_new.npy", u_out)
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/v_big_new.npy", v_out)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/u_big_new.npy", u_out)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/v_big_new.npy", v_out)
 #raise
+
+
 
 #u_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u_big.npy")
 #v_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v_big.npy")
 
-u_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/u_big_new.npy")
-v_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/v_big_new.npy")
+u_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/u_big_new.npy")
+v_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/v_big_new.npy")
+speed_data = jnp.sqrt(u_data**2 + v_data**2 + 1e-10)
 
 #show_vel_field(u_data, v_data)
 
-def misfit_functional(v_field_x, v_field_y, q):
+#def misfit_functional(v_field_x, v_field_y, q):
+#
+#    return jnp.sum(mask.reshape(-1) * \
+#                   jnp.sqrt((v_field_x.reshape(-1)-u_data.reshape(-1))**2 +\
+#                            (v_field_y.reshape(-1)-v_data.reshape(-1))**2 +\
+#                            1e-10)
+#                  )
+
+def misfit_functional(u_mod, v_mod, q):
 
     return jnp.sum(mask.reshape(-1) * \
-                   jnp.sqrt((v_field_x.reshape(-1)-u_data.reshape(-1))**2 +\
-                            (v_field_y.reshape(-1)-v_data.reshape(-1))**2 +\
-                            1e-10)
+                   ( jnp.sqrt(u_mod**2 + v_mod**2).flatten() - speed_data.flatten() )**2
                   )
 
 
+#misfit_functional = functional
 
 
 def make_hvp_ad_fct():
@@ -348,7 +420,8 @@ def make_hvp_ad_fct():
                                                              delta_y,
                                                              delta_x,
                                                              thk, b, C,
-                                                             n_iterations, mucoef_0)
+                                                             n_iterations, mucoef_0,
+                                                             periodic=True)
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
         return misfit_functional(u_out, v_out, q)
@@ -367,7 +440,7 @@ def make_hvp_ad_fct():
 
 def make_hvp_soa_fct():
     fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
-                                      nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0
+                    nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0, periodic=True
                                                                                              )
     
     print("solving fwd problem:")
@@ -390,8 +463,8 @@ def make_hvp_soa_fct():
     
 
 #function for computing hvp from perturbation direction
-hessian_vector_product = make_hvp_ad_fct()
-#hessian_vector_product = make_hvp_soa_fct()
+#hessian_vector_product = make_hvp_ad_fct()
+hessian_vector_product = make_hvp_soa_fct()
 
 
 
@@ -413,7 +486,7 @@ H = LinearOperator(
 )
 
 # Largest algebraic eigenvalues (most positive)
-k = 20  # or 1000
+k = 30  # or 1000
 w, V = eigsh(H, k=k, which='LA', tol=1e-6, maxiter=None)  # V[:, i] is eigenvector of w[i]
 
 # If you actually want largest magnitude (could pick big negative too), use which='LM'.
@@ -423,13 +496,14 @@ eigvecs = V.reshape(nr, nc, k)
 
 for i in range(k):
 
-    #jnp.save("/Users/eartsu/new_model/testing/nm//bits_of_data/hessian_evecs_etc/shelf/new/ts_evec_soa_2km_{}.npy".format(i), eigvecs[...,i])
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/ts_evec_soa_1km_{}.npy".format(i), eigvecs[...,i])
 
-    plt.imshow(eigvecs[...,i])
-    plt.colorbar()
-    plt.title("lambda={}".format(eigvals[i]))
-    plt.savefig("/Users/eartsu/new_model/testing/nm//bits_of_data/hessian_evecs_etc/shelf/new/ts_evec_ad_{}.png".format(i))
-    plt.close()
+    #plt.imshow(eigvecs[...,i])
+    #plt.colorbar()
+    #plt.title("lambda={}".format(eigvals[i]))
+    #plt.savefig("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/ts_evec_soa_big_new_new_{}.png".format(i))
+    ##plt.show()
+    #plt.close()
 
 print("done")
 

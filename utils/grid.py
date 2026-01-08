@@ -84,7 +84,7 @@ def fc_gradient_functions(dy, dx):
     return jax.jit(ew_face_gradient), jax.jit(ns_face_gradient)
 
 
-def add_ghost_cells_fcts(ny, nx):
+def add_ghost_cells_fcts(ny, nx, periodic=False):
 
     def add_reflection_ghost_cells(u_int, v_int):
 
@@ -133,8 +133,47 @@ def add_ghost_cells_fcts(ny, nx):
         h = h.at[-1,-1].set(h[-2,-2])
 
         return h
-    
-    return jax.jit(add_reflection_ghost_cells), jax.jit(add_continuation_ghost_cells)
+
+    def add_periodic_x_dirichlet_y_ghost_cells(u_int, v_int):
+
+        u = jnp.zeros((ny+2, nx+2))
+        u = u.at[1:-1,1:-1].set(u_int)
+        #left/right edges: periodic bcs
+        u = u.at[:, 0].set(u[:,-2])
+        u = u.at[:,-1].set(u[:, 1])
+        #top/bottom edges: dirchlet bcs
+        u = u.at[0, :].set(-u[1, :])
+        u = u.at[-1,:].set(-u[-2,:])
+
+        v = jnp.zeros((ny+2, nx+2))
+        v = v.at[1:-1,1:-1].set(v_int)
+        #left/right edges: periodic bcs
+        v = v.at[:, 0].set(v[:,-2])
+        v = v.at[:,-1].set(v[:, 1])
+        #top/bottom edges: dirchlet bcs
+        v = v.at[0, :].set(-v[1, :])
+        v = v.at[-1,:].set(-v[-2,:])
+
+        return u, v
+
+    def add_ghost_cells_periodic_x_continuation_y(u_int):
+        u = jnp.zeros((ny+2, nx+2))
+        u = u.at[1:-1,1:-1].set(u_int)
+        #left/right edges: periodic bcs
+        u = u.at[:, 0].set(u[:,-2])
+        u = u.at[:,-1].set(u[:, 1])
+        #top/bottom edges: continuation bcs
+        u = u.at[0, :].set(u[1, :])
+        u = u.at[-1,:].set(u[-2,:])
+
+        return u
+
+    if not periodic:
+        return jax.jit(add_reflection_ghost_cells),\
+               jax.jit(add_continuation_ghost_cells)
+    else:
+        return jax.jit(add_periodic_x_dirichlet_y_ghost_cells),\
+               jax.jit(add_ghost_cells_periodic_x_continuation_y)
     
 def add_ghost_cells_periodic_dirichlet_function(ny, nx):
     def add_ghost_cells_periodic_x_dirchlet_y(u_int):
@@ -163,6 +202,44 @@ def add_ghost_cells_periodic_continuation_function(ny, nx):
         u = u.at[-1,:].set(u[-2,:])
         return u
     return jax.jit(add_ghost_cells_periodic_x_continuation_y)
+
+#def add_ghost_cells_fcts_funny_periodic_stream_case(ny, nx):
+#    def add_periodic_x_dirichlet_y_ghost_cells(u_int, v_int):
+#
+#        u = jnp.zeros((ny+2, nx+2))
+#        u = u.at[1:-1,1:-1].set(u_int)
+#        #left/right edges: periodic bcs
+#        u = u.at[:, 0].set(u[:,-2])
+#        u = u.at[:,-1].set(u[:, 1])
+#        #top/bottom edges: dirchlet bcs
+#        u = u.at[0, :].set(-u[1, :])
+#        u = u.at[-1,:].set(-u[-2,:])
+#
+#        v = jnp.zeros((ny+2, nx+2))
+#        v = v.at[1:-1,1:-1].set(v_int)
+#        #left/right edges: periodic bcs
+#        v = v.at[:, 0].set(v[:,-2])
+#        v = v.at[:,-1].set(v[:, 1])
+#        #top/bottom edges: dirchlet bcs
+#        v = v.at[0, :].set(-v[1, :])
+#        v = v.at[-1,:].set(-v[-2,:])
+#
+#        return u, v
+#
+#    def add_ghost_cells_periodic_x_continuation_y(u_int):
+#        u = jnp.zeros((ny+2, nx+2))
+#        u = u.at[1:-1,1:-1].set(u_int)
+#        #left/right edges: periodic bcs
+#        u = u.at[:, 0].set(u[:,-2])
+#        u = u.at[:,-1].set(u[:, 1])
+#        #top/bottom edges: continuation bcs
+#        u = u.at[0, :].set(u[1, :])
+#        u = u.at[-1,:].set(u[-2,:])
+#
+#        return u
+#
+#    return jax.jit(add_periodic_x_dirichlet_y_ghost_cells),\
+#           jax.jit(add_ghost_cells_periodic_x_continuation_y)
 
 def apply_scalar_ghost_cells_to_vector(scalar_ghost_function):
     def apply(u,v):
@@ -395,7 +472,6 @@ def linear_extrapolate_over_cf_function(thk):
 
     ice_mask = (thk>0)
     cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(thk>0)
-
 
     
     @jax.jit
