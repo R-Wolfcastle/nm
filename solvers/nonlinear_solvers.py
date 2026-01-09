@@ -19,7 +19,8 @@ from grid import *
 
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
 import residuals as rdl
-from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp
+from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp,\
+                           create_sparse_petsc_la_solver_with_custom_vjp_given_csr
 from residuals import *
 
 
@@ -461,11 +462,18 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                        ])
 
    
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+    #                                                          ksp_type="gmres",\
+    #                                                          preconditioner="hypre",\
+    #                                                          precondition_only=False,\
+    #                                                          ksp_max_iter=40)
+
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coords, (ny*nx*2, ny*nx*2),\
                                                               ksp_type="gmres",\
                                                               preconditioner="hypre",\
                                                               precondition_only=False,\
                                                               ksp_max_iter=40)
+    
 
 
 

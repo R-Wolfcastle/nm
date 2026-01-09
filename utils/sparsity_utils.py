@@ -7,6 +7,29 @@ import matplotlib.pyplot as plt
 
 #TODO: function for translating stencil into set of basis vectors
 
+#@jax.jit #length argument is an issue
+def jax_coo_to_csr(values, coordinates, shape):
+    n_rows, n_cols = shape
+    nnz = values.size
+    rows = coordinates[0]
+    cols = coordinates[1]
+    
+    # sort verything by (row, col) (i*m + j)
+    key = rows.astype(jnp.int64) * jnp.int64(n_cols) + cols.astype(jnp.int64)
+    order = jnp.argsort(key)
+    rows_sorted = rows[order]
+    cols_sorted = cols[order]
+    vals_sorted = values[order]
+
+    # count number of values in each row, for each row index.
+    counts = jnp.bincount(rows_sorted, length=n_rows)
+    # work out index of value that starts each row
+    indptr = jnp.concatenate([jnp.array([0], dtype=jnp.int32), jnp.cumsum(counts).astype(jnp.int32)])
+
+    indices = cols_sorted.astype(jnp.int32)
+    return indptr, indices, vals_sorted, order
+
+
 def dodgy_coo_to_csr(values, coordinates, shape, return_decomposition=False):
 
     a = scipy.sparse.coo_array((values, (coordinates[:,0], coordinates[:,1])), shape=shape).tocsr()
