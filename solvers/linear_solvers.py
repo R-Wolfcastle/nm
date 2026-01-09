@@ -140,15 +140,20 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
     return petsc_sparse_la_solver
 
 
-def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_shape,\
-                                    ksp_type='gmres', preconditioner='hypre',\
-                                    precondition_only=False, monitor_ksp=False,\
-                                    ksp_max_iter=40):
+def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_shape,
+                                                            indirect=True,
+                                                            ksp_type='gmres',
+                                                            preconditioner='hypre',
+                                                            monitor_ksp=False,
+                                                            ksp_max_iter=40):
+
+
+    #Note that ksp_type can be set to "preonly", indicating that the preconditioner
+    #will be applied but nowt else.
+
 
     comm = PETSc.COMM_WORLD
     size = comm.Get_size()
-
-
 
 
 
@@ -180,28 +185,30 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
 
     # create_solver_object:
         
-    #set ksp iterations
+   
+    ksp = PETSc.KSP().create(comm=comm)
     opts = PETSc.Options()
-    opts['ksp_max_it'] = ksp_max_iter
-    opts['ksp_rtol'] = 1e-20
-    opts['ksp_norm_type'] = "unpreconditioned"
-    #opts['ksp_norm_type'] = "preconditioned"
-
+    
     if monitor_ksp:
         opts['ksp_monitor'] = None
         #opts['ksp_converged_reason'] = None
         #opts['ksp_view'] = None
     
-    # Create a linear solver
-    ksp = PETSc.KSP().create(comm=comm)
-    ksp.setType(ksp_type)
+    
+    
+    if indirect:
+        ksp.setType(ksp_type)
+        
 
-    ksp.setFromOptions()
-
-    if preconditioner is not None:
+        #set ksp iterations
+        opts['ksp_max_it'] = ksp_max_iter
+        opts['ksp_rtol'] = 1e-20
+        opts['ksp_norm_type'] = "unpreconditioned"
+        #opts['ksp_norm_type'] = "preconditioned"
+    
+        
         #assessing if preconditioner is doing anything:
-        #print((A*x - b).norm())
-
+        #print((A*x - b).norm())    
         if preconditioner == 'hypre':
             pc = ksp.getPC()
             pc.setType('hypre')
@@ -209,10 +216,25 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
         else:
             pc = ksp.getPC()
             pc.setType(preconditioner)
-    else:
-        pc = None
-        
 
+
+    else:
+
+        ksp.setType('preonly')
+
+        #ksp.setType('richardson')
+        #ksp.setTolerances(rtol=0.0, atol=0.0, max_it=10)
+        #ksp.setNormType(PETSc.KSP.NormType.NONE)
+        
+        pc = ksp.getPC()
+        pc.setType('lu')
+        pc.setFactorSolverType('mumps') 
+
+
+
+
+
+    ksp.setFromOptions()
 
 
 
@@ -240,10 +262,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
         x = b.duplicate()
 
 
-        if precondition_only:
-            pc.apply(b, x)
-        else:
-            ksp.solve(b, x)
+        ksp.solve(b, x)
       
         
         reason = ksp.getConvergedReason()

@@ -405,6 +405,8 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     beta_eff = C.copy()
     h_1d = h.reshape(-1)
 
+    ice_mask = jnp.where(h>1e-10, 1, 0)
+
     #functions for various things:
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
@@ -468,11 +470,10 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
     #                                                          precondition_only=False,\
     #                                                          ksp_max_iter=40)
 
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coords, (ny*nx*2, ny*nx*2),\
-                                                              ksp_type="gmres",\
-                                                              preconditioner="hypre",\
-                                                              precondition_only=False,\
-                                                              ksp_max_iter=40)
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=False)
     
 
 
@@ -511,8 +512,8 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
 
             du = la_solver(nz_jac_values, rhs)
 
-            u_1d = u_1d+du[:(ny*nx)]
-            v_1d = v_1d+du[(ny*nx):]
+            u_1d = (u_1d+du[:(ny*nx)])*ice_mask.reshape(-1)
+            v_1d = (v_1d+du[(ny*nx):])*ice_mask.reshape(-1)
 
 
         res_final = jnp.max(jnp.abs(jnp.concatenate(
@@ -1529,13 +1530,18 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
    
 
     #Note the insane number of ksp iterations!!!!!! Ill conditioned matrices in SOA cals.
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
-                                                              ksp_type="gmres",\
-                                                              preconditioner="hypre",\
-                                                              precondition_only=False,
-                                                              monitor_ksp=False,\
-                                                              ksp_max_iter=400)
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+    #                                                          ksp_type="gmres",\
+    #                                                          preconditioner="hypre",\
+    #                                                          precondition_only=False,
+    #                                                          monitor_ksp=False,\
+    #                                                          ksp_max_iter=400)
 
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
+                                                              monitor_ksp=True)
 
     newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
 
@@ -1547,7 +1553,11 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
         
         #u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,), coords)
         u, v = newton_solver(u_trial, v_trial, get_u_v_residuals, n_iterations, (q,))
-        return u.reshape((ny,nx)), v.reshape((ny,nx))
+
+        u = jnp.where(h>1e-10, u.reshape((ny,nx)), 0)
+        v = jnp.where(h>1e-10, v.reshape((ny,nx)), 0)
+
+        return u, v
 
 
     def solve_fwd_problem_picard(q, u, v, n_pic_its=16):
@@ -1563,11 +1573,16 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
             #solve adjoint problem
             u_new, v_new = newton_solver(u.reshape(-1), v.reshape(-1),
                                  linear_ssa_residuals_no_rhs, 1, (mu_bar_ew, mu_bar_ns), coords)
+       
+            # just making sure
+            u = jnp.where(h_1d>1e-10, u_new, 0)
+            v = jnp.where(h_1d>1e-10, v_new, 0)
+
 
             #u = 0.9*u + 0.1*u_new
             #v = 0.9*v + 0.1*v_new
-            u = u_new
-            v = v_new
+            #u = u_new
+            #v = v_new
             
             mu_bar_ew, mu_bar_ns = fc_viscosity(q, u, v)
 
@@ -1594,6 +1609,9 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
         #solve adjoint problem
         lx, ly = newton_solver(lx_trial.reshape(-1), ly_trial.reshape(-1),
                                linear_ssa_residuals, 1, (mu_bar_ew, mu_bar_ns, rhs))
+        lx = jnp.where(h>1e-10, lx, 0)
+        ly = jnp.where(h>1e-10, ly, 0)
+
 
         mu_bar = cc_viscosity(q, u, v)
 
@@ -1642,6 +1660,8 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
         mu_x, mu_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
                                    1, (mu_bar_ew, mu_bar_ns, rhs))
 
+        mu_x = jnp.where(h>1e-10, mu_x, 0)
+        mu_y = jnp.where(h>1e-10, mu_y, 0)
 
         #solve second equation for beta
         #NOTE: make functional essentially a function just of u,v to avoid the
@@ -1662,6 +1682,8 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
         beta_x, beta_y = newton_solver(x_trial, y_trial, linear_ssa_residuals,
                                        1, (mu_bar_ew, mu_bar_ns, rhs))
 
+        beta_x = jnp.where(h>1e-10, beta_x, 0)
+        beta_y = jnp.where(h>1e-10, beta_y, 0)
 
         #calculate hessian-vector-product
         functional_fixed_vel = lambda q: functional(u.reshape(-1), v.reshape(-1), q)

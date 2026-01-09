@@ -52,7 +52,7 @@ def ice_shelf():
     lx = 150_000
     ly = 200_000
     
-    resolution = 2_000 #m
+    resolution = 1_000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -75,14 +75,16 @@ def ice_shelf():
     mucoef = jnp.ones_like(thk)
     
     C = jnp.zeros_like(thk)
-    C = C.at[:4, :].set(1e8)
-    C = C.at[:, :4].set(1e8)
-    C = C.at[-4:,:].set(1e8)
-    C = jnp.where(thk==0, 1e8, C)
+    C = C.at[:4, :].set(1e4)
+    C = C.at[:, :4].set(1e4)
+    C = C.at[-4:,:].set(1e4)
+    C = jnp.where(thk==0, 1e4, C)
 
     #mucoef_profile = 0.5+b_profile.copy()/2000
     mucoef_profile = 1
     mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+    mucoef_0_int = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/mucoef_0.npy")
+    mucoef_0 = mucoef_0.at[1:-1,:].set(mucoef_0_int)
     
     q = jnp.zeros_like(C)
     
@@ -311,24 +313,44 @@ def calculate_hvp_via_ad():
 #raise
 
 
-solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
-                                                         delta_y,
-                                                         delta_x,
-                                                         thk, b, C,
-                                                         n_iterations, mucoef_0)
-
+#solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,
+#                                                         delta_y,
+#                                                         delta_x,
+#                                                         thk, b, C,
+#                                                         n_iterations, mucoef_0)
+#
 #u_out, v_out = solver(q, u_init, v_init)
 #show_vel_field(u_out, v_out)
+##
+##
+##shear_sr = jnp.abs((0.5/delta_y)*(u_out[:-2, :]-u_out[2:,:]))
+###
+####plt.imshow(shear_sr)
+####plt.show()
+###
+###print(jnp.max(shear_sr))
+###
+##mucoef_0 = (1-0.9*(shear_sr/0.239))
+###
+##jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/mucoef_0.npy", mucoef_0)
+###
+###plt.imshow(mucoef_0)
+###plt.colorbar()
+###plt.show()
+###
 ##raise
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/u_big_new.npy", u_out)
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/v_big_new.npy", v_out)
+#
+#
+##raise
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/u_big_new.npy", u_out)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/v_big_new.npy", v_out)
 #raise
 
 #u_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u_big.npy")
 #v_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v_big.npy")
 
-u_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/u_big_new.npy")
-v_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/new/v_big_new.npy")
+u_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/u_big_new.npy")
+v_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/v_big_new.npy")
 
 #show_vel_field(u_data, v_data)
 
@@ -413,7 +435,7 @@ H = LinearOperator(
 )
 
 # Largest algebraic eigenvalues (most positive)
-k = 20  # or 1000
+k = 30  # or 1000
 w, V = eigsh(H, k=k, which='LA', tol=1e-6, maxiter=None)  # V[:, i] is eigenvector of w[i]
 
 # If you actually want largest magnitude (could pick big negative too), use which='LM'.
@@ -423,12 +445,12 @@ eigvecs = V.reshape(nr, nc, k)
 
 for i in range(k):
 
-    #jnp.save("/Users/eartsu/new_model/testing/nm//bits_of_data/hessian_evecs_etc/shelf/new/ts_evec_soa_2km_{}.npy".format(i), eigvecs[...,i])
+    #jnp.save("/Users/eartsu/new_model/testing/nm//bits_of_data/hessian_evecs_etc/shelf/direct_solver/evec_soa_1km_{}.npy".format(i), eigvecs[...,i])
 
     plt.imshow(eigvecs[...,i])
     plt.colorbar()
     plt.title("lambda={}".format(eigvals[i]))
-    plt.savefig("/Users/eartsu/new_model/testing/nm//bits_of_data/hessian_evecs_etc/shelf/new/ts_evec_ad_{}.png".format(i))
+    plt.savefig("/Users/eartsu/new_model/testing/nm//bits_of_data/hessian_evecs_etc/shelf/direct_solver/evec_ad_{}.png".format(i))
     plt.close()
 
 print("done")

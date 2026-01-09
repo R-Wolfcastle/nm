@@ -359,8 +359,8 @@ def calculate_hvp_via_ad():
 
 
 
-calculate_hvp_via_ad()
-#calculate_hvp_via_soa()
+#calculate_hvp_via_ad()
+calculate_hvp_via_soa()
 
 
 raise
