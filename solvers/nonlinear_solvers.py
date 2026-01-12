@@ -226,7 +226,8 @@ def make_newton_velocity_solver_function_custom_vjp_dynamic_thk(ny, nx, dy, dx,\
     #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     extrapolate_over_cf                        = linear_extrapolate_over_cf_dynamic_thickness
 
-    get_u_v_residuals = compute_u_v_residuals_function_dynamic_thk(ny, nx, dy, dx,\
+    #get_u_v_residuals = compute_u_v_residuals_function_dynamic_thk(ny, nx, dy, dx,\
+    get_u_v_residuals = compute_uv_residuals_function_dynamic_thk_anisotropic(ny, nx, dy, dx,\
                                                        b,\
                                                        beta_eff,\
                                                        interp_cc_to_fc,\
@@ -274,10 +275,15 @@ def make_newton_velocity_solver_function_custom_vjp_dynamic_thk(ny, nx, dy, dx,\
                        ])
 
    
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
-                                                              ksp_type="bcgs",\
-                                                              preconditioner="hypre",\
-                                                              precondition_only=False)
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),\
+    #                                                          ksp_type="bcgs",\
+    #                                                          preconditioner="hypre",\
+    #                                                          precondition_only=False)
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
+                                                              monitor_ksp=True)
 
 
 
