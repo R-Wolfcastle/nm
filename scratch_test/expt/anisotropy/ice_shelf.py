@@ -40,7 +40,7 @@ def ice_shelf():
     lx = 160_000
     ly = 200_000
     
-    resolution = 2000 #m
+    resolution = 1000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -96,7 +96,7 @@ vel_solver = make_newton_velocity_solver_function_custom_vjp_dynamic_thk(nr, nc,
 
 ui, vi = vel_solver(q, u_init, v_init, thk)
 
-plt.plot(ui[:,50])
+plt.plot(ui[:,155])
 plt.show()
 
 

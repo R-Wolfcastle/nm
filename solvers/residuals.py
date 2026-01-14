@@ -446,94 +446,94 @@ def compute_uv_residuals_function_dynamic_thk_anisotropic(ny, nx, dy, dx,
 
 
         
-        trace_sr_ew = dudx_ew + dvdy_ew
-        trace_sr_ns = dudx_ns + dvdy_ns
-
-        isotropic_sr_ew = jnp.zeros((2,2,dudx_ew.shape[0], dudx_ew.shape[1]))
-        isotropic_sr_ew = isotropic_sr_ew.at[0,0,:,:].set(trace_sr_ew)
-        isotropic_sr_ew = isotropic_sr_ew.at[1,1,:,:].set(trace_sr_ew)
-        isotropic_sr_ns = jnp.zeros((2,2,dudx_ns.shape[0], dudx_ns.shape[1]))
-        isotropic_sr_ns = isotropic_sr_ns.at[0,0,:,:].set(trace_sr_ns)
-        isotropic_sr_ns = isotropic_sr_ns.at[1,1,:,:].set(trace_sr_ns)
-
-        shear_sr_ew = jnp.zeros_like(isotropic_sr_ew)
-        shear_sr_ew = shear_sr_ew.at[0,0,:,:].set(-dvdy_ew)
-        shear_sr_ew = shear_sr_ew.at[0,1,:,:].set(0.5*(dudy_ew + dvdx_ew))
-        shear_sr_ew = shear_sr_ew.at[1,0,:,:].set(0.5*(dudy_ew + dvdx_ew))
-        shear_sr_ew = shear_sr_ew.at[1,1,:,:].set(-dudx_ew)
-
-        shear_sr_ns = jnp.zeros_like(isotropic_sr_ns)
-        shear_sr_ns = shear_sr_ns.at[0,0,:,:].set(-dvdy_ns)
-        shear_sr_ns = shear_sr_ns.at[0,1,:,:].set(0.5*(dudy_ns + dvdx_ns))
-        shear_sr_ns = shear_sr_ns.at[1,0,:,:].set(0.5*(dudy_ns + dvdx_ns))
-        shear_sr_ns = shear_sr_ns.at[1,1,:,:].set(-dudx_ns)
-
-        #shear_sr_ew = shear_sr_ew + 1e-10
-        #shear_sr_ns = shear_sr_ns + 1e-10
-        #isotropic_sr_ew = isotropic_sr_ew + 1e-10
-        #isotropic_sr_ns = isotropic_sr_ns + 1e-10
-
-        
-        
-        #calculate face-centred viscosity:
-        mu_ew_iso = c.B_COLD * mucoef_ew * (isotropic_sr_ew[0,0,:,:]**2 + isotropic_sr_ew[1,1,:,:]**2 + isotropic_sr_ew[0,0,:,:]*isotropic_sr_ew[1,1,:,:] +\
-                    0.25*(isotropic_sr_ew[0,1,:,:]+isotropic_sr_ew[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-        mu_ns_iso = c.B_COLD * mucoef_ns * (isotropic_sr_ns[0,0,:,:]**2 + isotropic_sr_ns[1,1,:,:]**2 + isotropic_sr_ns[0,0,:,:]*isotropic_sr_ns[1,1,:,:] +\
-                    0.25*(isotropic_sr_ns[0,1,:,:]+isotropic_sr_ns[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-        
-        mu_ew_s = c.B_COLD * mucoef_ew * (shear_sr_ew[0,0,:,:]**2 + shear_sr_ew[1,1,:,:]**2 + shear_sr_ew[0,0,:,:]*shear_sr_ew[1,1,:,:] +\
-                    0.25*(shear_sr_ew[0,1,:,:]+shear_sr_ew[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-        mu_ns_s = c.B_COLD * mucoef_ns * (shear_sr_ns[0,0,:,:]**2 + shear_sr_ns[1,1,:,:]**2 + shear_sr_ns[0,0,:,:]*shear_sr_ns[1,1,:,:] +\
-                    0.25*(shear_sr_ns[0,1,:,:]+shear_sr_ns[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-
-
-        
-        #to account for calving front boundary condition, set effective viscosities
-        #of faces of all cells with zero thickness to zero:
-        #Again, shouldn't do owt when there's no calving front
-        mu_ew_iso = mu_ew_iso.at[:, 1:].set(jnp.where(h==0, 0, mu_ew_iso[:, 1:]))
-        mu_ew_iso = mu_ew_iso.at[:,:-1].set(jnp.where(h==0, 0, mu_ew_iso[:,:-1]))
-        mu_ns_iso = mu_ns_iso.at[1:, :].set(jnp.where(h==0, 0, mu_ns_iso[1:, :]))
-        mu_ns_iso = mu_ns_iso.at[:-1,:].set(jnp.where(h==0, 0, mu_ns_iso[:-1,:]))
-
-        mu_ew_s = mu_ew_s.at[:, 1:].set(jnp.where(h==0, 0, mu_ew_s[:, 1:]))
-        mu_ew_s = mu_ew_s.at[:,:-1].set(jnp.where(h==0, 0, mu_ew_s[:,:-1]))
-        mu_ns_s = mu_ns_s.at[1:, :].set(jnp.where(h==0, 0, mu_ns_s[1:, :]))
-        mu_ns_s = mu_ns_s.at[:-1,:].set(jnp.where(h==0, 0, mu_ns_s[:-1,:]))
-
-
-
-        phi_i = 1
-        phi_s = 0
-
-
-        htau_ew = 2 * h_ew * ( phi_i * mu_ew_iso * isotropic_sr_ew + phi_s * mu_ew_s * shear_sr_ew )
-        htau_ns = 2 * h_ns * ( phi_i * mu_ns_iso * isotropic_sr_ns + phi_s * mu_ns_s * shear_sr_ns )
-
-
-        rst_ew = jnp.zeros_like(htau_ew)
-        rst_ew = rst_ew.at[0,0,:,:].set(2*htau_ew[0,0,:,:]+htau_ew[1,1,:,:])
-        rst_ew = rst_ew.at[1,1,:,:].set(2*htau_ew[1,1,:,:]+htau_ew[0,0,:,:])
-        rst_ew = rst_ew.at[1,0,:,:].set(htau_ew[1,0,:,:])
-        rst_ew = rst_ew.at[0,1,:,:].set(htau_ew[0,1,:,:])
-
-        rst_ns = jnp.zeros_like(htau_ns)
-        rst_ns = rst_ns.at[0,0,:,:].set(2*htau_ns[0,0,:,:]+htau_ns[1,1,:,:])
-        rst_ns = rst_ns.at[1,1,:,:].set(2*htau_ns[1,1,:,:]+htau_ns[0,0,:,:])
-        rst_ns = rst_ns.at[1,0,:,:].set(htau_ns[1,0,:,:])
-        rst_ns = rst_ns.at[0,1,:,:].set(htau_ns[0,1,:,:])
-
-
-
-        visc_x = rst_ew[0,0,:, 1:] * dy -\
-                 rst_ew[0,0,:,:-1] * dy +\
-                 rst_ns[0,1,:-1,:] * dx -\
-                 rst_ns[0,1,1:, :] * dx
-        
-        visc_y = rst_ns[1,1,:-1,:] * dx -\
-                 rst_ns[1,1,1:, :] * dx +\
-                 rst_ew[1,0,:, 1:] * dy -\
-                 rst_ew[1,0,:,:-1] * dy
+#        trace_sr_ew = dudx_ew + dvdy_ew
+#        trace_sr_ns = dudx_ns + dvdy_ns
+#
+#        isotropic_sr_ew = jnp.zeros((2,2,dudx_ew.shape[0], dudx_ew.shape[1]))
+#        isotropic_sr_ew = isotropic_sr_ew.at[0,0,:,:].set(trace_sr_ew)
+#        isotropic_sr_ew = isotropic_sr_ew.at[1,1,:,:].set(trace_sr_ew)
+#        isotropic_sr_ns = jnp.zeros((2,2,dudx_ns.shape[0], dudx_ns.shape[1]))
+#        isotropic_sr_ns = isotropic_sr_ns.at[0,0,:,:].set(trace_sr_ns)
+#        isotropic_sr_ns = isotropic_sr_ns.at[1,1,:,:].set(trace_sr_ns)
+#
+#        shear_sr_ew = jnp.zeros_like(isotropic_sr_ew)
+#        shear_sr_ew = shear_sr_ew.at[0,0,:,:].set(-dvdy_ew)
+#        shear_sr_ew = shear_sr_ew.at[0,1,:,:].set(0.5*(dudy_ew + dvdx_ew))
+#        shear_sr_ew = shear_sr_ew.at[1,0,:,:].set(0.5*(dudy_ew + dvdx_ew))
+#        shear_sr_ew = shear_sr_ew.at[1,1,:,:].set(-dudx_ew)
+#
+#        shear_sr_ns = jnp.zeros_like(isotropic_sr_ns)
+#        shear_sr_ns = shear_sr_ns.at[0,0,:,:].set(-dvdy_ns)
+#        shear_sr_ns = shear_sr_ns.at[0,1,:,:].set(0.5*(dudy_ns + dvdx_ns))
+#        shear_sr_ns = shear_sr_ns.at[1,0,:,:].set(0.5*(dudy_ns + dvdx_ns))
+#        shear_sr_ns = shear_sr_ns.at[1,1,:,:].set(-dudx_ns)
+#
+#        #shear_sr_ew = shear_sr_ew + 1e-10
+#        #shear_sr_ns = shear_sr_ns + 1e-10
+#        #isotropic_sr_ew = isotropic_sr_ew + 1e-10
+#        #isotropic_sr_ns = isotropic_sr_ns + 1e-10
+#
+#        
+#        
+#        #calculate face-centred viscosity:
+#        mu_ew_iso = c.B_COLD * mucoef_ew * (isotropic_sr_ew[0,0,:,:]**2 + isotropic_sr_ew[1,1,:,:]**2 + isotropic_sr_ew[0,0,:,:]*isotropic_sr_ew[1,1,:,:] +\
+#                    0.25*(isotropic_sr_ew[0,1,:,:]+isotropic_sr_ew[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+#        mu_ns_iso = c.B_COLD * mucoef_ns * (isotropic_sr_ns[0,0,:,:]**2 + isotropic_sr_ns[1,1,:,:]**2 + isotropic_sr_ns[0,0,:,:]*isotropic_sr_ns[1,1,:,:] +\
+#                    0.25*(isotropic_sr_ns[0,1,:,:]+isotropic_sr_ns[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+#        
+#        mu_ew_s = c.B_COLD * mucoef_ew * (shear_sr_ew[0,0,:,:]**2 + shear_sr_ew[1,1,:,:]**2 + shear_sr_ew[0,0,:,:]*shear_sr_ew[1,1,:,:] +\
+#                    0.25*(shear_sr_ew[0,1,:,:]+shear_sr_ew[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+#        mu_ns_s = c.B_COLD * mucoef_ns * (shear_sr_ns[0,0,:,:]**2 + shear_sr_ns[1,1,:,:]**2 + shear_sr_ns[0,0,:,:]*shear_sr_ns[1,1,:,:] +\
+#                    0.25*(shear_sr_ns[0,1,:,:]+shear_sr_ns[1,0,:,:])**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+#
+#
+#        
+#        #to account for calving front boundary condition, set effective viscosities
+#        #of faces of all cells with zero thickness to zero:
+#        #Again, shouldn't do owt when there's no calving front
+#        mu_ew_iso = mu_ew_iso.at[:, 1:].set(jnp.where(h==0, 0, mu_ew_iso[:, 1:]))
+#        mu_ew_iso = mu_ew_iso.at[:,:-1].set(jnp.where(h==0, 0, mu_ew_iso[:,:-1]))
+#        mu_ns_iso = mu_ns_iso.at[1:, :].set(jnp.where(h==0, 0, mu_ns_iso[1:, :]))
+#        mu_ns_iso = mu_ns_iso.at[:-1,:].set(jnp.where(h==0, 0, mu_ns_iso[:-1,:]))
+#
+#        mu_ew_s = mu_ew_s.at[:, 1:].set(jnp.where(h==0, 0, mu_ew_s[:, 1:]))
+#        mu_ew_s = mu_ew_s.at[:,:-1].set(jnp.where(h==0, 0, mu_ew_s[:,:-1]))
+#        mu_ns_s = mu_ns_s.at[1:, :].set(jnp.where(h==0, 0, mu_ns_s[1:, :]))
+#        mu_ns_s = mu_ns_s.at[:-1,:].set(jnp.where(h==0, 0, mu_ns_s[:-1,:]))
+#
+#
+#
+#        phi_i = 1
+#        phi_s = 0
+#
+#
+#        htau_ew = 2 * h_ew * ( phi_i * mu_ew_iso * isotropic_sr_ew + phi_s * mu_ew_s * shear_sr_ew )
+#        htau_ns = 2 * h_ns * ( phi_i * mu_ns_iso * isotropic_sr_ns + phi_s * mu_ns_s * shear_sr_ns )
+#
+#
+#        rst_ew = jnp.zeros_like(htau_ew)
+#        rst_ew = rst_ew.at[0,0,:,:].set(2*htau_ew[0,0,:,:]+htau_ew[1,1,:,:])
+#        rst_ew = rst_ew.at[1,1,:,:].set(2*htau_ew[1,1,:,:]+htau_ew[0,0,:,:])
+#        rst_ew = rst_ew.at[1,0,:,:].set(htau_ew[1,0,:,:])
+#        rst_ew = rst_ew.at[0,1,:,:].set(htau_ew[0,1,:,:])
+#
+#        rst_ns = jnp.zeros_like(htau_ns)
+#        rst_ns = rst_ns.at[0,0,:,:].set(2*htau_ns[0,0,:,:]+htau_ns[1,1,:,:])
+#        rst_ns = rst_ns.at[1,1,:,:].set(2*htau_ns[1,1,:,:]+htau_ns[0,0,:,:])
+#        rst_ns = rst_ns.at[1,0,:,:].set(htau_ns[1,0,:,:])
+#        rst_ns = rst_ns.at[0,1,:,:].set(htau_ns[0,1,:,:])
+#
+#
+#
+#        visc_x = rst_ew[0,0,:, 1:] * dy -\
+#                 rst_ew[0,0,:,:-1] * dy +\
+#                 rst_ns[0,1,:-1,:] * dx -\
+#                 rst_ns[0,1,1:, :] * dx
+#        
+#        visc_y = rst_ns[1,1,:-1,:] * dx -\
+#                 rst_ns[1,1,1:, :] * dx +\
+#                 rst_ew[1,0,:, 1:] * dy -\
+#                 rst_ew[1,0,:,:-1] * dy
 
 
 
@@ -625,27 +625,51 @@ def compute_uv_residuals_function_dynamic_thk_anisotropic(ny, nx, dy, dx,
 
         #################################
         #Sort of dodgy just-apply-to-resistive-stress method
-#
-#        trace_resistive_st_ew = 3 * mu_ew * h_ew * (dudx_ew + dvdy_ew)
-#        trace_resistive_st_ns = 3 * mu_ns * h_ns * (dudx_ns + dvdy_ns)
-#
-#
-#        visc_x = 1 * 2 * ( trace_resistive_st_ew[:, 1:] - trace_resistive_st_ew[:, :-1] )*dy +\
-#                 0 * 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
-#                 0 * 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
-#                 0 * 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
-#                 0 * 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
-#
-#        visc_y = 1 * 2 * ( trace_resistive_st_ns[:-1, :] - trace_resistive_st_ns[1:, :] )*dx +\
-#                 0 * 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
-#                 0 * 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
-#                 0 * 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
-#                 0 * 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        #Again, shouldn't do owt when there's no calving front
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+
+        trace_resistive_st_ew = 3 * mu_ew * h_ew * (dudx_ew + dvdy_ew)
+        trace_resistive_st_ns = 3 * mu_ns * h_ns * (dudx_ns + dvdy_ns)
+
+        
+        phi_n = jnp.ones_like(mucoef)
+        phi_s = jnp.ones_like(mucoef)
+        phi_s = phi_s.at[10:20, :].set(0.25)
+        phi_s = phi_s.at[(-20):(-10), :].set(0.25)
+
+        phi_n_ew, phi_n_ns = interp_cc_to_fc(phi_n)
+        phi_s_ew, phi_s_ns = interp_cc_to_fc(phi_s)
+
+
+        visc_x = ((phi_n_ew - phi_s_ew)[:, 1:] * trace_resistive_st_ew[:, 1:] -\
+                  (phi_n_ew - phi_s_ew)[:, :-1] * trace_resistive_st_ew[:, :-1] )*dy +\
+                 phi_s_ew[:, 1:]*mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 phi_s_ew[:,:-1]*mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 phi_s_ns[:-1,:]*mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 phi_s_ns[1:, :]*mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        #visc_y = (phi_n_ew - phi_s_ew)*( trace_resistive_st_ns[:-1, :] - trace_resistive_st_ns[1:, :] )*dx +\
+        visc_y = ((phi_n_ns - phi_s_ns)[:-1,:] * trace_resistive_st_ns[:-1,:] -\
+                  (phi_n_ns - phi_s_ns)[1:, :] * trace_resistive_st_ns[1:, :] )*dx +\
+                 phi_s_ew[:, 1:]*mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 phi_s_ew[:,:-1]*mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 phi_s_ns[:-1,:]*mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 phi_s_ns[1:, :]*mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
 
         ################################
 
-        x_mom_residual = visc_x + volume_x
-        y_mom_residual = visc_y + volume_y
+        x_mom_residual = 2 * visc_x + volume_x
+        y_mom_residual = 2 * visc_y + volume_y
 
         return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
 
