@@ -52,7 +52,7 @@ def ice_shelf():
     lx = 150_000
     ly = 200_000
     
-    resolution = 2_000 #m
+    resolution = 1_000 #m
     
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -75,10 +75,10 @@ def ice_shelf():
     mucoef = jnp.ones_like(thk)
     
     C = jnp.zeros_like(thk)
-    C = C.at[:4, :].set(1e8)
-    C = C.at[:, :4].set(1e8)
-    C = C.at[-4:,:].set(1e8)
-    C = jnp.where(thk==0, 1e8, C)
+    C = C.at[:4, :].set(1e4)
+    C = C.at[:, :4].set(1e4)
+    C = C.at[-4:,:].set(1e4)
+    C = jnp.where(thk==0, 1, C)
 
     #mucoef_profile = 0.5+b_profile.copy()/2000
     mucoef_profile = 1
@@ -142,6 +142,27 @@ def twisty_stream():
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
 
 lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = twisty_stream()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = ice_shelf()
+
+
+
+
+
+
+#fig, ax = plt.subplots()
+#extent = (-0.5, nc - 0.5, nr - 0.5, -0.5)  # x from -0.5..nx-0.5, y top-to-bottom
+#cf = ax.contourf(jnp.log10(C), cmap='Grays', extent=extent)
+#ax.set_aspect('equal', adjustable='box')
+#fig.colorbar(cf, ax=ax)
+#plt.tight_layout()
+#plt.show()
+#raise
+
+
+
+
+
+
 
 
 u_init = jnp.zeros_like(b) + 100
@@ -227,18 +248,18 @@ def calculate_hvp_via_soa():
                                       functional)
     
     
-    plt.imshow(gradient[:,:])
-    plt.title("gradient via adjoint")
-    plt.colorbar()
-    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    plt.show()
+    #plt.imshow(gradient[:,:])
+    #plt.title("gradient via adjoint")
+    #plt.colorbar()
+    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    #plt.show()
 
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
     #pert_dir = pert_dir.at[:,-4:].set(0)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
-    plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-1, vmax=1, cmap="twilight_shifted")
     plt.title("hvp via soa")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -255,8 +276,8 @@ def calculate_hvp_via_ad():
                                                              periodic=True)
 
     u_out, v_out = solver(q, u_init, v_init)
-    show_vel_field(u_out, v_out)
-    
+    show_vel_field(u_out, v_out, vmax=3500)
+    raise
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
         return functional(u_out, v_out, q)
@@ -265,7 +286,7 @@ def calculate_hvp_via_ad():
 
     gradient = get_grad(q)
     
-    plt.imshow(gradient[:,:])
+    plt.imshow(gradient[:,:], vmin=-1800,)
     plt.title("gradient via ad")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -285,17 +306,13 @@ def calculate_hvp_via_ad():
     ##plt.show()
     ##raise
     eps = 0.01
-    fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
-    plt.title("hvp via fd")
-    plt.colorbar()
-    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    plt.show()
-
-    #plt.plot(fd_hvp[25,:])
-    #plt.ylim((-10,10))
+    #fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
+    #plt.imshow(fd_hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
+    #plt.title("hvp via fd")
+    #plt.colorbar()
+    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
     #plt.show()
-    ##raise
+
 
     #I'd have imagined it's ok to do the following:
     #      hvp = jax.vjp(get_grad, (q,), (pert_dir,))
@@ -340,7 +357,7 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:], vmin=-10, vmax=10, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
     #plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
     plt.title("hvp via ad")
     plt.colorbar()
@@ -360,10 +377,10 @@ def calculate_hvp_via_ad():
 
 
 #calculate_hvp_via_ad()
-calculate_hvp_via_soa()
+#calculate_hvp_via_soa()
 
 
-raise
+#raise
 
 
 
@@ -463,8 +480,8 @@ def make_hvp_soa_fct():
     
 
 #function for computing hvp from perturbation direction
-#hessian_vector_product = make_hvp_ad_fct()
-hessian_vector_product = make_hvp_soa_fct()
+hessian_vector_product = make_hvp_ad_fct()
+#hessian_vector_product = make_hvp_soa_fct()
 
 
 
@@ -473,42 +490,120 @@ hessian_vector_product = make_hvp_soa_fct()
 import numpy as np
 from scipy.sparse.linalg import LinearOperator, eigsh
 
-n = nr * nc
-dtype = np.float64
 
-# JIT-compile and warm up once to avoid recompiles in the loop
-#HVP_jit = jax.jit(lambda x: HVP(x.reshape(nr, nc)).reshape(-1))
-#_ = HVP_jit(np.zeros(n))   # warmup
 
-H = LinearOperator(
-    shape=(n, n), dtype=dtype,
-    matvec=lambda x: np.array(hessian_vector_product(x))  # ensure ndarray to avoid device transfers
-)
 
-# Largest algebraic eigenvalues (most positive)
-k = 30  # or 1000
-w, V = eigsh(H, k=k, which='LA', tol=1e-6, maxiter=None)  # V[:, i] is eigenvector of w[i]
 
-# If you actually want largest magnitude (could pick big negative too), use which='LM'.
-# Normalize or reshape as needed:
-eigvals = w
-eigvecs = V.reshape(nr, nc, k)
+def compute_evecs():
 
-for i in range(k):
 
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/ts_evec_soa_1km_{}.npy".format(i), eigvecs[...,i])
+    n = nr * nc
+    dtype = np.float64
+    
+    # JIT-compile and warm up once to avoid recompiles in the loop
+    #HVP_jit = jax.jit(lambda x: HVP(x.reshape(nr, nc)).reshape(-1))
+    #_ = HVP_jit(np.zeros(n))   # warmup
+    
+    H = LinearOperator(
+        shape=(n, n), dtype=dtype,
+        matvec=lambda x: np.array(hessian_vector_product(x))  # ensure ndarray to avoid device transfers
+    )
+    
+    # Largest algebraic eigenvalues (most positive)
+    k = 100  # or 1000
+    w, V = eigsh(H, k=k, which='LA', tol=1e-10, maxiter=1000)  # V[:, i] is eigenvector of w[i]
+    
+    # If you actually want largest magnitude (could pick big negative too), use which='LM'.
+    # Normalize or reshape as needed:
+    eigvals = w
+    eigvecs = V.reshape(nr, nc, k)
+        
 
-    #plt.imshow(eigvecs[...,i])
-    #plt.colorbar()
-    #plt.title("lambda={}".format(eigvals[i]))
-    #plt.savefig("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/ts_evec_soa_big_new_new_{}.png".format(i))
-    ##plt.show()
-    #plt.close()
-
-print("done")
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evecs.npy", eigvecs)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evals.npy", eigvals)
+    
+    #for i in range(k):
+        #evec = eigvecs[...,i]
+    
+        #eval_ = eigvals[...,i]
+#        #print(eval_)
+#    
+#        evec_norm = evec / jnp.linalg.norm(evec)
+#    
+#        #print(evec_norm.shape, np.array(hessian_vector_product(evec_norm)).shape, (evec_norm*eval_).shape)
+#    
+#        #plt.imshow(eval_*evec)
+#        #plt.colorbar()
+#        #plt.show()
+#    
+#        #plt.imshow(np.array(hessian_vector_product(evec)))
+#        #plt.colorbar()
+#        #plt.show()
+#    
+#    
+#        ev_residual = np.linalg.norm(np.array(hessian_vector_product(evec)) - evec*eval_)/(np.linalg.norm(evec)*np.abs(eval_))
+#        print(ev_residual)
+#    
+#        #eval_img = hessian_vector_product(evec) - evec*eval_
+#    
+#        ##plt.imshow(eval_img, vmin=-2*jnp.abs(eval_), vmax=2*jnp.abs(eval_))
+#        #plt.imshow(eval_img, vmin=-100, vmax=100)
+#        #plt.colorbar()
+#        #plt.show()
+    
+    
+    
+        #plt.imshow(eigvecs[...,i])
+        #plt.colorbar()
+        #plt.title("lambda={}".format(eigvals[i]))
+        #plt.savefig("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/very_new/ts_evec_soa_1km_{}.png".format(i))
+        ##plt.show()
+        #plt.close()
+    
+    print("done")
 
 #plt.plot(eigvals[::-1])
 #plt.show()
+
+#compute_evecs()
+
+
+
+
+soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/soa_evecs.npy")
+soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/soa_evals.npy")
+
+ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evecs.npy")
+ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evals.npy")
+
+
+k = 100
+
+evec_residuals = []
+
+for evcs, evls, hvp in [[soa_evecs, soa_evals, make_hvp_soa_fct()],[ad_evecs, ad_evals, make_hvp_ad_fct()]]:
+    for i in range(k):
+        evec = evcs[:,:,-(i+1)]
+        eval_ = evls[-(i+1)]
+
+        evec_norm = evec / np.linalg.norm(evec)
+
+        ev_residual = np.linalg.norm(np.array(hvp(evec)) - evec*eval_)/(np.linalg.norm(evec)*np.abs(eval_))
+
+        evec_residuals.append(ev_residual)
+
+soa_ers = evec_residuals[:k]
+ad_ers = evec_residuals[k:]
+
+print(ad_ers)
+print(soa_ers)
+
+
+
+
+
+
+
 
 
 

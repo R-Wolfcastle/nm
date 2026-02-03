@@ -996,11 +996,16 @@ def make_picard_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
                        ])
 
    
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),
-                                                              ksp_type="gmres",
-                                                              preconditioner="hypre",
-                                                              precondition_only=False,
-                                                              ksp_max_iter=60,
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),
+    #                                                          ksp_type="gmres",
+    #                                                          preconditioner="hypre",
+    #                                                          precondition_only=False,
+    #                                                          ksp_max_iter=60,
+    #                                                          monitor_ksp=False)
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
                                                               monitor_ksp=False)
 
 
@@ -1547,7 +1552,7 @@ def forward_adjoint_and_second_order_adjoint_solvers(ny, nx, dy, dx, h, b,\
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
                                                               indirect=False,
-                                                              monitor_ksp=True)
+                                                              monitor_ksp=False)
 
     newton_solver = generic_newton_solver_no_cjvp(ny, nx, sparse_jacrev, mask, la_solver)
 

@@ -5,7 +5,7 @@ import time
 
 
 #local apps
-sys.path.insert(1, "../../../utils/")
+#sys.path.insert(1, "../../../utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\

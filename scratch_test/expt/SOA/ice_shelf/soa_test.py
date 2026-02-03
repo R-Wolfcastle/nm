@@ -68,7 +68,7 @@ def ice_shelf():
 
     thk_profile = 500# - 300*x/lx
     thk = jnp.zeros((nr, nc))+thk_profile
-    thk = thk.at[:, -2:].set(0)
+    thk = thk.at[4:-4, -40:].set(0)
    
     b = jnp.zeros_like(thk)-600
     
@@ -83,8 +83,8 @@ def ice_shelf():
     #mucoef_profile = 0.5+b_profile.copy()/2000
     mucoef_profile = 1
     mucoef_0 = jnp.zeros_like(b)+mucoef_profile
-    mucoef_0_int = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/mucoef_0.npy")
-    mucoef_0 = mucoef_0.at[1:-1,:].set(mucoef_0_int)
+    #mucoef_0_int = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/shelf/direct_solver/mucoef_0.npy")
+    #mucoef_0 = mucoef_0.at[1:-1,:].set(mucoef_0_int)
     
     q = jnp.zeros_like(C)
     
@@ -175,19 +175,21 @@ def calculate_hvp_via_soa():
                                       functional)
     
     
-    plt.imshow(gradient[:,:])
+    plt.imshow(gradient[:,:], vmin=-10_000, vmax=0)
     plt.title("gradient via adjoint")
     plt.colorbar()
-    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
     plt.show()
 
     print("solving second-order adjoint problem:")
-    pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
-    #pert_dir = pert_dir.at[:,-4:].set(0)
+    #grad_capped = jnp.where(gradient>-6_000, gradient, -6_000)
+    #pert_dir = grad_capped / (jnp.linalg.norm(grad_capped)*10)
+    ##pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
+    pert_dir = jnp.load("/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/SOA_paper/figures/misc/pert_dir_ice_shelf.npy")
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
     #plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
-    plt.imshow(hvp[:,:], vmin=-15, vmax=15, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-3, vmax=3, cmap="twilight_shifted")
     plt.title("hvp via soa")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -203,8 +205,9 @@ def calculate_hvp_via_ad():
                                                              n_iterations, mucoef_0)
 
     u_out, v_out = solver(q, u_init, v_init)
-    show_vel_field(u_out, v_out)
-    
+    #show_vel_field(u_out, v_out, vmax=2500)
+    #raise
+
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
         return functional(u_out, v_out, q)
@@ -213,7 +216,7 @@ def calculate_hvp_via_ad():
 
     gradient = get_grad(q)
     
-    plt.imshow(gradient[:,:])
+    plt.imshow(gradient[:,:], vmin=-10_000, vmax=0)
     plt.title("gradient via ad")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -223,8 +226,12 @@ def calculate_hvp_via_ad():
     #plt.ylim((-600,600))
     #plt.show()
 
-    
-    pert_dir = gradient.copy() / (jnp.linalg.norm(gradient)*10)
+    grad_capped = jnp.where(gradient>-8_000, gradient, -8_000)
+    pert_dir = grad_capped / (jnp.linalg.norm(grad_capped)*10)
+
+    jnp.save("/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/SOA_paper/figures/misc/pert_dir_ice_shelf.npy", pert_dir)
+    pert_dir = jnp.load("/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/SOA_paper/figures/misc/pert_dir_ice_shelf.npy")
+
     #pert_dir = pert_dir.at[:,-4:].set(0)
 
     ##finite diff hvp for comparison
@@ -234,7 +241,7 @@ def calculate_hvp_via_ad():
     ##raise
     eps = 0.01
     fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    plt.imshow(fd_hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
+    plt.imshow(fd_hvp[:,:], vmin=-25, vmax=25, cmap="twilight_shifted")
     plt.title("hvp via fd")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -288,7 +295,7 @@ def calculate_hvp_via_ad():
     #plt.show()
 
     
-    plt.imshow(hvp[:,:], vmin=-50, vmax=50, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-25, vmax=25, cmap="twilight_shifted")
     plt.title("hvp via ad")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -306,11 +313,11 @@ def calculate_hvp_via_ad():
 
 
 
-#calculate_hvp_via_ad()
-#calculate_hvp_via_soa()
-#
-#
-#raise
+calculate_hvp_via_ad()
+calculate_hvp_via_soa()
+
+
+raise
 
 
 #solver = make_newton_velocity_solver_function_custom_vjp(nr, nc,

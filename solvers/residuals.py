@@ -643,9 +643,12 @@ def compute_uv_residuals_function_dynamic_thk_anisotropic(ny, nx, dy, dx,
 
         
         phi_n = jnp.ones_like(mucoef)
+        phi_n = phi_n.at[10:20, :].set(1.9)
+        phi_n = phi_n.at[(-20):(-10), :].set(1.9)
+        
         phi_s = jnp.ones_like(mucoef)
-        phi_s = phi_s.at[10:20, :].set(0.25)
-        phi_s = phi_s.at[(-20):(-10), :].set(0.25)
+        phi_s = phi_s.at[10:20, :].set(0.1)
+        phi_s = phi_s.at[(-20):(-10), :].set(0.1)
 
         phi_n_ew, phi_n_ns = interp_cc_to_fc(phi_n)
         phi_s_ew, phi_s_ns = interp_cc_to_fc(phi_s)

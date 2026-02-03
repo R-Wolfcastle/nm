@@ -143,13 +143,13 @@ def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, sho
     if showcbar:
         plt.colorbar(label='Speed (m/yr)')
 
-    plt.streamplot(
-        X, Y, u, v,
-        color='k',
-        density= 1/spacing,
-        linewidth=0.25,
-        arrowstyle='-'
-    )
+    #plt.streamplot(
+    #    X, Y, u, v,
+    #    color='k',
+    #    density= 1/(spacing),
+    #    linewidth=0.25,
+    #    arrowstyle='-'
+    #)
 
     plt.tight_layout()
 
