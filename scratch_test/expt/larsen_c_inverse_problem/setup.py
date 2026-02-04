@@ -201,25 +201,46 @@ def lbfgsb_function(misfit_functional, misfit_fctl_args=None, iterations=50):
                            initial_guess, 
                            jac = lambda x: get_grad(x), 
                            method="L-BFGS-B", 
-                           bounds=[(-1, 1)] * initial_guess.size, 
+                           bounds=[(-3, 2)] * initial_guess.size, 
                            options={"maxiter": iterations} #Note: disp is depricated
                           )
 
         return result.x
     return lbfgsb
 
-#lbfgsb = lbfgsb_function(misfit, (uo, uc), iterations=15)
+#lbfgsb = lbfgsb_function(misfit, (uo, uc), iterations=40)
 #q_out = lbfgsb(jnp.zeros_like(thk).reshape(-1))
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_3.npy", q_out)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_4.npy", q_out)
 
-q_out = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_3.npy")
+q_out = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_4.npy")
 
 #u_out, v_out = solver(q_out.reshape((nr,nc)), C, u_init, v_init, thk)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/vel_q_4.npy", jnp.stack([u_out, v_out]))
 
-#show_vel_field(u_out, v_out, vmin=0, vmax=1000)
+vel = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/vel_q_4.npy")
+
+u_out = vel[0]
+v_out = vel[1]
+
+#show_vel_field(u_out, v_out, vmin=0, vmax=1000, cmap="RdYlBu_r")
+#
+#plt.figure(figsize=(8,6))
+#plt.imshow(uo, vmin=0, vmax=1000, cmap="RdYlBu_r")
+#plt.colorbar()
+#plt.show()
 
 
-plt.imshow(jnp.exp(q_out.reshape(nr,nc)))
+phi = jnp.where(C==0, jnp.exp(q_out.reshape(nr,nc)), 0)
+
+plt.figure(figsize=(8,6))
+plt.imshow(phi, vmin=0, vmax=2, cmap="RdBu_r")
+#plt.imshow(phi, cmap="RdBu_r")
 plt.colorbar()
 plt.show()
+
+
+
+
+
+
 
