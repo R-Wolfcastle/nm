@@ -246,8 +246,9 @@ def apply_scalar_ghost_cells_to_vector(scalar_ghost_function):
         u = scalar_ghost_function(u)
         v = scalar_ghost_function(v)
         return u, v
-    return jnp.jit(apply)
+    return jax.jit(apply)
 
+@jax.jit
 def binary_erosion(boolean_array):
     # 3x3 cross-shaped structuring element (4-connectivity)
     kernel = jnp.array([[1,1,1],
@@ -273,6 +274,7 @@ def binary_erosion(boolean_array):
 
     return erode_once(boolean_array.astype(jnp.float64))
 
+@jax.jit
 def binary_dilation(boolean_array):
     # 3x3 cross-shaped structuring element (4-connectivity)
     kernel = jnp.array([[0,1,0],
@@ -382,9 +384,10 @@ def nn_extrapolate_over_cf_function(thk):
                                                 axis=0)[0]
 
         return cc_field + u_extrap_boundary*cf_adjacent_zero_ice_cells.astype(jnp.float64)
+    
+    return jax.jit(extrapolate_over_cf)
 
-    return extrapolate_over_cf
-
+@jax.jit
 def extrapolate_over_cf_dynamic_thickness(cc_field, thk):
     cf_adjacent_zero_ice_cells = (thk==0) & binary_dilation(thk>0)
 
@@ -429,7 +432,7 @@ def extrapolate_over_cf_dynamic_thickness(cc_field, thk):
 def cf_cells(thk):
     return (thk>0) & ~binary_erosion(thk>0)
 
-
+@jax.jit
 def linear_extrapolate_over_cf_dynamic_thickness(cc_field, thk):
     """
     Extrapolate into ocean cells adjacent to ice by linear extrapolation along
@@ -473,6 +476,13 @@ def linear_extrapolate_over_cf_function(thk):
     ice_mask = (thk>0)
     cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(thk>0)
 
+
+    has_1, has_2 = stack_safe_shifted(ice_mask)
+    # Score = number of available ice cells inward (prefer directions with both u1 and u2)
+    score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+    
+    # Pick best direction
+    best_k = jnp.argmax(score, axis=0)
     
     @jax.jit
     def linear_extrapolate_over_cf(cc_field):
@@ -480,13 +490,6 @@ def linear_extrapolate_over_cf_function(thk):
         cc_field_pad = jnp.pad(cc_field, ((2,2),(2,2)), constant_values=0)
         
         u1, u2 = stack_safe_shifted(cc_field)
-        has_1, has_2 = stack_safe_shifted(ice_mask)
-    
-        # Score = number of available ice cells inward (prefer directions with both u1 and u2)
-        score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
-    
-        # Pick best direction
-        best_k = jnp.argmax(score, axis=0)
     
         # Extrapolate: if has_2 then 2*u1 - u2 else u1
         u_extrap_dirs = jnp.where(has_2, 2.0*u1 - u2, u1)
@@ -630,6 +633,44 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0):
 
 
 
+#def beta_function(b, mode="basic_weertman", beta_noice=1.0):
+#    rho_i = c.RHO_I
+#    rho_w = c.RHO_W
+#    n = c.GLEN_N
+#
+#    def beta(C, u, v, h):
+#        s_gnd = h + b
+#        s_flt = h * (1.0 - rho_i/rho_w)
+#        grounded = s_gnd > s_flt            # bool array
+#        has_ice  = h > 0.0                  # bool array
+#
+#        if mode == "linear":
+#            beta_grounded = jnp.asarray(C, dtype=u.dtype)
+#        else:
+#            eps = 1e-3
+#            speed = jnp.sqrt(u*u + v*v + eps*eps)
+#            beta_weert = jnp.asarray(C, dtype=u.dtype) * speed ** (1.0/n - 1.0)
+#            beta_grounded = beta_weert
+#
+#        # Values on each region
+#        beta_val = jnp.where(grounded, beta_grounded, 0.0)
+#        beta_val = jnp.where(has_ice, beta_val, beta_noice)
+#
+#        # Block gradients from inactive branches wrt (u,v):
+#        grounded_f = grounded.astype(beta_val.dtype)
+#        has_ice_f  = has_ice.astype(beta_val.dtype)
+#
+#        # Mask the (u,v)-dependent part and stop its gradients outside grounded & ice regions
+#        uv_part = grounded_f * has_ice_f * beta_grounded
+#        uv_part = jax.lax.stop_gradient(0.0 * uv_part) + uv_part  # only the masked part carries gradients
+#
+#        # Constant parts (no gradient wrt u,v)
+#        const_part = (1.0 - has_ice_f) * beta_noice
+#
+#        return uv_part + const_part  # floating region contributes 0
+#
+#    return jax.jit(beta)
+
 
 def beta_function(b, mode="linear"):
     if mode=="linear":
@@ -637,20 +678,23 @@ def beta_function(b, mode="linear"):
             s_gnd = h + b
             s_flt = h * (1-c.RHO_I/c.RHO_W)
 
-            #beta =  jnp.where(s_gnd>s_flt, C, 0)
-            beta =  jnp.where(True, C, 0)
+            beta =  jnp.where(s_gnd>s_flt, C, 0)
+            beta = jnp.where(h>0, beta, 1)
+            #beta =  jnp.where(True, C, 0)
 
             return beta
     
     if mode=="basic_weertman":
         def beta(C, u, v, h):
-            speed = jnp.sqrt(u**2 + v**2 + 1e-12)
-            beta = C * (speed ** (-2/3))
+            speed = jnp.sqrt(u*u + v*v + 1)
+            beta = C * (speed ** (1/c.GLEN_N - 1))
+            #beta = C #* (speed ** (1/1 - 1))
 
             s_gnd = h + b
             s_flt = h * (1-c.RHO_I/c.RHO_W)
 
-            beta =  jnp.where(s_gnd>s_flt, beta, 0)
+            beta = jnp.where(s_gnd>s_flt, beta, 0)
+            beta = jnp.where(h>0, beta, 1)
             #beta =  jnp.where(True, C, 0)
 
             return beta
@@ -679,6 +723,11 @@ def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         dvdx_ew, dvdy_ew = ew_gradient(v)
         dudx_ns, dudy_ns = ns_gradient(u)
         dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        u = u[1:-1,1:-1]
+        v = v[1:-1,1:-1]
+        u = u*ice_mask
+        v = v*ice_mask
         
         #calculate face-centred viscosity:
         mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
@@ -694,7 +743,7 @@ def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
 
         return mu_ew, mu_ns
-    return fc_viscosity
+    return jax.jit(fc_viscosity)
  
 
 
@@ -735,7 +784,7 @@ def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
         return mu_ew, mu_ns
-    return fc_viscosity
+    return jax.jit(fc_viscosity)
  
 
 

@@ -8,7 +8,7 @@ sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
 from nonlinear_solvers import make_newton_coupled_solver_function,\
         make_newton_velocity_solver_function_custom_vjp_dynamic_thk,\
         make_picard_velocity_solver_function_custom_vjp,\
-        make_couple_quasi_newton_solver_function
+        make_coupled_quasi_newton_solver_function
 
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -140,7 +140,7 @@ def expl_ts():
 
 
 def impl_ts():
-    uvh_solver = make_couple_quasi_newton_solver_function(nr, nc,
+    uvh_solver = make_coupled_quasi_newton_solver_function(nr, nc,
                                                      delta_y,
                                                      delta_x,
                                                      b, ice_mask,

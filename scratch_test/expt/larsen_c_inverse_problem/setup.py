@@ -22,7 +22,8 @@ sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers")
 from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp
 from nonlinear_solvers import (forward_adjoint_and_second_order_adjoint_solvers,
                                 make_newton_velocity_solver_function_custom_vjp,
-                                make_picard_velocity_solver_function_custom_vjp)
+                                make_picard_velocity_solver_function_custom_vjp,
+                                make_picnewton_velocity_solver_function_cvjp)
 
 #3rd party
 from petsc4py import PETSc
@@ -167,7 +168,8 @@ nr, nc, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, uo, uc = setup_ls_do
 #plt.show()
 #raise
 
-n_iterations = 30
+n_pic_iterations = 30
+n_newt_iterations = 15
 u_init = jnp.zeros_like(thk)
 v_init = jnp.zeros_like(thk)
 
@@ -176,11 +178,13 @@ def misfit(u_mod, v_mod, q, speed_obs, mask):
     speed_mod = jnp.sqrt(u_mod**2 + v_mod**2 + 1e-10)
     return jnp.sum(mask.reshape(-1) * (speed_mod.reshape(-1) - speed_obs.reshape(-1))**2)
 
-solver = make_picard_velocity_solver_function_custom_vjp(nr, nc,
-                                                         delta_y,
-                                                         delta_x,
-                                                         b, ice_mask,
-                                                         n_iterations, mucoef_0)
+solver = make_picnewton_velocity_solver_function_cvjp(nr, nc,
+                                                      delta_y,
+                                                      delta_x,
+                                                      b, ice_mask,
+                                                      n_pic_iterations,
+                                                      n_newt_iterations,
+                                                      mucoef_0)
 #u_out, v_out = solver(q, C, u_init, v_init, thk)
 #
 #show_vel_field(u_out, v_out, vmin=0, vmax=3000)
@@ -208,21 +212,25 @@ def lbfgsb_function(misfit_functional, misfit_fctl_args=None, iterations=50):
         return result.x
     return lbfgsb
 
-#lbfgsb = lbfgsb_function(misfit, (uo, uc), iterations=40)
-#q_out = lbfgsb(jnp.zeros_like(thk).reshape(-1))
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_4.npy", q_out)
+lbfgsb = lbfgsb_function(misfit, (uo, uc), iterations=1)
+q_out = lbfgsb(jnp.zeros_like(thk).reshape(-1))
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_5.npy", q_out)
 
-q_out = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_4.npy")
+#q_out = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/potential_q_5.npy")
 
-#u_out, v_out = solver(q_out.reshape((nr,nc)), C, u_init, v_init, thk)
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/vel_q_4.npy", jnp.stack([u_out, v_out]))
+plt.imshow(q_out.reshape((nr, nc)))
+plt.colorbar()
+plt.show()
 
-vel = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/vel_q_4.npy")
+u_out, v_out = solver(q_out.reshape((nr,nc)), C, u_init, v_init, thk)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/vel_q_5.npy", jnp.stack([u_out, v_out]))
+
+#vel = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/vel_q_5.npy")
 
 u_out = vel[0]
 v_out = vel[1]
 
-#show_vel_field(u_out, v_out, vmin=0, vmax=1000, cmap="RdYlBu_r")
+show_vel_field(u_out, v_out, vmin=0, vmax=1000, cmap="RdYlBu_r")
 #
 #plt.figure(figsize=(8,6))
 #plt.imshow(uo, vmin=0, vmax=1000, cmap="RdYlBu_r")

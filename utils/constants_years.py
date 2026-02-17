@@ -16,6 +16,7 @@ RHO_W = 1028.0                 # Density of seawater (kg/m^3)
 GLEN_N = 3.0                   # Glen's flow law exponent (dimensionless)
 A_TEMPERATE = 1.0e-24*31_557_600          # Rate factor A for temperate ice (Pa^-3 a^-1)
 A_COLD = 3.5e-25*31_557_600               # Rate factor A for cold ice (Pa^-3 a^-1)
+#A_COLD = 4.4*3.5e-25*31_557_600               # Rate factor A for cold ice (Pa^-3 a^-1)
 B_COLD = 0.5 * (A_COLD**(-1/GLEN_N))
 
 # Ice viscosity (typical value, can vary widely)

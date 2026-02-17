@@ -190,6 +190,60 @@ def make_sparse_jacrev_fct_new(basis_vectors, i_coord_sets, j_coord_sets, mask):
     return sparse_jacrev, densify_sparse_jac
 
 
+
+def make_sparse_jacrev_fct_shared_basis_alt(basis_vectors, i_coord_sets, j_coord_sets,
+                                        mask, n_outputs, active_indices=None):
+    # NOTE: The original had a small bug: n_primals used before definition.
+    # We’ll compute number of active variables later from active_indices.
+
+    # Pre-stack basis once; ensure dtype matches the rest of your pipeline.
+    basis = jnp.stack(basis_vectors).astype(jnp.float64)
+
+    # Normalise active_indices to a tuple of ints
+    if active_indices is None:
+        # If not provided, default to "first two" for your use-case;
+        # or you can infer later from actual primals length.
+        raise ValueError("active_indices must be provided (e.g., (0, 1)).")
+    active_indices = tuple(active_indices)
+
+    def sparse_jacrev(fun_, primals):
+        """
+        fun_: callable with signature fun_(*primals) -> tuple(outputs)
+        primals: tuple of all primal args (u, v, ... others ...)
+
+        Returns a list in the order:
+            [d_output0/d_active0, d_output1/d_active0, ..., d_output0/d_active1, ...]
+        each flattened to 1D.
+        """
+        # Build pullback for the real function object (stable identity), not a new wrapper.
+        _, vjp_fun = jax.vjp(fun_, *primals)
+
+        # Helper returns (grads for active_indices) given one output-selector basis vector
+        def apply_basis_for_output(out_idx):
+            @jax.jit
+            def apply_one(bv):
+                # tuple of cotangents for each output; only one non-zero per call
+                cot = tuple(bv if i == out_idx else jnp.zeros_like(bv)
+                            for i in range(n_outputs))
+                all_grads = vjp_fun(cot)  # one cotangent per primal
+                # Keep only the active primal grads (e.g., for u and v)
+                return tuple(all_grads[k] for k in active_indices)
+            # Vectorise over basis vectors
+            return jax.vmap(apply_one)(basis)
+
+        rows_for_output = [apply_basis_for_output(i) for i in range(n_outputs)]
+        # rows_for_output[i][j] has shape (n_basis, ...shape_of_active_j...)
+
+        n_active = len(active_indices)
+        # Flatten and interleave by (active, then output), like your original
+        return [rows_for_output[i][j].reshape(-1)
+                for j in range(n_active)
+                for i in range(n_outputs)]
+
+    return sparse_jacrev
+
+
+
 def make_sparse_jacrev_fct_shared_basis(basis_vectors, i_coord_sets, j_coord_sets,\
                                         mask, n_outputs, active_indices=None):
 
@@ -281,6 +335,7 @@ def make_sparse_jacrev_fct_shared_basis(basis_vectors, i_coord_sets, j_coord_set
     #    return jac
 
     return sparse_jacrev#, densify_sparse_jac
+
 
 
 def basis_vectors_and_coords_2d_square_stencil(nr, nc, r=2, periodic_x=False):

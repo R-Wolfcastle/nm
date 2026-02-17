@@ -248,11 +248,11 @@ def calculate_hvp_via_soa():
                                       functional)
     
     
-    #plt.imshow(gradient[:,:])
-    #plt.title("gradient via adjoint")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    plt.imshow(gradient[:,:])
+    plt.title("gradient via adjoint")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
 
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
@@ -275,9 +275,9 @@ def calculate_hvp_via_ad():
                                                              n_iterations, mucoef_0,
                                                              periodic=True)
 
-    u_out, v_out = solver(q, u_init, v_init)
-    show_vel_field(u_out, v_out, vmax=3500)
-    raise
+    #u_out, v_out = solver(q, u_init, v_init)
+    #show_vel_field(u_out, v_out, vmax=3500)
+    #raise
     def reduced_functional(q):
         u_out, v_out = solver(q, u_init, v_init)
         return functional(u_out, v_out, q)
@@ -306,12 +306,12 @@ def calculate_hvp_via_ad():
     ##plt.show()
     ##raise
     eps = 0.01
-    #fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
-    #plt.imshow(fd_hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
-    #plt.title("hvp via fd")
-    #plt.colorbar()
-    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    #plt.show()
+    fd_hvp = (get_grad(q + eps*pert_dir) - get_grad(q)) / eps
+    plt.imshow(fd_hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
+    plt.title("hvp via fd")
+    plt.colorbar()
+    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    plt.show()
 
 
     #I'd have imagined it's ok to do the following:
@@ -397,19 +397,20 @@ def calculate_hvp_via_ad():
 #                                                         periodic=True)
 #
 #u_out, v_out = solver(q, u_init, v_init)
-#show_vel_field(u_out, v_out)
+###raise
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/linear/u_big_new.npy", u_out)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/linear/v_big_new.npy", v_out)
 ##raise
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/u_big_new.npy", u_out)
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/v_big_new.npy", v_out)
-#raise
+#
+#show_vel_field(u_out, v_out)
 
 
 
 #u_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/u_big.npy")
 #v_data = jnp.load("/users/eetss/new_model_code/src/nm/bits_of_data/hessian_evecs_etc/shelf/v_big.npy")
 
-u_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/u_big_new.npy")
-v_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/stream/new/v_big_new.npy")
+u_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/u_big_new.npy")
+v_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/v_big_new.npy")
 speed_data = jnp.sqrt(u_data**2 + v_data**2 + 1e-10)
 
 #show_vel_field(u_data, v_data)
@@ -480,7 +481,6 @@ def make_hvp_soa_fct():
     
 
 #function for computing hvp from perturbation direction
-hessian_vector_product = make_hvp_ad_fct()
 #hessian_vector_product = make_hvp_soa_fct()
 
 
@@ -494,8 +494,9 @@ from scipy.sparse.linalg import LinearOperator, eigsh
 
 
 
-def compute_evecs():
+def compute_evecs_ad():
 
+    hessian_vector_product = make_hvp_ad_fct()
 
     n = nr * nc
     dtype = np.float64
@@ -519,8 +520,8 @@ def compute_evecs():
     eigvecs = V.reshape(nr, nc, k)
         
 
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evecs.npy", eigvecs)
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evals.npy", eigvals)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evecs.npy", eigvecs)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evals.npy", eigvals)
     
     #for i in range(k):
         #evec = eigvecs[...,i]
@@ -560,24 +561,58 @@ def compute_evecs():
         ##plt.show()
         #plt.close()
     
-    print("done")
+    print("DONE AD")
 
 #plt.plot(eigvals[::-1])
 #plt.show()
 
-#compute_evecs()
+def compute_evecs_sosa():
+
+    hessian_vector_product = make_hvp_soa_fct()
+
+    n = nr * nc
+    dtype = np.float64
+    
+    # JIT-compile and warm up once to avoid recompiles in the loop
+    #HVP_jit = jax.jit(lambda x: HVP(x.reshape(nr, nc)).reshape(-1))
+    #_ = HVP_jit(np.zeros(n))   # warmup
+    
+    H = LinearOperator(
+        shape=(n, n), dtype=dtype,
+        matvec=lambda x: np.array(hessian_vector_product(x))  # ensure ndarray to avoid device transfers
+    )
+    
+    # Largest algebraic eigenvalues (most positive)
+    k = 100  # or 1000
+    w, V = eigsh(H, k=k, which='LA', tol=1e-10, maxiter=1000)  # V[:, i] is eigenvector of w[i]
+    
+    # If you actually want largest magnitude (could pick big negative too), use which='LM'.
+    # Normalize or reshape as needed:
+    eigvals = w
+    eigvecs = V.reshape(nr, nc, k)
+        
+
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evecs.npy", eigvecs)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evals.npy", eigvals)
+
+    print("DONE SOSA")
 
 
+compute_evecs_ad()
+compute_evecs_sosa()
 
 
-soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/soa_evecs.npy")
-soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/soa_evals.npy")
-
-ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evecs.npy")
-ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/ad_evals.npy")
+raise
 
 
-k = 100
+soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evecs.npy")
+soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evals.npy")
+
+ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evecs.npy")
+ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evals.npy")
+
+
+k = 500
 
 evec_residuals = []
 
@@ -595,8 +630,11 @@ for evcs, evls, hvp in [[soa_evecs, soa_evals, make_hvp_soa_fct()],[ad_evecs, ad
 soa_ers = evec_residuals[:k]
 ad_ers = evec_residuals[k:]
 
-print(ad_ers)
-print(soa_ers)
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_eigen_errors.npy", jnp.array(soa_ers))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_eigen_errors.npy", jnp.array(ad_ers))
+
+#print(ad_ers)
+#print(soa_ers)
 
 
 

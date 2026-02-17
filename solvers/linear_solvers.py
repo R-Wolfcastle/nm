@@ -265,8 +265,8 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
         ksp.solve(b, x)
       
         
-        reason = ksp.getConvergedReason()
-        print("KSP converged reason:", reason)
+        #reason = ksp.getConvergedReason()
+        #print("KSP converged reason:", reason)
 
 
         x_jnp = jnp.array(x.getArray())
