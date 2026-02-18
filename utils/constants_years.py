@@ -32,3 +32,19 @@ EPSILON_VISC = 1e-2
 #actually matter so it's confusing and rage-inducing. But there we go...
 #EPSILON_VISC = 1e-7
 #EPSILON_VISC = 1e-13
+
+
+R      = 8.314               # Gas constant (J K^-1 kg^-1)
+Q_LOW  = 60_000              # Cool activation energy (less than -10C) (J mol)
+Q_HIGH = 152_000             # Warm activation energy (greater than -10C) (J mol)
+A_0    = 3.5e-25*31_557_600  # Rate factor A for ice at -10C (Pa^-3 a^-1)
+P_SCALING = 7.8e-8           # Temperature equiv increase with pressure (K Pa^-1)
+
+
+
+
+
+
+
+
+

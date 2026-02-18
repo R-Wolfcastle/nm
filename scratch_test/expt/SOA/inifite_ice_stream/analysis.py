@@ -7,11 +7,11 @@ import scipy.linalg as la
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator, FuncFormatter
 
-soa_evecs = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/soa_evecs.npy")
-soa_evals = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/soa_evals.npy")
+soa_evecs = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evecs.npy")
+soa_evals = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evals.npy")
 
-ad_evecs = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/ad_evecs.npy")
-ad_evals = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/ad_evals.npy")
+ad_evecs = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evecs.npy")
+ad_evals = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evals.npy")
 
 
 
@@ -21,8 +21,8 @@ n_evecs = ad_evals.size
 
 indices = jnp.arange(0,n_evecs,1)[::-1]
 
-evec_mats_soa = jnp.column_stack([soa_evecs[...,-(n_evecs+1)].flatten() for k in range(n_evecs)])
-evec_mats_ad  = jnp.column_stack([ad_evecs[...,-(n_evecs+1)].flatten() for k in range(n_evecs)])
+evec_mats_soa = jnp.column_stack([soa_evecs[...,-(k+1)].flatten() for k in range(n_evecs)])
+evec_mats_ad  = jnp.column_stack([ad_evecs[...,-(k+1)].flatten() for k in range(n_evecs)])
 
 def principal_angles(A, B):
     """
@@ -92,7 +92,7 @@ chordal = []             # sqrt(sum(sin(theta)^2))
 projection_dist = []     # sin(theta_max) = ||P_A - P_B||_2
 all_thetas = []
 
-for k in np.arange(9,n_evecs,10):
+for k in np.arange(1,n_evecs):
 #for k in range(1,3):
     print(k)
     #thetas = principal_angles_efficient(evec_mats_soa[:, :k], evec_mats_ad[:, :k])
@@ -107,12 +107,12 @@ for k in np.arange(9,n_evecs,10):
     projection_dist.append(sines[-1])  # equals sin(max angle)
 
 
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/theta_max.npy", jnp.array(theta_max))
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/theta_min.npy", jnp.array(theta_min))
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/theta_mean.npy", jnp.array(theta_mean))
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/grassmann_geodesic.npy", jnp.array(grassmann_geodesic))
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/chordal.npy", jnp.array(chordal))
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/projection_dist.npy", jnp.array(projection_dist))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/theta_max.npy", jnp.array(theta_max))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/theta_min.npy", jnp.array(theta_min))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/theta_mean.npy", jnp.array(theta_mean))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/grassmann_geodesic.npy", jnp.array(grassmann_geodesic))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/chordal.npy", jnp.array(chordal))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/projection_dist.npy", jnp.array(projection_dist))
 
 
 pad_val = jnp.nan
@@ -123,6 +123,6 @@ all_thetas_padded_array = jnp.full((n_evecs-1, n_evecs-1), pad_val, dtype=float)
 for i, a in enumerate(all_thetas):
     all_thetas_padded_array = all_thetas_padded_array.at[i, :a.size].set(a)
 
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/1000/all_thetas.npy", all_thetas_padded_array)
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/all_thetas.npy", all_thetas_padded_array)
 
 

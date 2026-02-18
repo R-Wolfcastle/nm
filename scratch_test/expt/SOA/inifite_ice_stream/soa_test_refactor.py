@@ -598,25 +598,31 @@ def compute_evecs_sosa():
     print("DONE SOSA")
 
 
-compute_evecs_ad()
-compute_evecs_sosa()
+#compute_evecs_ad()
+#compute_evecs_sosa()
 
 
-raise
+#raise
 
 
-soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evecs.npy")
-soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evals.npy")
+#soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evecs.npy")
+#soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evals.npy")
+#
+#ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evecs.npy")
+#ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evals.npy")
 
-ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evecs.npy")
-ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evals.npy")
+soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evecs.npy")
+soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evals.npy")
 
+ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evecs.npy")
+ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evals.npy")
 
 k = 500
 
 evec_residuals = []
 
 for evcs, evls, hvp in [[soa_evecs, soa_evals, make_hvp_soa_fct()],[ad_evecs, ad_evals, make_hvp_ad_fct()]]:
+#for evcs, evls, hvp in [[ad_evecs, ad_evals, make_hvp_ad_fct()]]:
     for i in range(k):
         evec = evcs[:,:,-(i+1)]
         eval_ = evls[-(i+1)]
@@ -629,9 +635,10 @@ for evcs, evls, hvp in [[soa_evecs, soa_evals, make_hvp_soa_fct()],[ad_evecs, ad
 
 soa_ers = evec_residuals[:k]
 ad_ers = evec_residuals[k:]
+#ad_ers = evec_residuals[:k]
 
 jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_eigen_errors.npy", jnp.array(soa_ers))
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_eigen_errors.npy", jnp.array(ad_ers))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_eigen_errors.npy", jnp.array(ad_ers))
 
 #print(ad_ers)
 #print(soa_ers)
