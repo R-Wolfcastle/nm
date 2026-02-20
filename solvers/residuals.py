@@ -55,6 +55,8 @@ def compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,\
         v = v_1d.reshape((ny, nx))
         h = h_1d.reshape((ny, nx))
 
+        ice_mask = jnp.where(h.copy()>0, 1, 0)
+
         s_gnd = h + b #b is globally defined
         s_flt = h * (1-c.RHO_I/c.RHO_W)
         s = jnp.maximum(s_gnd, s_flt)
@@ -88,7 +90,16 @@ def compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,\
         u, v = add_uv_ghost_cells(u, v)
         #don't need to exrapolate over cf as mu on those faces is set to zero
         #to prevent momentum flux out of the cell
-        #NOTE: THIS WAS TOTAL BULLSHIT!!!! YOU DEFINITELY NEEDED IT!!!.
+        #NOTE: THIS WAS TOTAL BULLSHIT!!!! YOU DEFINITELY NEEDED IT!!!
+        #You need it because it is used to calculate the gradients in the direction
+        #perp to the CF on the faces perp to the CF. If you don't include it, you get
+        #weird high-frequency noise in the gradients parallel to the CF.
+
+
+        #Ok, it's kind of nuts though. If I allow extrapolation over cf, then this is
+        #NO LONGER A LINEAR FUNCTION OF U.
+
+
 
         #get thickness on the faces
         h = add_s_ghost_cells(h)
@@ -100,10 +111,10 @@ def compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,\
         dudx_ns, dudy_ns = ns_gradient(u)
         dvdx_ns, dvdy_ns = ns_gradient(v)
 
-        #u = u[1:-1,1:-1]
-        #v = v[1:-1,1:-1]
-        #u = u*ice_mask
-        #v = v*ice_mask
+        u = u[1:-1,1:-1]
+        v = v[1:-1,1:-1]
+        u = u*ice_mask
+        v = v*ice_mask
 
 
         visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\

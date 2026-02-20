@@ -4,6 +4,7 @@ import sys
 #3rd party
 import jax
 import jax.numpy as jnp
+from jax.experimental.sparse import BCOO
 
 #local apps
 sys.path.insert(0,"/Users/eartsu/new_model/testing/nm/utils/")
@@ -462,6 +463,16 @@ def linear_extrapolate_over_cf_dynamic_thickness(cc_field, thk):
     return jnp.where(cf_adjacent_zero_ice_cells, u_extrap, cc_field)
 
 
+
+def cf_adjacent_cells_8_connected(ice_mask):
+    # Use your stack_safe_shifted to get all 8 neighbours of ice_mask
+    has_ice_1, _ = stack_safe_shifted(ice_mask)  # shape (8, ny, nx)
+    # any of the 8 directions has ice inside
+    any_neighbour_ice = jnp.any(has_ice_1, axis=0)
+    # CF-adjacent ocean = ocean & at least one neighbour is ice
+    return (~ice_mask) & any_neighbour_ice
+
+
 def linear_extrapolate_over_cf_function(thk):
     """
     Extrapolate into ocean cells adjacent to ice by linear extrapolation along
@@ -474,7 +485,8 @@ def linear_extrapolate_over_cf_function(thk):
     """
 
     ice_mask = (thk>0)
-    cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(thk>0)
+    #cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(ice_mask)
+    cf_adjacent_zero_ice_cells = cf_adjacent_cells_8_connected(ice_mask)
 
 
     has_1, has_2 = stack_safe_shifted(ice_mask)
@@ -484,20 +496,111 @@ def linear_extrapolate_over_cf_function(thk):
     # Pick best direction
     best_k = jnp.argmax(score, axis=0)
     
+    #import matplotlib.pyplot as plt
+    #
+    #plt.imshow(ice_mask, cmap="Grays")
+    #plt.imshow(best_k*cf_adjacent_zero_ice_cells, alpha=0.5)
+    #plt.show()
+    #raise
+    
     @jax.jit
     def linear_extrapolate_over_cf(cc_field):
 
-        cc_field_pad = jnp.pad(cc_field, ((2,2),(2,2)), constant_values=0)
-        
         u1, u2 = stack_safe_shifted(cc_field)
+  
+        #slicing by best_k, but remember best_k is same dim as thk etc
+        u1_choice = jnp.take_along_axis(u1, best_k[None, ...], axis=0)[0]
+        u2_choice = jnp.take_along_axis(u2, best_k[None, ...], axis=0)[0]
+
+
+        cc_field_extrapolated = cc_field + cf_adjacent_zero_ice_cells * (2*u1_choice - u2_choice)
+        
+        return cc_field_extrapolated
+
+        ### Extrapolate: if has_2 then 2*u1 - u2 else u1
+        #u_extrap_dirs = jnp.where(has_2, 2.0*u1 - u2, u1)
+
+        #u_extrap = jnp.take_along_axis(u_extrap_dirs, best_k[None, ...], axis=0)[0]
     
-        # Extrapolate: if has_2 then 2*u1 - u2 else u1
-        u_extrap_dirs = jnp.where(has_2, 2.0*u1 - u2, u1)
-        u_extrap = jnp.take_along_axis(u_extrap_dirs, best_k[None, ...], axis=0)[0]
-    
-        return jnp.where(cf_adjacent_zero_ice_cells, u_extrap, cc_field)
+        #return jnp.where(cf_adjacent_zero_ice_cells, u_extrap, cc_field)
+
+
     return linear_extrapolate_over_cf
 
+
+
+
+def build_extrapolation_gather_coo(cf_adjacent_zero_ice_cells,
+                                   best_k, ny, nx):
+    """
+    Build COO data for a sparse gather matrix G of shape (N, N)
+    such that:
+        u_extrap = G @ u_flat
+    where each row has exactly one nonzero entry:
+    - identity for interior cells
+    - gather-from-donor for CF-adjacent cells
+    """
+
+    N  = ny * nx
+    ii = jnp.arange(ny)[:, None]   # shape (ny,1)
+    jj = jnp.arange(nx)[None, :]   # shape (1,nx)
+
+    # Default: identity
+    src_i = ii
+    src_j = jj
+
+    # For CF-adjacent ocean cells: redirect to donor
+    di = DIRS[best_k, 0]   # shape (ny,nx)
+    dj = DIRS[best_k, 1]
+
+    donor_i = jnp.clip(ii + di, 0, ny-1)
+    donor_j = jnp.clip(jj + dj, 0, nx-1)
+
+    # Apply donor only on CF-adjacent cells
+    src_i = jnp.where(cf_adjacent_zero_ice_cells, donor_i, src_i)
+    src_j = jnp.where(cf_adjacent_zero_ice_cells, donor_j, src_j)
+
+    # Flatten to COO
+    rows = jnp.arange(N, dtype=jnp.int32)
+    cols = (src_i * nx + src_j).reshape(-1).astype(jnp.int32)
+    data = jnp.ones((N,), dtype=jnp.float64)
+
+    return rows, cols, data
+
+
+def linear_linearly_extrapolate_over_cf_function(thk):
+    """
+    Build a *linear* extrapolation operator G such that
+        u_extrap = G @ u_flat
+    replacing the nonlinear JAX-based extrapolation.
+    """
+    ny, nx = thk.shape
+
+    ice_mask = (thk > 0)
+    cf_adjacent_zero_ice_cells = (~ice_mask) & binary_dilation(ice_mask)
+
+    has_1, has_2 = stack_safe_shifted(ice_mask)
+    score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+    best_k = jnp.argmax(score, axis=0)
+
+    # Build COO for the sparse gather matrix
+    rows, cols, data = build_extrapolation_gather_coo(
+        cf_adjacent_zero_ice_cells,
+        best_k, ny, nx
+    )
+
+    # Shape of the sparse matrix
+    N = ny * nx
+    G = BCOO((data, jnp.stack([rows, cols], axis=0)), shape=(N, N), n_sparse=2)
+
+    @jax.jit
+    def linear_extrapolate_over_cf(cc_field):
+        # cc_field is (ny,nx)
+        u_flat = cc_field.reshape(-1)
+        u_extr_flat = G @ u_flat
+        return u_extr_flat.reshape(ny, nx)
+
+    return linear_extrapolate_over_cf
 
 
 #test_thk = jnp.ones((10,10))
@@ -705,6 +808,7 @@ def beta_function(b, mode="linear"):
 def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
                           add_mucoef_ghost_cells,
                           interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0):
+    
     def fc_viscosity(q, u, v):
         mucoef = mucoef_0*jnp.exp(q)
         mucoef = add_mucoef_ghost_cells(mucoef)
@@ -730,9 +834,9 @@ def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
         v = v*ice_mask
         
         #calculate face-centred viscosity:
-        mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+        mu_ew = 1.0 + c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
                     0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-        mu_ns = c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+        mu_ns = 1.0 + c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
                     0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         #to account for calving front boundary condition, set effective viscosities

@@ -1371,6 +1371,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
     #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
     #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
+    #extrapolate_over_cf                        = linear_linearly_extrapolate_over_cf_function(ice_mask)
     
 
     viscosity_fct = fc_viscosity_function_new(ny, nx, dy, dx, 
@@ -1457,10 +1458,10 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
 
     @custom_vjp
     def solver(q, p, u_trial, v_trial, h):
-        #plt.imshow(q, vmin=-2.5, vmax=2.5, cmap="RdBu")
+        #plt.imshow(q, vmin=-2, vmax=0.5, cmap="RdBu")
         #plt.colorbar()
         #plt.show()
-        #plt.imshow(p, vmin=-2.5, vmax=2.5, cmap="RdBu")
+        #plt.imshow(p, vmin=-4, vmax=4, cmap="RdBu")
         #plt.colorbar()
         #plt.show()
         
@@ -1483,6 +1484,22 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
         beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
 
         for i in range(n_pic_iterations):
+            #mu_ew = 2*mu_ew
+            #mu_ns = 2*mu_ns
+
+            #plt.imshow(jnp.sqrt(u_1d**2 + v_1d**2 + 1).reshape((ny,nx)))
+            #plt.colorbar()
+            #plt.show()
+
+            #plt.imshow(jnp.log10(mu_ew[:,1:].reshape((ny,nx))[40:-5, 20:-30]))
+            #plt.colorbar()
+            #plt.show()
+            #plt.imshow(jnp.log10(beta.reshape((ny,nx))[40:-5, 20:-30]))
+            #plt.colorbar()
+            #plt.show()
+
+            #h_1d = jnp.where(jnp.sqrt(u_1d**2 + v_1d**2 + 1)<3e4, h_1d, 0)
+            #h = h_1d.reshape((ny,nx))
 
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_linear_ssa,
                                                  (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta)
@@ -1500,6 +1517,13 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
             
             du = la_solver(nz_jac_values, rhs)
 
+            #plt.imshow(h>0, cmap="Grays")
+            #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=6)
+            #plt.colorbar()
+            #plt.show()
+
+            print("du norm: {}".format(jnp.max(jnp.abs(du))))
+
             u_1d = (u_1d + omega*du[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + omega*du[(ny*nx):]) * ice_mask
             
@@ -1507,6 +1531,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
             beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
             
             rhs_new = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
+            
             if i==0:
                 initial_residual = jnp.max(rhs)
             print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
@@ -1519,6 +1544,8 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
 
 
         for i in range(n_newt_iterations):
+            #h_1d = jnp.where(jnp.sqrt(u_1d**2 + v_1d**2 + 1)<3e4, h_1d, 0)
+            #h = h_1d.reshape((ny,nx))
 
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_nonlinear_ssa,
                                                              (u_1d, v_1d, q, p, h_1d)
