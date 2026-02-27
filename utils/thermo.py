@@ -18,6 +18,9 @@ def rate_factor(T, P=0):
 
     return jnp.minimum(A_cold, A_warm)
 
+@jax.jit
+def B_from_T(T, P=0):
+    return 0.5 * (rate_factor(T, P)**(-1/c.GLEN_N))
 
 @jax.jit
 def rate_factor_ctlw(T, LW=0, P=0):
@@ -26,8 +29,8 @@ def rate_factor_ctlw(T, LW=0, P=0):
     T_standard_recip = 1/(263.15 + c.P_SCALING*P)
     T_h_recip        = 1/(T + c.P_SCALING*P)
 
-    A_cold = c.A_0 * jnp.exp( -( c.Q_LOW/c.R) * (T_h_recip - T_standard_recip) )  
-    A_warm = c.A_0 * jnp.exp( -(c.Q_HIGH/c.R) * (T_h_recip - T_standard_recip) )
+    A_cold = c.A_0 * jnp.exp( ( c.Q_LOW/c.R) * (T_h_recip - T_standard_recip) )  
+    A_warm = c.A_0 * jnp.exp( (c.Q_HIGH/c.R) * (T_h_recip - T_standard_recip) )
 
     A_dry = jnp.minimum(A_cold, A_warm)
 

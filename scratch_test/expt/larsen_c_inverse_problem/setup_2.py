@@ -342,7 +342,7 @@ def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
     misfit_term = jnp.sum(mask.reshape(-1) * \
                           (speed_mod.reshape(-1) - speed_obs.reshape(-1))**2
                           #)/(nr*nc*100)
-                         )/(nr*nc*1000)
+                         )/(nr*nc*10_000)
     #NOTE NOTE NOTE NOTE NOTE THE 1000 not 100 as it was in the not-so-low-res version!
 
 
@@ -350,14 +350,14 @@ def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
     phi = mucoef_0*jnp.exp(q.reshape((nr, nc)))
     dphi_dx, dphi_dy = gradient_function(phi)
 
-    phi_regn_term = 1e4 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
+    phi_regn_term = 1e5 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
                                 (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2)
                               )
     
     C = C_0*jnp.exp(p.reshape((nr, nc)))
     dC_dx, dC_dy = gradient_function(C)
 
-    C_regn_term = 1e8 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
+    C_regn_term = 1e0 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
                                 (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2)
                               )
 
@@ -371,6 +371,30 @@ def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
     #return phi_regn_term + C_regn_term
 
 
+def lbfgsb_function_new(misfit_functional, misfit_fctl_args=(), iterations=50):
+    def reduced_functional(qp):
+        q = qp[:(nr*nc)]
+        p = qp[(nr*nc):]
+        u_out, v_out = solver(q.reshape(nr, nc), p.reshape(nr, nc), u_init, v_init, thk)
+        return misfit_functional(u_out, v_out, q, p, *misfit_fctl_args)
+
+    get_grad = jax.grad(reduced_functional)
+
+    def lbfgsb(initial_guess):
+        print("starting opt")
+        
+        #need the callback to give intermediate vals etc. will sort later.
+        result = scinimize(reduced_functional,
+                           initial_guess,
+                           jac = lambda x: get_grad(x),
+                           method="L-BFGS-B",
+                           bounds= [(-2, 0.5)] * int(initial_guess.size/2) + \
+                                   [(-4, 4)] * int(initial_guess.size/2),
+                           options={"maxiter": iterations} #Note: disp is depricated
+                          )
+
+        return result.x
+    return lbfgsb
 
 def lbfgsb_function(misfit_functional, misfit_fctl_args=(), iterations=50):
     def reduced_functional(qp):
@@ -493,14 +517,14 @@ qp_initial_guess = jnp.zeros((2*nr*nc,))
 ##raise
 
 
-lbfgsb_iterator = lbfgsb_function(regularised_misfit, (uo, uc), iterations=20)
+lbfgsb_iterator = lbfgsb_function_new(regularised_misfit, (uo, uc), iterations=20)
 
 
 
 
 
 qp_out = lbfgsb_iterator(qp_initial_guess)
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/qp_out_large_10its_1.npy", qp_out)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/qp_out_large_10its_1.npy", qp_out)
 #qp_out = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/qp_out_large_10its_1.npy")
 
 q_out = qp_out[:(nr*nc)].reshape((nr,nc))

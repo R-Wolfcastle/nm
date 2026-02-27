@@ -9,6 +9,7 @@ from jax.experimental.sparse import BCOO
 #local apps
 sys.path.insert(0,"/Users/eartsu/new_model/testing/nm/utils/")
 import constants_years as c
+from thermo import B_from_T
 
 DIRS = jnp.array([
     [-1,  0],  # N
@@ -343,6 +344,24 @@ def stack_safe_shifted(cc_field):
 
     return u1, u2
 
+def stack_safe_shifted_single_facing(cc_field):
+    cc_field_pad = jnp.pad(cc_field, ((1, 1), (1, 1)), constant_values=0)
+    
+    # 1-cell shifts (cardinal + diagonals)
+    u1 = jnp.stack([
+        cc_field_pad[:-2, 1:-1],  # up 1
+        cc_field_pad[2:,  1:-1],  # down 1
+        cc_field_pad[1:-1, :-2],  # left 1
+        cc_field_pad[1:-1,  2:],  # right 1
+    ])
+
+    return u1
+
+
+#def corner_ice_free_cells(ice_mask):
+#    stack_shift = stack_safe_shifted_single_uniaxial(ice_mask)
+#    return (jnp.sum(stack_shift, axis=0)>0)
+
 
 def nn_extrapolate_over_cf_function(thk):
     
@@ -473,6 +492,121 @@ def cf_adjacent_cells_8_connected(ice_mask):
     return (~ice_mask) & any_neighbour_ice
 
 
+def mean_linear_extrapolate_over_cf_function(thk):
+    """
+    Extrapolate into ocean cells adjacent to ice by linear extrapolation along
+    the direction with the longest contiguous ice run.
+
+    u1 is value in last ice filled cell
+    u2 is value one cell inside that
+
+    u_extrp = 2*u1 - u2
+    """
+
+    ice_mask = (thk>0)
+    #cf_adjacent_zero_ice_cells = ~ice_mask & binary_dilation(ice_mask)
+    cf_adjacent_zero_ice_cells = cf_adjacent_cells_8_connected(ice_mask)
+
+
+    has_1, has_2 = stack_safe_shifted(ice_mask)
+    # Score = number of available ice cells inward (prefer directions with both u1 and u2)
+    score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+    
+    # Pick best direction
+    possible_directions = (score==2)
+    n = jnp.count_nonzero(possible_directions, axis=0) + 1e-5
+    
+    
+    @jax.jit
+    def linear_extrapolate_over_cf(cc_field):
+
+        u1, u2 = stack_safe_shifted(cc_field)
+        
+        vals = (2.0 * u1 - u2)*possible_directions
+
+        mean_val = vals.sum(axis=0) / n
+
+        cc_field_extrapolated = cc_field + cf_adjacent_zero_ice_cells * mean_val
+        
+        return cc_field_extrapolated
+
+        ### Extrapolate: if has_2 then 2*u1 - u2 else u1
+        #u_extrap_dirs = jnp.where(has_2, 2.0*u1 - u2, u1)
+
+        #u_extrap = jnp.take_along_axis(u_extrap_dirs, best_k[None, ...], axis=0)[0]
+    
+        #return jnp.where(cf_adjacent_zero_ice_cells, u_extrap, cc_field)
+
+
+    return linear_extrapolate_over_cf
+
+
+
+
+def linear_extrapolate_over_cf_function_cornersafe(thk):
+    """
+    Extrapolate into ocean cells adjacent to ice by linear extrapolation along
+    the direction with the longest contiguous ice run.
+
+    If "corner", then take mean of neigbours
+    """
+
+    ice_mask = (thk>0.1)
+    
+    cf_adjacent_zero_ice_cells = cf_adjacent_cells_8_connected(ice_mask)
+    
+    has_1_facing = stack_safe_shifted_single_facing(ice_mask)
+    at_least_2_facing = (jnp.sum(has_1_facing, axis=0)>1)
+    
+    cf_adjacent_flat = cf_adjacent_zero_ice_cells & ~at_least_2_facing
+    cf_adjacent_corners = cf_adjacent_zero_ice_cells & at_least_2_facing
+
+    has_1, has_2 = stack_safe_shifted(ice_mask)
+    score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+    # Pick best direction
+    best_k = jnp.argmax(score, axis=0)
+   
+    
+
+
+    #import matplotlib.pyplot as plt
+    #
+    ##plt.imshow(cf_adjacent_corners)
+    #plt.imshow(cf_adjacent_flat)
+    ##plt.imshow(best_k*cf_adjacent_zero_ice_cells, alpha=0.5)
+    #plt.show()
+    #raise
+    
+    @jax.jit
+    def linear_extrapolate_over_cf(cc_field):
+
+        cc_field = cc_field*ice_mask
+
+        u1, u2 = stack_safe_shifted(cc_field)
+        u1_uni = stack_safe_shifted_single_facing(cc_field)
+ 
+        #NEW VERSION
+        #slicing by best_k, but remember best_k is same dim as thk etc
+        u1_choice = jnp.take_along_axis(u1, best_k[None, ...], axis=0)[0]
+        u2_choice = jnp.take_along_axis(u2, best_k[None, ...], axis=0)[0]
+
+        #cc_field_extrapolated = cc_field\
+        #                                 + cf_adjacent_flat*\
+        #                                        (2*u1_choice - u2_choice)\
+        #                                 + cf_adjacent_corners*\
+        #            jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
+        cc_field_extrapolated = cc_field\
+                                         + cf_adjacent_flat*\
+                                                (u1_choice)\
+                                         + cf_adjacent_corners*\
+                    jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
+        
+        return cc_field_extrapolated
+
+    return linear_extrapolate_over_cf
+
+
+
 def linear_extrapolate_over_cf_function(thk):
     """
     Extrapolate into ocean cells adjacent to ice by linear extrapolation along
@@ -507,16 +641,18 @@ def linear_extrapolate_over_cf_function(thk):
     def linear_extrapolate_over_cf(cc_field):
 
         u1, u2 = stack_safe_shifted(cc_field)
-  
+ 
+        #NEW VERSION
         #slicing by best_k, but remember best_k is same dim as thk etc
         u1_choice = jnp.take_along_axis(u1, best_k[None, ...], axis=0)[0]
         u2_choice = jnp.take_along_axis(u2, best_k[None, ...], axis=0)[0]
-
 
         cc_field_extrapolated = cc_field + cf_adjacent_zero_ice_cells * (2*u1_choice - u2_choice)
         
         return cc_field_extrapolated
 
+
+        ##OLD VERSION
         ### Extrapolate: if has_2 then 2*u1 - u2 else u1
         #u_extrap_dirs = jnp.where(has_2, 2.0*u1 - u2, u1)
 
@@ -804,6 +940,55 @@ def beta_function(b, mode="linear"):
 
     return jax.jit(beta)
 
+
+def fc_viscosity_function_new_givenT(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+                          add_s_ghost_cells,
+                          interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0,
+                                     temp_cc):
+
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+    
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        u = u[1:-1,1:-1]
+        v = v[1:-1,1:-1]
+        u = u*ice_mask
+        v = v*ice_mask
+        
+        #calculate face-centred viscosity:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
 
 def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
                           add_mucoef_ghost_cells,
