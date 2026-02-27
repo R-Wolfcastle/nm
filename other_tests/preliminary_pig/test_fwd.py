@@ -216,8 +216,8 @@ def setup_domain(resolution, tlxy, brxy):
 #                                        resolution)
 
     phi, C, topg, thk = (bed_r[var_].values for var_ in ["mucoef",
-                                                         "c_third",
-                                                         #"c_one",
+                                                         #"c_third",
+                                                         "c_one",
                                                          "topg", 
                                                          "thk"])
 
@@ -370,9 +370,9 @@ def run_fwd():
                                                              n_pic_iterations,
                                                              n_newt_iterations,
                                                              phi, C,
-                                                             sliding="basic_weertman",
+                                                             sliding="linear",
+                                                             #sliding="basic_weertman",
                                                              temperature_field=temp)
-                                                             #sliding="linear")
     
     u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
     
@@ -384,7 +384,7 @@ def run_fwd():
     show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=4500)
 
 
-run_fwd()
+#run_fwd()
 
 
 
@@ -448,7 +448,7 @@ def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
     #alpha_C   = 1e3  (for me, that would be 1e3 /10_000 ~ 1e-1)
 
     #maybe 1e4 a good shout?
-    phi_regn_term = 5e5 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
+    phi_regn_term = 8e6 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
                                 (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2) *\
                                 (1-border_cells_reduced_flat)
                               )/(nr*nc)
@@ -458,7 +458,7 @@ def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
     C = C_0*jnp.exp(p.reshape((nr, nc)))
     dC_dx, dC_dy = gradient_function(C)
 
-    C_regn_term = 1e-2 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
+    C_regn_term = 2e1 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
                                 (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2) *\
                                 (1-border_cells_reduced_flat)
                               )/(nr*nc)
@@ -494,7 +494,8 @@ def lbfgsb_function(misfit_functional, misfit_fctl_args=(), iterations=50):
                            method="L-BFGS-B", 
                            bounds= [(-2, 0.5)] * int(initial_guess.size/2) + \
                                    [(-4, 4)] * int(initial_guess.size/2), 
-                           options={"maxiter": iterations, "maxls": 4} #Note: disp is depricated
+                           #options={"maxiter": iterations, "maxls": 10} #Note: disp is depricated
+                           options={"maxiter": iterations}
                           )
 
         return result.x
@@ -520,8 +521,8 @@ def lbfgsb_function(misfit_functional, misfit_fctl_args=(), iterations=50):
 
 
 uo, uc = setup_comparison_data(res, tlxy, brxy)
-uc = binary_erosion(uc)
-uc = binary_erosion(uc)
+#uc = binary_erosion(uc)
+#uc = binary_erosion(uc)
 
 
 
@@ -542,7 +543,7 @@ key = jax.random.PRNGKey(0)
 #plt.colorbar()
 #plt.show()
 
-mucoef_0 = phi.copy()
+mucoef_0 = jnp.ones_like(phi)
 
 C_0 = C.copy()
 
@@ -558,44 +559,56 @@ solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
                                                          topg, ice_mask,
                                                          n_pic_iterations,
                                                          n_newt_iterations,
-                                                         phi, C,
-                                                         sliding="basic_weertman",
+                                                         mucoef_0, C,
+                                                         #sliding="basic_weertman",
+                                                         sliding="linear",
                                                          temperature_field=temp)
 
 
 q_initial_guess = jnp.zeros_like(thk).reshape(-1)
+#q_initial_guess = jnp.log(phi).reshape(-1)
 p_initial_guess = jnp.zeros_like(thk).reshape(-1)
 
 qp_initial_guess = jnp.zeros((2*nr*nc,))
 
-lbfgsb_iterator = lbfgsb_function(regularised_misfit, (uo, uc), iterations=20)
-qp_out = lbfgsb_iterator(qp_initial_guess)
+#lbfgsb_iterator = lbfgsb_function(regularised_misfit, (uo, uc), iterations=40)
+#qp_out = lbfgsb_iterator(qp_initial_guess)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/PIGGING_TEA_BREAK/qp_out_1km_40its20ls_uniformIG_8e6_2e1.npy", qp_out)
+
+qp_out = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/PIGGING_TEA_BREAK/qp_out_1km_40its20ls_uniformIG_8e6_2e1.npy")
 
 
-
-
-
-
-
+#plt.imshow(uo, vmin=0, vmax=4500, cmap="RdYlBu_r")
+#plt.colorbar()
+#plt.show()
 
 q_out = qp_out[:(nr*nc)].reshape((nr,nc))
 p_out = qp_out[(nr*nc):].reshape((nr,nc))
 
-plt.imshow(p_out)
+#plt.imshow(p_out, vmin=-4, vmax=4, cmap="RdBu_r")
+#plt.colorbar()
+#plt.show()
+#
+plt.imshow(q_out, vmin=-2, vmax=2, cmap="RdBu")
 plt.colorbar()
 plt.show()
-
-plt.imshow(q_out, vmin=-1, vmax=1, cmap="RdBu")
-plt.colorbar()
-plt.show()
-
-phi_out = mucoef_0*jnp.exp(q_out)
-plt.imshow(phi_out, vmin=0, vmax=1, cmap="cubehelix")
-plt.colorbar()
-plt.show()
+#
+#plt.imshow(q_out-q_initial_guess.reshape((nr,nc)), vmin=-1, vmax=1, cmap="RdBu")
+#plt.colorbar()
+#plt.show()
+#
+#plt.imshow(mucoef_0, vmin=0, vmax=1, cmap="cubehelix")
+#plt.colorbar()
+#plt.show()
+#
+#
+#phi_out = mucoef_0*jnp.exp(q_out)
+#plt.imshow(phi_out, vmin=0, vmax=1, cmap="cubehelix")
+#plt.colorbar()
+#plt.show()
 
 C_out = C_0*jnp.exp(p_out)
-plt.imshow(C_out, cmap="magma")
+plt.imshow(jnp.log(C_out), cmap="magma", vmin=0, vmax=8)
 plt.colorbar()
 plt.show()
 

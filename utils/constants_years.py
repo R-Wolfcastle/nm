@@ -13,7 +13,7 @@ RHO_I = 917.0                  # Density of ice (kg/m^3)
 RHO_W = 1028.0                 # Density of seawater (kg/m^3)
 
 # Ice rheology (Glen's Flow Law parameters)
-GLEN_N = 3.0                   # Glen's flow law exponent (dimensionless)
+GLEN_N = 4.0                   # Glen's flow law exponent (dimensionless)
 A_TEMPERATE = 1.0e-24*31_557_600          # Rate factor A for temperate ice (Pa^-3 a^-1)
 A_COLD = 3.5e-25*31_557_600               # Rate factor A for cold ice (Pa^-3 a^-1)
 #A_COLD = 4.4*3.5e-25*31_557_600               # Rate factor A for cold ice (Pa^-3 a^-1)
