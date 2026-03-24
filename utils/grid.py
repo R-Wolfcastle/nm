@@ -941,6 +941,62 @@ def beta_function(b, mode="linear"):
     return jax.jit(beta)
 
 
+def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
+                               extrp_over_cf, add_uv_ghost_cells,
+                               add_s_ghost_cells,
+                               cc_gradient, mucoef_0,
+                               temp_cc):
+
+    B_cc = B_from_T(temp_cc)
+
+    def randd_stress(q, u, v, h):
+        mucoef = mucoef_0*jnp.exp(q)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
+
+        dudx, dudy = cc_gradient(u)
+        dvdx, dvdy = cc_gradient(v)
+
+        #calculate face-centred viscosity:
+        mu = B_cc * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
+                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        #mu = B_cc * (dudx**2 + dvdy**2 + dudx*dvdy +\
+        #            0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+
+        tau_xx = 2 * mu * dudx
+        tau_yy = 2 * mu * dvdy
+        tau_xy = mu * (dudy + dvdx)
+
+        visc_xx = (2*tau_xx + tau_yy)
+        visc_yy = (2*tau_yy + tau_xx)
+        visc_xy = tau_xy.copy()
+
+
+        r_stress = jnp.stack([
+            jnp.stack([visc_xx, visc_xy], axis=-1),
+            jnp.stack([visc_xy, visc_yy], axis=-1)
+        ], axis=-2)
+
+        d_stress = jnp.stack([
+            jnp.stack([tau_xx, tau_xy], axis=-1),
+            jnp.stack([tau_xy, tau_yy], axis=-1)
+        ], axis=-2)
+
+        return r_stress, d_stress
+
+
+    return jax.jit(randd_stress)
+
+
+
+
 def fc_viscosity_function_new_givenT(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
                           add_s_ghost_cells,
                           interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0,

@@ -234,6 +234,59 @@ def compute_linear_ssa_residuals_function_fc_visc_new_TEMP(ny, nx, dy, dx, b,\
 
     return jax.jit(compute_linear_ssa_residuals)
 
+def compute_linear_ssa_residuals_function_fc_visc_nl_fudge(ny, nx, dy, dx, \
+                                          h_1d, beta,\
+                                          interp_cc_to_fc,
+                                          ew_gradient,\
+                                          ns_gradient,\
+                                          cc_gradient,\
+                                          add_uv_ghost_cells,\
+                                          add_s_ghost_cells,\
+                                          extrapolate_over_cf):
+
+    def compute_linear_ssa_residuals(u_1d, v_1d, mu_ew, mu_ns, cc_rhs):
+
+        cc_rhs_x = cc_rhs[:nx*ny].reshape((ny, nx))
+        cc_rhs_y = cc_rhs[nx*ny:].reshape((ny, nx))
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        #volume_term
+        volume_x = - ( beta * u + cc_rhs_x ) * dx * dy
+        volume_y = - ( beta * v + cc_rhs_y ) * dy * dx
+
+        #momentum_term
+        u, v = add_uv_ghost_cells(u, v)
+
+        #get thickness on the faces
+        h = add_s_ghost_cells(h)
+        h_ew, h_ns = interp_cc_to_fc(h)
+        
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+        
+        x_mom_residual = (1/c.GLEN_N) * visc_x + volume_x
+        y_mom_residual = (1/c.GLEN_N) * visc_y + volume_y
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_linear_ssa_residuals)
+
 def compute_linear_ssa_residuals_function_fc_visc(ny, nx, dy, dx, \
                                           h_1d, beta,\
                                           interp_cc_to_fc,

@@ -20,7 +20,8 @@ from grid import *
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers")
 from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp
 from nonlinear_solvers import (forward_adjoint_and_second_order_adjoint_solvers,
-        make_newton_velocity_solver_function_custom_vjp)
+                               forward_adjoint_and_second_order_adjoint_solvers_nl_fudge,
+                               make_newton_velocity_solver_function_custom_vjp)
 
 #3rd party
 from petsc4py import PETSc
@@ -232,7 +233,7 @@ def calculate_gradient_via_ad():
 #raise
 
 def calculate_hvp_via_soa():
-    fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
+    fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers_nl_fudge(
                        nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0, periodic=True
                                                                                              )
     
@@ -248,18 +249,18 @@ def calculate_hvp_via_soa():
                                       functional)
     
     
-    plt.imshow(gradient[:,:])
-    plt.title("gradient via adjoint")
-    plt.colorbar()
-    plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
-    plt.show()
+    #plt.imshow(gradient[:,:])
+    #plt.title("gradient via adjoint")
+    #plt.colorbar()
+    #plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
+    #plt.show()
 
     print("solving second-order adjoint problem:")
     pert_dir = gradient.copy()/(jnp.linalg.norm(gradient)*10)
     #pert_dir = pert_dir.at[:,-4:].set(0)
     hvp = soa_solver(q, u_out, v_out, lx, ly, pert_dir, functional)
     
-    plt.imshow(hvp[:,:], vmin=-1, vmax=1, cmap="twilight_shifted")
+    plt.imshow(hvp[:,:], vmin=-5, vmax=5, cmap="twilight_shifted")
     plt.title("hvp via soa")
     plt.colorbar()
     plt.imshow(jnp.where(C>1e10, 1, jnp.nan), cmap="Grays", alpha=0.5)
@@ -376,11 +377,11 @@ def calculate_hvp_via_ad():
 
 
 
-calculate_hvp_via_ad()
-calculate_hvp_via_soa()
-
-
-raise
+#calculate_hvp_via_ad()
+#calculate_hvp_via_soa()
+#
+#
+#raise
 
 
 
@@ -457,7 +458,7 @@ def make_hvp_ad_fct():
 
 
 def make_hvp_soa_fct():
-    fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers(
+    fwd_solver, adjoint_solver, soa_solver = forward_adjoint_and_second_order_adjoint_solvers_nl_fudge(
                     nr, nc, delta_y, delta_x, thk, b, C, n_iterations, mucoef_0, periodic=True
                                                                                              )
     
@@ -511,7 +512,7 @@ def compute_evecs_ad():
     )
     
     # Largest algebraic eigenvalues (most positive)
-    k = 100  # or 1000
+    k = 500  # or 1000
     w, V = eigsh(H, k=k, which='LA', tol=1e-10, maxiter=1000)  # V[:, i] is eigenvector of w[i]
     
     # If you actually want largest magnitude (could pick big negative too), use which='LM'.
@@ -520,8 +521,8 @@ def compute_evecs_ad():
     eigvecs = V.reshape(nr, nc, k)
         
 
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evecs.npy", eigvecs)
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evals.npy", eigvals)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/ad_evecs.npy", eigvecs)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/ad_evals.npy", eigvals)
     
     #for i in range(k):
         #evec = eigvecs[...,i]
@@ -583,7 +584,7 @@ def compute_evecs_sosa():
     )
     
     # Largest algebraic eigenvalues (most positive)
-    k = 100  # or 1000
+    k = 500  # or 1000
     w, V = eigsh(H, k=k, which='LA', tol=1e-10, maxiter=1000)  # V[:, i] is eigenvector of w[i]
     
     # If you actually want largest magnitude (could pick big negative too), use which='LM'.
@@ -592,30 +593,30 @@ def compute_evecs_sosa():
     eigvecs = V.reshape(nr, nc, k)
         
 
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evecs.npy", eigvecs)
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evals.npy", eigvals)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/soa_evecs.npy", eigvecs)
+    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/soa_evals.npy", eigvals)
 
     print("DONE SOSA")
 
 
 #compute_evecs_ad()
 #compute_evecs_sosa()
-
-
+#
+#
 #raise
 
 
-#soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evecs.npy")
-#soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/soa_evals.npy")
+soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/soa_evecs.npy")
+soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/soa_evals.npy")
+
+ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/ad_evecs.npy")
+ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/ad_evals.npy")
+
+#soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evecs.npy")
+#soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evals.npy")
 #
-#ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evecs.npy")
-#ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/whys_it_gone_wrong/stream/100/ad_evals.npy")
-
-soa_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evecs.npy")
-soa_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_evals.npy")
-
-ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evecs.npy")
-ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evals.npy")
+#ad_evecs = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evecs.npy")
+#ad_evals = np.load("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_evals.npy")
 
 k = 500
 
@@ -637,8 +638,8 @@ soa_ers = evec_residuals[:k]
 ad_ers = evec_residuals[k:]
 #ad_ers = evec_residuals[:k]
 
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/soa_eigen_errors.npy", jnp.array(soa_ers))
-jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/production/stream/more/ad_eigen_errors.npy", jnp.array(ad_ers))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/soa_eigen_errors.npy", jnp.array(soa_ers))
+jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/hessian_evecs_etc/nl_fudging/stream/500/ad_eigen_errors.npy", jnp.array(ad_ers))
 
 #print(ad_ers)
 #print(soa_ers)

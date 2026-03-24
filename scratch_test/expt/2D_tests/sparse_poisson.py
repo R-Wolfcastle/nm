@@ -5,7 +5,7 @@ import time
 
 
 #local apps
-sys.path.insert(1, "../../../utils/")
+sys.path.insert(1, "/users/eartsu/new_model/testing/nm/utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new
@@ -72,6 +72,30 @@ def make_residual_function_advectiony(C, f):
 
     return residual_function
 
+
+def make_residual_function_face_centred_boundary(C, f):
+    ny, nx = C.shape
+
+    def residual_function(u_1d):
+
+        u_2d = u_1d.reshape((ny, nx))
+
+        x_flux_diffs = jnp.zeros((ny, nx))
+        y_flux_diffs = jnp.zeros((ny, nx))
+
+        x_flux_diffs = x_flux_diffs.at[:, 1:-1].set((dy/dx) * (u_2d[:,2:] + u_2d[:,:-2] - 2*u_2d[:,1:-1]))
+        x_flux_diffs = x_flux_diffs.at[:, 0].set((dy/dx) * (u_2d[:, 1] - 3*u_2d[:, 0]))
+        x_flux_diffs = x_flux_diffs.at[:,-1].set((dy/dx) * (u_2d[:,-2] - 3*u_2d[:,-1]))
+
+        y_flux_diffs = y_flux_diffs.at[1:-1, :].set((dx/dy) * (u_2d[2:,:] + u_2d[:-2,:] - 2*u_2d[1:-1,:]))
+        y_flux_diffs = y_flux_diffs.at[0, :].set((dx/dy) * (u_2d[1, :] - 3*u_2d[0, :]))
+        y_flux_diffs = y_flux_diffs.at[-1,:].set((dx/dy) * (u_2d[-2,:] - 3*u_2d[-1,:]))
+
+        volume_term = (-C*u_2d + f)*dx*dy
+
+        return (-x_flux_diffs - y_flux_diffs - volume_term).reshape(-1)
+
+    return residual_function
 
 def make_residual_function(C, f):
     ny, nx = C.shape
@@ -175,7 +199,7 @@ def solve_petsc_sparse(values, coordinates, jac_shape,\
     
     #set ksp iterations
     opts = PETSc.Options()
-    opts['ksp_max_it'] = 20
+    opts['ksp_max_it'] = 100
     opts['ksp_monitor'] = None
     opts['ksp_rtol'] = 1e-10
     
@@ -263,7 +287,8 @@ def sparse_linear_solve(values, coordinates, jac_shape, b, x0=None, mode="scipy-
 def make_newton_solver_sparse_jac(C, f, n_iterations):
 
     #residual_func = make_residual_function(C, f)
-    residual_func = make_residual_function_advectiony(C, f)
+    residual_func = make_residual_function_face_centred_boundary(C, f)
+    #residual_func = make_residual_function_advectiony(C, f)
 
     basis_vectors, i_coordinate_sets\
             = basis_vectors_and_coords_2d_square_stencil(nr, nc, 1)
@@ -315,12 +340,18 @@ def make_newton_solver_sparse_jac(C, f, n_iterations):
             #print(coords.max())
             #raise
 
-            du = solve_petsc_sparse(residual_jac_sparse[mask],\
-                                    coords, (nr*nc, nr*nc), rhs,\
-                                    ksp_type="bcgs",\
-                                    preconditioner="hypre",\
+            #du = solve_petsc_sparse(residual_jac_sparse[mask],\
+            #                        coords, (nr*nc, nr*nc), rhs,\
+            #                        ksp_type="bcgs",\
+            #                        preconditioner="hypre",\
+            #                        precondition_only=False)
+            du = solve_petsc_sparse(residual_jac_sparse[mask],
+                                    coords, (nr*nc, nr*nc), rhs,
+                                    ksp_type="cg",
+                                    preconditioner="bjacobi",
                                     precondition_only=False)
             
+
             #t1 = time.time()
             #print("Linear solve time: {}s".format(t1-t0))
             
@@ -352,8 +383,8 @@ nc = int(2**9.5)
 dy = 1/nr
 dx = 1/nc
 
-#C = spherical_wave(nr, nc, frequency=20, amplitude=500)
-C = 199
+C = spherical_wave(nr, nc, frequency=10, amplitude=500)
+#C = 199
 
 
 #plt.imshow(C)
@@ -361,9 +392,9 @@ C = 199
 #plt.show()
 #raise
 
-#f = 1
-f = jnp.zeros((nr, nc))
-f = f.at[int(nr/4):int(nr/2), int(nc/4):int(nc/2)].set(1)
+f = 1
+#f = jnp.zeros((nr, nc))
+#f = f.at[int(nr/4):int(nr/2), int(nc/4):int(nc/2)].set(1)
 
 
 u_init = jnp.ones((nr, nc)).reshape(-1)
