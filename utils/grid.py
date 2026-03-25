@@ -86,6 +86,123 @@ def fc_gradient_functions(dy, dx):
     return jax.jit(ew_face_gradient), jax.jit(ns_face_gradient)
 
 
+def fc_gradient_functions_cf_safe(dy, dx, ny, nx, ice_mask, add_ghost_cells):
+    #cf_cells = jnp.any(cf_adjacent_cells_4_connected(ice_mask)[0], axis=0)
+   
+    ew_missing_tr = jnp.zeros((ny, nx+1))
+    ew_missing_tl = jnp.zeros_like(ew_missing_tr)
+    ew_missing_br = jnp.zeros_like(ew_missing_tr)
+    ew_missing_bl = jnp.zeros_like(ew_missing_tr)
+   
+    #Ok, so reason for not buffering the ice mask is that the
+    #velocity components should all basically be zero outside in all the
+    #cases we're interested in. If periodic bcs, I'm sorry.
+
+    # TR = (i-1, j+1)
+    ew_missing_tr = ew_missing_tr.at[1:-1, 1:-1].set(
+        1 - ice_mask[:-2, 1:]
+    )
+    # TL = (i-1, j)
+    ew_missing_tl = ew_missing_tl.at[1:-1, 1:-1].set(
+        1 - ice_mask[:-2, :-1]
+    )
+    # BR = (i+1, j+1)
+    ew_missing_br = ew_missing_br.at[1:-1, 1:-1].set(
+        1 - ice_mask[2:, 1:]
+    )
+    # BL = (i+1, j)
+    ew_missing_bl = ew_missing_bl.at[1:-1, 1:-1].set(
+        1 - ice_mask[2:, :-1]
+    )
+
+
+    ns_missing_tr = jnp.zeros((ny+1, nx))
+    ns_missing_tl = jnp.zeros_like(ns_missing_tr)
+    ns_missing_br = jnp.zeros_like(ns_missing_tr)
+    ns_missing_bl = jnp.zeros_like(ns_missing_tr)
+   
+
+    # TR = (i, j+1)
+    ns_missing_tr = ns_missing_tr.at[1:-1, 1:-1].set(
+        1 - ice_mask[:-1, 2:]
+    )
+    # TL = (i, j)
+    ns_missing_tl = ns_missing_tl.at[1:-1, 1:-1].set(
+        1 - ice_mask[:-1, :-2]
+    )
+    # BR = (i+1, j+1)
+    ns_missing_br = ns_missing_br.at[1:-1, 1:-1].set(
+        1 - ice_mask[1:, 2:]
+    )
+    # BL = (i+1, j)
+    ns_missing_bl = ns_missing_bl.at[1:-1, 1:-1].set(
+        1 - ice_mask[1:, :-2]
+    )
+
+    def ew_face_gradient(var):
+
+        var_dg = jnp.pad(var, 2, mode="constant", constant_values=0)
+        ##Need to sort this out! Reflection bcs are an irritation here...
+        #var_dg = add_ghost_cells(add_ghost_cells(var))
+
+        dvar_dx_ew = (var_dg[2:-2, 2:-1] - var_dg[2:-2, 1:-2]) / dx
+
+        dvar_dy_ew = (
+            var_dg[1:-3, 2:-1] * (1 - ew_missing_tr)
+            + (2*var_dg[2:-2, 2:-1] - var_dg[3:-1, 2:-1]) * ew_missing_tr
+            + var_dg[1:-3, 1:-2] * (1 - ew_missing_tl)
+            + (2*var_dg[2:-2, 1:-2] - var_dg[3:-1, 1:-2]) * ew_missing_tl
+            - var_dg[3:-1, 2:-1] * (1 - ew_missing_br)
+            - (2*var_dg[2:-2, 2:-1] - var_dg[1:-3, 2:-1]) * ew_missing_br
+            - var_dg[3:-1, 1:-2] * (1 - ew_missing_bl)
+            - (2*var_dg[2:-2, 1:-2] - var_dg[1:-3, 1:-2]) * ew_missing_bl
+        ) / (4*dy)
+
+        return dvar_dx_ew, dvar_dy_ew
+
+    
+    def ns_face_gradient(var):
+        var_dg = jnp.pad(var, 2, mode="constant", constant_values=0)
+        ##Need to sort this out! Reflection bcs are an irritation here...
+        #var_dg = add_ghost_cells(add_ghost_cells(var))
+
+        dvar_dy_ns = (var_dg[2:-1, 2:-2] - var_dg[1:-2, 2:-2]) / dy
+
+        dvar_dx_ns = (
+            var_dg[2:-1, 1:-3] * (1 - ns_missing_bl)
+            + (2*var_dg[2:-1, 2:-2] - var_dg[2:-1, 3:-1]) * ns_missing_bl
+            + var_dg[1:-2, 1:-3] * (1 - ns_missing_tl)
+            + (2*var_dg[2:-1, 2:-2] - var_dg[3:, 2:-2]) * ns_missing_tl
+            - var_dg[2:-1, 3:-1] * (1 - ns_missing_br)
+            - (2*var_dg[2:-1, 2:-2] - var_dg[2:-1, 1:-3]) * ns_missing_br
+            - var_dg[1:-2, 3:-1] * (1 - ns_missing_tr)
+            - (2*var_dg[2:-1, 2:-2] - var_dg[3:, 2:-2]) * ns_missing_tr
+        ) / (4*dx)
+
+        return dvar_dx_ns, dvar_dy_ns
+
+
+    #def ew_face_gradient(var):
+    #    var = add_ghost_cells(add_ghost_cells(var))
+    #    
+    #    dvar_dx_ew = (var_dg[2:-2, 2:-1] - var_dg[2:-2, 1:-2])/dx
+
+    #    dvar_dy_ew = (var[1:-3, 2:-1]*(1-ew_missing_tr) + (2*var[2:-2,2:-1] - var[3:-1,2:-1])*ew_missing_tr +\
+    #                  var[1:-3, 1:-2]*(1-ew_missing_tl) + (2*var[2:-2,1:-2] - var[3:-1,1:-2])*ew_missing_tl -\
+    #                  var[3:-1 ,2:-1]*(1-ew_missing_br) - (2*var[2:-2,2:-1] - var[1:-3,2:-1])*ew_missing_br -\
+    #                  var[3:-1, 1:-3]*(1-ew_missing_bl) - (2*var[2:-2,1:-3] - var[1:-3,1:-3])*ew_missing_bl
+    #                  )/(4*dy)
+
+    #    return dvar_dx_ew, dvar_dy_ew
+    #
+    #def ns_face_gradient(var):
+    #   
+    #    
+    #    return dvar_dx_ns, dvar_dy_ns
+    
+    return jax.jit(ew_face_gradient), jax.jit(ns_face_gradient)
+
+
 def add_ghost_cells_fcts(ny, nx, periodic=False):
 
     def add_reflection_ghost_cells(u_int, v_int):
@@ -484,10 +601,16 @@ def linear_extrapolate_over_cf_dynamic_thickness(cc_field, thk):
 
 
 def cf_adjacent_cells_8_connected(ice_mask):
-    # Use your stack_safe_shifted to get all 8 neighbours of ice_mask
     has_ice_1, _ = stack_safe_shifted(ice_mask)  # shape (8, ny, nx)
     # any of the 8 directions has ice inside
     any_neighbour_ice = jnp.any(has_ice_1, axis=0)
+    # CF-adjacent ocean = ocean & at least one neighbour is ice
+    return (~ice_mask) & any_neighbour_ice
+
+def cf_adjacent_cells_4_connected(ice_mask):
+    has_ice_on_face = stack_safe_shifted_single_facing(ice_mask)  # shape (4, ny, nx)
+    # any of the 4 directions has ice inside
+    any_neighbour_ice = jnp.any(has_ice_on_face, axis=0)
     # CF-adjacent ocean = ocean & at least one neighbour is ice
     return (~ice_mask) & any_neighbour_ice
 
@@ -556,6 +679,67 @@ def linear_extrapolate_over_cf_function_cornersafe(thk):
     cf_adjacent_zero_ice_cells = cf_adjacent_cells_8_connected(ice_mask)
     
     has_1_facing = stack_safe_shifted_single_facing(ice_mask)
+    at_least_2_facing = (jnp.sum(has_1_facing, axis=0)>1)
+    
+    cf_adjacent_flat = cf_adjacent_zero_ice_cells & ~at_least_2_facing
+    cf_adjacent_corners = cf_adjacent_zero_ice_cells & at_least_2_facing
+
+    has_1, has_2 = stack_safe_shifted(ice_mask)
+    score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+    # Pick best direction
+    best_k = jnp.argmax(score, axis=0)
+   
+    
+
+
+    #import matplotlib.pyplot as plt
+    #
+    ##plt.imshow(cf_adjacent_corners)
+    #plt.imshow(cf_adjacent_flat)
+    ##plt.imshow(best_k*cf_adjacent_zero_ice_cells, alpha=0.5)
+    #plt.show()
+    #raise
+    
+    @jax.jit
+    def linear_extrapolate_over_cf(cc_field):
+
+        cc_field = cc_field*ice_mask
+
+        u1, u2 = stack_safe_shifted(cc_field)
+        u1_uni = stack_safe_shifted_single_facing(cc_field)
+ 
+        #NEW VERSION
+        #slicing by best_k, but remember best_k is same dim as thk etc
+        u1_choice = jnp.take_along_axis(u1, best_k[None, ...], axis=0)[0]
+        u2_choice = jnp.take_along_axis(u2, best_k[None, ...], axis=0)[0]
+
+        #cc_field_extrapolated = cc_field\
+        #                                 + cf_adjacent_flat*\
+        #                                        (2*u1_choice - u2_choice)\
+        #                                 + cf_adjacent_corners*\
+        #            jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
+        cc_field_extrapolated = cc_field\
+                                         + cf_adjacent_flat*\
+                                                (u1_choice)\
+                                         + cf_adjacent_corners*\
+                    jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
+        
+        return cc_field_extrapolated
+
+    return linear_extrapolate_over_cf
+
+
+def extrapolate_over_cf_function_handv(thk):
+    """
+    Extrapolate into ocean cells adjacent to ice by linear extrapolation along
+    horizontal and vertical!
+    """
+
+    ice_mask = (thk>0.1)
+    
+    has_1_facing = stack_safe_shifted_single_facing(ice_mask)
+    cf_adjacent_zero_ice_cells = (~ice_mask) & jnp.any(has_1_facing, axis=0)
+    
     at_least_2_facing = (jnp.sum(has_1_facing, axis=0)>1)
     
     cf_adjacent_flat = cf_adjacent_zero_ice_cells & ~at_least_2_facing
@@ -1027,6 +1211,50 @@ def fc_viscosity_function_new_givenT(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost
 
         u = u[1:-1,1:-1]
         v = v[1:-1,1:-1]
+        u = u*ice_mask
+        v = v*ice_mask
+        
+        #calculate face-centred viscosity:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
+
+def fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, add_uv_ghost_cells,
+                                              add_s_ghost_cells,
+                                              interp_cc_to_fc, 
+                                              ew_gradient, ns_gradient, 
+                                              ice_mask, mucoef_0,
+                                              temp_cc):
+
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+    
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
         u = u*ice_mask
         v = v*ice_mask
         

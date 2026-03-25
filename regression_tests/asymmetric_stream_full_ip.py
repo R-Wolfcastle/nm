@@ -10,7 +10,8 @@ from nonlinear_solvers import make_newton_coupled_solver_function,\
         make_newton_velocity_solver_function_custom_vjp,\
         make_picard_velocity_solver_function_custom_vjp,\
         make_picnewton_velocity_solver_function_cvjp,\
-        make_picnewton_velocity_solver_function_full_cvjp
+        make_picnewton_velocity_solver_function_full_cvjp,\
+        make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap
 
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -230,7 +231,7 @@ def wonky_stream_rotated():
     # --- build original domain ---
     lx = 128_000
     ly = 128_000
-    resolution = 1000
+    resolution = 2000
 
     nr0 = int(ly/resolution)
     nc0 = int(lx/resolution)
@@ -320,14 +321,14 @@ def wonky_stream_rotated():
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
 lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
 
-plt.imshow(thk)
-plt.show()
-
-plt.imshow(mucoef_0)
-plt.show()
-
-plt.imshow(C)
-plt.show()
+#plt.imshow(thk)
+#plt.show()
+#
+#plt.imshow(mucoef_0)
+#plt.show()
+#
+#plt.imshow(C)
+#plt.show()
 
 
 add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(nr, nc, periodic=False)
@@ -530,9 +531,16 @@ solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
                                                          delta_y, delta_x,
                                                          b, ice_mask,
                                                          n_pic_iterations,
-                                                         n_newt_iterations,
+                                                         int(n_newt_iterations/n_newt_iterations),
                                                          mucoef_0, C,
                                                          sliding="basic_weertman")
+#solver = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+#                                                         delta_y, delta_x,
+#                                                         b, ice_mask,
+#                                                         n_pic_iterations,
+#                                                         n_newt_iterations,
+#                                                         mucoef_0, C,
+#                                                         sliding="basic_weertman")
 
 u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
