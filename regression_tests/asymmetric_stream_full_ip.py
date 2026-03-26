@@ -231,7 +231,7 @@ def wonky_stream_rotated():
     # --- build original domain ---
     lx = 128_000
     ly = 128_000
-    resolution = 2000
+    resolution = 1000
 
     nr0 = int(ly/resolution)
     nc0 = int(lx/resolution)
@@ -318,8 +318,8 @@ def wonky_stream_rotated():
             thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
 
 
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
 
 #plt.imshow(thk)
 #plt.show()
@@ -338,8 +338,8 @@ gradient_function = cc_gradient_function(delta_y, delta_x)
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_pic_iterations = 15
-n_newt_iterations = 15
+n_pic_iterations = 10
+n_newt_iterations = 5
 
 uc = jnp.where(thk>0, 1, 0)
 uc = binary_erosion(uc)
@@ -386,7 +386,7 @@ def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
     #alpha_C   = 1e3  (for me, that would be 1e3 /10_000 ~ 1e-1)
 
     #maybe 1e4 a good shout?
-    phi_regn_term = 5e5 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
+    phi_regn_term = 8e6 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
                                 (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2)
                               )/(nr*nc)
     
@@ -395,7 +395,7 @@ def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
     C = C_0*jnp.exp(p.reshape((nr, nc)))
     dC_dx, dC_dy = gradient_function(C)
 
-    C_regn_term = 1e-2 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
+    C_regn_term = 2e0 * jnp.sum( mask[1:-1,1:-1].reshape(-1) *\
                                 (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2)
                               )/(nr*nc)
 
@@ -527,32 +527,32 @@ def initial_guess_for_C(speed_obs):
     return cig
 
 
-solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
-                                                         delta_y, delta_x,
-                                                         b, ice_mask,
-                                                         n_pic_iterations,
-                                                         int(n_newt_iterations/n_newt_iterations),
-                                                         mucoef_0, C,
-                                                         sliding="basic_weertman")
-#solver = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+#solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
 #                                                         delta_y, delta_x,
 #                                                         b, ice_mask,
 #                                                         n_pic_iterations,
 #                                                         n_newt_iterations,
 #                                                         mucoef_0, C,
 #                                                         sliding="basic_weertman")
+solver = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+                                                         delta_y, delta_x,
+                                                         b, ice_mask,
+                                                         n_pic_iterations,
+                                                         n_newt_iterations,
+                                                         mucoef_0, C,
+                                                         sliding="basic_weertman")
 
 u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
+#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/clean_vel_3stencil_NoExtrap.npy", jnp.stack([u_out, v_out]))
+
+
 raise
-#jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/clean_vel_5stencil.npy", jnp.stack([u_out, v_out]))
 
 
 
 
-
-
-vel_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/clean_vel_5stencil.npy")
+vel_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/clean_vel_3stencil_NoExtrap.npy")
 #vel_data = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/inv_prob_tests/clean_vel_high_res.npy")
 
 u_obs = vel_data[0]
@@ -589,14 +589,22 @@ C_0 = initial_guess_for_C(speed_obs)
 ##C_0 = C.copy()
 
 
-solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+#solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+#                                                         delta_y, delta_x,
+#                                                         b, ice_mask,
+#                                                         n_pic_iterations,
+#                                                         n_newt_iterations,
+#                                                         mucoef_0, C_0,
+#                                                         sliding="basic_weertman")
+##                                                       sliding="linear")
+
+solver = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
                                                          delta_y, delta_x,
                                                          b, ice_mask,
                                                          n_pic_iterations,
                                                          n_newt_iterations,
                                                          mucoef_0, C_0,
                                                          sliding="basic_weertman")
-#                                                       sliding="linear")
 
 
 q_initial_guess = jnp.zeros_like(thk).reshape(-1)

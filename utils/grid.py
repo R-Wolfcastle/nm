@@ -86,121 +86,82 @@ def fc_gradient_functions(dy, dx):
     return jax.jit(ew_face_gradient), jax.jit(ns_face_gradient)
 
 
-def fc_gradient_functions_cf_safe(dy, dx, ny, nx, ice_mask, add_ghost_cells):
-    #cf_cells = jnp.any(cf_adjacent_cells_4_connected(ice_mask)[0], axis=0)
-   
-    ew_missing_tr = jnp.zeros((ny, nx+1))
-    ew_missing_tl = jnp.zeros_like(ew_missing_tr)
-    ew_missing_br = jnp.zeros_like(ew_missing_tr)
-    ew_missing_bl = jnp.zeros_like(ew_missing_tr)
-   
-    #Ok, so reason for not buffering the ice mask is that the
-    #velocity components should all basically be zero outside in all the
-    #cases we're interested in. If periodic bcs, I'm sorry.
+def fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx, 
+                                          ice_mask, add_uv_ghost_cells,
+                                          add_ice_mask_ghost_cells):
 
-    # TR = (i-1, j+1)
-    ew_missing_tr = ew_missing_tr.at[1:-1, 1:-1].set(
-        1 - ice_mask[:-2, 1:]
-    )
-    # TL = (i-1, j)
-    ew_missing_tl = ew_missing_tl.at[1:-1, 1:-1].set(
-        1 - ice_mask[:-2, :-1]
-    )
-    # BR = (i+1, j+1)
-    ew_missing_br = ew_missing_br.at[1:-1, 1:-1].set(
-        1 - ice_mask[2:, 1:]
-    )
-    # BL = (i+1, j)
-    ew_missing_bl = ew_missing_bl.at[1:-1, 1:-1].set(
-        1 - ice_mask[2:, :-1]
-    )
+    ice_mask = add_ice_mask_ghost_cells(ice_mask)
 
+    #Define a flag for each face centre for whether it has ice in the right
+    #places to define the derivatives nicely. Otherwise, we do an extrapolation
+    #depending on the direction of the derivative, whether it's a vertical or
+    #or horizontal face. This replaces having to explicitly store extrapolated
+    #velocities. The difficulty of that is that the required version of the
+    #extrapolation to keep the stecil down to 3x3 depends on the direction of the
+    #derivative and orientation of the face.
 
-    ns_missing_tr = jnp.zeros((ny+1, nx))
-    ns_missing_tl = jnp.zeros_like(ns_missing_tr)
-    ns_missing_br = jnp.zeros_like(ns_missing_tr)
-    ns_missing_bl = jnp.zeros_like(ns_missing_tr)
-   
+    ew_missing_tr = (1 - ice_mask[:-2, 1:])
+    ew_missing_br = (1 - ice_mask[2:,  1:])
+    ew_missing_tl = (1 - ice_mask[:-2,:-1])
+    ew_missing_bl = (1 - ice_mask[2:, :-1])
 
-    # TR = (i, j+1)
-    ns_missing_tr = ns_missing_tr.at[1:-1, 1:-1].set(
-        1 - ice_mask[:-1, 2:]
-    )
-    # TL = (i, j)
-    ns_missing_tl = ns_missing_tl.at[1:-1, 1:-1].set(
-        1 - ice_mask[:-1, :-2]
-    )
-    # BR = (i+1, j+1)
-    ns_missing_br = ns_missing_br.at[1:-1, 1:-1].set(
-        1 - ice_mask[1:, 2:]
-    )
-    # BL = (i+1, j)
-    ns_missing_bl = ns_missing_bl.at[1:-1, 1:-1].set(
-        1 - ice_mask[1:, :-2]
-    )
+    ns_missing_tr = (1 - ice_mask[:-1, 2:])
+    ns_missing_br = (1 - ice_mask[1:,  2:])
+    ns_missing_tl = (1 - ice_mask[:-1,:-2])
+    ns_missing_bl = (1 - ice_mask[1:, :-2])
+    
 
     def ew_face_gradient(var):
-
-        var_dg = jnp.pad(var, 2, mode="constant", constant_values=0)
-        ##Need to sort this out! Reflection bcs are an irritation here...
-        #var_dg = add_ghost_cells(add_ghost_cells(var))
-
-        dvar_dx_ew = (var_dg[2:-2, 2:-1] - var_dg[2:-2, 1:-2]) / dx
+        dvar_dx_ew = (var[1:-1, 1:] - var[1:-1, :-1]) / dx
 
         dvar_dy_ew = (
-            var_dg[1:-3, 2:-1] * (1 - ew_missing_tr)
-            + (2*var_dg[2:-2, 2:-1] - var_dg[3:-1, 2:-1]) * ew_missing_tr
-            + var_dg[1:-3, 1:-2] * (1 - ew_missing_tl)
-            + (2*var_dg[2:-2, 1:-2] - var_dg[3:-1, 1:-2]) * ew_missing_tl
-            - var_dg[3:-1, 2:-1] * (1 - ew_missing_br)
-            - (2*var_dg[2:-2, 2:-1] - var_dg[1:-3, 2:-1]) * ew_missing_br
-            - var_dg[3:-1, 1:-2] * (1 - ew_missing_bl)
-            - (2*var_dg[2:-2, 1:-2] - var_dg[1:-3, 1:-2]) * ew_missing_bl
+            var[:-2, 1:] * (1 - ew_missing_tr)
+            + (2*var[1:-1, 1:] - var[2:, 1:]) * ew_missing_tr
+
+            + var[:-2, :-1] * (1 - ew_missing_tl)
+            + (2*var[1:-1, :-1] - var[2:, :-1]) * ew_missing_tl
+
+            - var[2:, 1:] * (1 - ew_missing_br)
+            - (2*var[1:-1, 1:] - var[:-2, 1:]) * ew_missing_br
+
+            - var[2:, :-1] * (1 - ew_missing_bl)
+            - (2*var[1:-1, :-1] - var[:-2, :-1]) * ew_missing_bl
         ) / (4*dy)
 
         return dvar_dx_ew, dvar_dy_ew
 
     
     def ns_face_gradient(var):
-        var_dg = jnp.pad(var, 2, mode="constant", constant_values=0)
-        ##Need to sort this out! Reflection bcs are an irritation here...
-        #var_dg = add_ghost_cells(add_ghost_cells(var))
-
-        dvar_dy_ns = (var_dg[2:-1, 2:-2] - var_dg[1:-2, 2:-2]) / dy
+        dvar_dy_ns = (var[:-1, 1:-1] - var[1:, 1:-1]) / dy
 
         dvar_dx_ns = (
-            var_dg[2:-1, 1:-3] * (1 - ns_missing_bl)
-            + (2*var_dg[2:-1, 2:-2] - var_dg[2:-1, 3:-1]) * ns_missing_bl
-            + var_dg[1:-2, 1:-3] * (1 - ns_missing_tl)
-            + (2*var_dg[2:-1, 2:-2] - var_dg[3:, 2:-2]) * ns_missing_tl
-            - var_dg[2:-1, 3:-1] * (1 - ns_missing_br)
-            - (2*var_dg[2:-1, 2:-2] - var_dg[2:-1, 1:-3]) * ns_missing_br
-            - var_dg[1:-2, 3:-1] * (1 - ns_missing_tr)
-            - (2*var_dg[2:-1, 2:-2] - var_dg[3:, 2:-2]) * ns_missing_tr
-        ) / (4*dx)
+            var[:-1, 2:] * (1 - ns_missing_tr)
+            + (2*var[:-1, 1:-1] - var[:-1, :-2]) * ns_missing_tr
 
+            + var[1:, 2:] * (1 - ns_missing_br)
+            + (2*var[1:, 1:-1] - var[1:, :-2]) * ns_missing_br
+
+            - var[:-1, :-2] * (1 - ns_missing_tl)
+            - (2*var[:-1, 1:-1] - var[:-1, 2:]) * ns_missing_tl
+            
+            - var[1:, :-2] * (1 - ns_missing_bl)
+            - (2*var[1:, 1:-1] - var[1:, 2:]) * ns_missing_bl
+        ) / (4*dx)
+        
         return dvar_dx_ns, dvar_dy_ns
 
+    def uv_ew_ns_gradient(u, v):
+        u, v = add_uv_ghost_cells(u, v)
 
-    #def ew_face_gradient(var):
-    #    var = add_ghost_cells(add_ghost_cells(var))
-    #    
-    #    dvar_dx_ew = (var_dg[2:-2, 2:-1] - var_dg[2:-2, 1:-2])/dx
+        dudx_ew, dudy_ew = ew_face_gradient(u)
+        dvdx_ew, dvdy_ew = ew_face_gradient(v)
+        dudx_ns, dudy_ns = ns_face_gradient(u)
+        dvdx_ns, dvdy_ns = ns_face_gradient(v)
 
-    #    dvar_dy_ew = (var[1:-3, 2:-1]*(1-ew_missing_tr) + (2*var[2:-2,2:-1] - var[3:-1,2:-1])*ew_missing_tr +\
-    #                  var[1:-3, 1:-2]*(1-ew_missing_tl) + (2*var[2:-2,1:-2] - var[3:-1,1:-2])*ew_missing_tl -\
-    #                  var[3:-1 ,2:-1]*(1-ew_missing_br) - (2*var[2:-2,2:-1] - var[1:-3,2:-1])*ew_missing_br -\
-    #                  var[3:-1, 1:-3]*(1-ew_missing_bl) - (2*var[2:-2,1:-3] - var[1:-3,1:-3])*ew_missing_bl
-    #                  )/(4*dy)
+        return dudx_ew, dudy_ew, dvdx_ew, dvdy_ew,\
+               dudx_ns, dudy_ns, dvdx_ns, dvdy_ns
 
-    #    return dvar_dx_ew, dvar_dy_ew
-    #
-    #def ns_face_gradient(var):
-    #   
-    #    
-    #    return dvar_dx_ns, dvar_dy_ns
-    
-    return jax.jit(ew_face_gradient), jax.jit(ns_face_gradient)
+    return jax.jit(uv_ew_ns_gradient)
 
 
 def add_ghost_cells_fcts(ny, nx, periodic=False):
@@ -1233,7 +1194,7 @@ def fc_viscosity_function_new_givenT(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost
 def fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, add_uv_ghost_cells,
                                               add_s_ghost_cells,
                                               interp_cc_to_fc, 
-                                              ew_gradient, ns_gradient, 
+                                              fc_vel_gradient, 
                                               ice_mask, mucoef_0,
                                               temp_cc):
 
@@ -1250,10 +1211,10 @@ def fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, add_uv_ghost_cells
         v = v.reshape((ny, nx))
 
         #various face-centred derivatives
-        dudx_ew, dudy_ew = ew_gradient(u)
-        dvdx_ew, dvdy_ew = ew_gradient(v)
-        dudx_ns, dudy_ns = ns_gradient(u)
-        dvdx_ns, dvdy_ns = ns_gradient(v)
+        dudx_ew, dudy_ew,\
+        dvdx_ew, dvdy_ew,\
+        dudx_ns, dudy_ns,\
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
 
         u = u*ice_mask
         v = v*ice_mask

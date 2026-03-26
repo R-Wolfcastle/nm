@@ -22,7 +22,7 @@ import residuals as rdl
 from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp,\
                            create_sparse_petsc_la_solver_with_custom_vjp_given_csr
 from residuals import *
-
+from cg import make_sparse_matvec, make_sparse_dpgc_solver_comp
 
 
 def print_residual_things(residual, rhs, init_residual, i):
@@ -1621,8 +1621,9 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
     
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
     
-    ew_gradient, ns_gradient                   = fc_gradient_functions_cf_safe(dy, dx, ny, nx,
-                                                                               ice_mask, add_uv_ghost_cells)
+    fc_velocity_gradient                       = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
+                                                                               ice_mask, add_uv_ghost_cells,
+                                                                               add_scalar_ghost_cells)
     cc_gradient                                = cc_gradient_function(dy, dx)
     
     #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
@@ -1636,14 +1637,14 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                                    add_uv_ghost_cells,
                                                    add_scalar_ghost_cells,
                                                    interp_cc_to_fc,
-                                                   ew_gradient, ns_gradient,
+                                                   fc_velocity_gradient,
                                                    ice_mask, mucoef_0,
                                                    temperature_field)
     beta_fct = beta_function(b, sliding)
 
     get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
                                                        interp_cc_to_fc,
-                                                       ew_gradient, ns_gradient,
+                                                       fc_velocity_gradient,
                                                        cc_gradient,
                                                        add_uv_ghost_cells,
                                                        add_scalar_ghost_cells)
@@ -1652,7 +1653,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                                        ny, nx, dy, dx, b,
                                                        beta_fct, ice_mask,
                                                        interp_cc_to_fc,
-                                                       ew_gradient, ns_gradient,
+                                                       fc_velocity_gradient,
                                                        cc_gradient,
                                                        add_uv_ghost_cells,
                                                        add_scalar_ghost_cells,
@@ -1663,7 +1664,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
     #############
     #setting up bvs and coords for a single block of the jacobian
-    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 2,
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
                                                                                   periodic_x=periodic)
     #j_coord_ar = jnp.arange(ny*nx)
     #pattern = jnp.zeros((nx*ny, nx*ny))*jnp.nan
@@ -1712,15 +1713,27 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                        ])
 
    
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+    #                                                          coords,
+    #                                                          (ny*nx*2, ny*nx*2),
+    #                                                          indirect=True,
+    #                                                          monitor_ksp=False)
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
                                                               indirect=True,
-                                                              monitor_ksp=False)
-
+                                                              ksp_type='cg',
+                                                              preconditioner="jacobi",
+                                                              monitor_ksp=True,
+                                                              ksp_max_iter=1000)
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords,(ny*nx*2, ny*nx*2))
 
-    
+
+    #sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
+    #cg_solver = make_sparse_dpgc_solver_comp(sparse_matvec, extract_inverse_diagonal,
+    #                                         iterations=500)
+
+
     res_fct = lambda x: jnp.max(jnp.abs(x))
     #res_fct = lambda x: jnp.mean(jnp.abs(x))
 
@@ -1755,6 +1768,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
         mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
         beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
 
+        du = jnp.zeros((nx*ny*2,))
         for i in range(n_pic_iterations):
             #NOTE: making this twice as large makes PIG look a little better...
             #mu_ew = 2*mu_ew
@@ -1856,8 +1870,10 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
             rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
 
-            print("solving LA problem")
+            print("solving LA problem with crummy CG method")
             du = la_solver(nz_jac_values, rhs)
+            #du = cg_solver(nz_jac_values, rhs, du)
+
 
             print("du norm: {}".format(jnp.max(jnp.abs(du))))
 
@@ -1910,6 +1926,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
             rhs = -jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))
             
             du = la_solver(nz_jac_values, rhs)
+            #du = cg_solver(nz_jac_values, rhs, du)
 
             u_1d = (u_1d + du[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + du[(ny*nx):]) * ice_mask

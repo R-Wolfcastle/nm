@@ -138,8 +138,7 @@ def compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,\
 
 def compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
                                           interp_cc_to_fc,
-                                          ew_gradient,
-                                          ns_gradient,
+                                          fc_vel_gradient,
                                           cc_gradient,
                                           add_uv_ghost_cells,
                                           add_s_ghost_cells):
@@ -179,24 +178,18 @@ def compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b
 
 
         #momentum_term
-        u, v = add_uv_ghost_cells(u, v)
 
         #get thickness on the faces
         h = add_s_ghost_cells(h)
         h_ew, h_ns = interp_cc_to_fc(h)
         
         #various face-centred derivatives
-        dudx_ew, dudy_ew = ew_gradient(u)
-        dvdx_ew, dvdy_ew = ew_gradient(v)
-        dudx_ns, dudy_ns = ns_gradient(u)
-        dvdx_ns, dvdy_ns = ns_gradient(v)
+        dudx_ew, dudy_ew,\
+        dvdx_ew, dvdy_ew,\
+        dudx_ns, dudy_ns,\
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
 
-        #u = u[1:-1,1:-1]
-        #v = v[1:-1,1:-1]
-        #u = u*ice_mask
-        #v = v*ice_mask
-
-
+        
         visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
                  2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
                  2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
@@ -636,8 +629,7 @@ def compute_ssa_uv_residuals_function_pnotC_givenT(ny, nx, dy, dx, b,
 def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(ny, nx, dy, dx, b,
                                    beta_fct, ice_mask,
                                    interp_cc_to_fc,
-                                   ew_gradient,
-                                   ns_gradient,
+                                   fc_vel_gradient,
                                    cc_gradient,
                                    add_uv_ghost_cells,
                                    add_s_ghost_cells,
@@ -685,10 +677,10 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(ny, nx, dy, dx, b,
 
 
         #various face-centred derivatives
-        dudx_ew, dudy_ew = ew_gradient(u)
-        dvdx_ew, dvdy_ew = ew_gradient(v)
-        dudx_ns, dudy_ns = ns_gradient(u)
-        dvdx_ns, dvdy_ns = ns_gradient(v)
+        dudx_ew, dudy_ew,\
+        dvdx_ew, dvdy_ew,\
+        dudx_ns, dudy_ns,\
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
 
 
         #interpolate things onto face-cenres
