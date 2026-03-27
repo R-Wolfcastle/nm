@@ -1722,10 +1722,10 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
                                                               indirect=True,
-                                                              ksp_type='cg',
+                                                              ksp_type='bcgs',
                                                               preconditioner="jacobi",
                                                               monitor_ksp=True,
-                                                              ksp_max_iter=1000)
+                                                              ksp_max_iter=3000)
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords,(ny*nx*2, ny*nx*2))
 
 
@@ -1799,10 +1799,14 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
            
 
 
-            #full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
-            #full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
-            #
+            full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
+            full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            
             #plt.imshow(jnp.log(jnp.abs(full_jac[:,:])).reshape((ny*nx*2,2*nx*ny)))
+            #plt.colorbar()
+            #plt.show()
+            #
+            #plt.imshow(jnp.log(jnp.abs(full_jac-jnp.transpose(full_jac))).reshape((ny*nx*2,2*nx*ny)))
             #plt.colorbar()
             #plt.show()
             

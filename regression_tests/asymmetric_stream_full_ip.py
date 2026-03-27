@@ -231,7 +231,7 @@ def wonky_stream_rotated():
     # --- build original domain ---
     lx = 128_000
     ly = 128_000
-    resolution = 1000
+    resolution = 500
 
     nr0 = int(ly/resolution)
     nc0 = int(lx/resolution)
@@ -246,6 +246,7 @@ def wonky_stream_rotated():
     thk0 = jnp.zeros((nr0,nc0)) + 512 - 256*x0/lx
     thk0 = thk0.at[:,-2:].set(0)
     thk0 = thk0.at[70:90, -10:].set(0)
+    #thk0 = thk0.at[int(70*1000/resolution):int(90*1000/resolution), -int(10*1000/resolution):].set(0)
     b0   = jnp.zeros((nr0,nc0)) - 256 - 256*x0/lx
 
     C0 = stickiness(xx0, yy0, resolution)
@@ -318,8 +319,58 @@ def wonky_stream_rotated():
             thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
 
 
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
+def tiny_ice_shelf():
+    lx = 150_0
+    ly = 150_0
+    resolution = 18_0 #m
+
+    nr = int(ly/resolution)
+    nc = int(lx/resolution)
+
+    lx = nr*resolution
+    ly = nc*resolution
+
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(0, ly, nr)
+
+    delta_x = x[1]-x[0]
+    delta_y = y[1]-y[0]
+
+    thk_profile = 500# - 300*x/lx
+    thk = jnp.zeros((nr, nc))+thk_profile
+    thk = thk.at[:,  -1:].set(0)
+    thk = thk.at[-5:,-4:].set(0)
+
+    b = jnp.zeros_like(thk)-600
+    b = b.at[:1, :].set(-440)
+    b = b.at[:, :1].set(-440)
+    b = b.at[-1:, :].set(-440)
+
+    mucoef = jnp.ones_like(thk)
+
+    C = jnp.zeros_like(thk)
+    C = C.at[:2, :].set(1e12)
+    C = C.at[:, :2].set(1e12)
+    C = C.at[-2:,:].set(1e12)
+    C = jnp.where(thk==0, 1e8, C)
+
+    #mucoef_profile = 0.5+b_profile.copy()/2000
+    mucoef_profile = 1
+    mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+
+    q = jnp.zeros_like(C)
+    
+    grounded = jnp.where((b+thk)>thk*(1-0.917/1.027), 1, 0)
+    surface = jnp.maximum(thk+b, thk*(1-c.RHO_I/c.RHO_W))
+
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b,\
+           C, mucoef_0, q, jnp.where(thk>0,1,0), surface, grounded 
+
+
+
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
 
 #plt.imshow(thk)
 #plt.show()
@@ -534,6 +585,7 @@ def initial_guess_for_C(speed_obs):
 #                                                         n_newt_iterations,
 #                                                         mucoef_0, C,
 #                                                         sliding="basic_weertman")
+
 solver = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
                                                          delta_y, delta_x,
                                                          b, ice_mask,
