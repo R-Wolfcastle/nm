@@ -1,8 +1,14 @@
+#1st party
+import sys
 
 #3rd party
 import jax
+from jax import lax
 import jax.numpy as jnp
 
+#local apps
+sys.path.insert(1, '/Users/eartsu/new_model/testing/utils/')
+from sparsity_utils import jax_coo_to_csr
 
 
 def make_sparse_matvec(matrix_width, coords):
@@ -121,6 +127,358 @@ def make_sparse_dpgc_solver_comp(sp_matvec, inverse_diag_fct, iterations=10, tol
 
     return jax.jit(solver)
 
+
+def make_point_sor_preconditioner(coordinates, jac_shape, omega=1.0):
+    """
+    Returns a function M(r, vals) that applies ONE forward SOR sweep:
+        z = M^{-1} r
+    using the CSR sparsity pattern (iptr, indices).
+
+    Arguments:
+        omega  : relaxation factor (1.0 = GS, <1 underrelax, >1 overrelax)
+
+    The returned function expects:
+        M(r, vals)
+    where vals is the CSR data *for this evaluation*.
+    """
+
+    nnz = coordinates[0].size
+
+    iptr, indices, _, order = jax_coo_to_csr(jnp.zeros(nnz, dtype=jnp.float64),
+                                      coordinates, jac_shape)
+    iptr = jnp.array(iptr)
+    indices = jnp.array(indices)
+
+
+    @jax.jit
+    def sor_apply(vals, r):
+        """
+        Apply one forward SOR sweep to approximate z = M^{-1} r.
+        vals: CSR values (nnz,), same ordering as iptr/indices.
+        r   : right hand side vector
+        """
+        N = r.shape[0]
+
+        # Initial guess z = 0 for preconditioning
+        z0 = jnp.zeros_like(r)
+
+        def body(i, z):
+            start = iptr[i]
+            end   = iptr[i+1]
+
+            js   = indices[start:end]
+            aij  = vals[start:end]
+
+            # Identify diagonal entry
+            diag_mask = (js == i)
+            a_ii = aij[diag_mask][0]   # guaranteed exactly one diagonal per row
+
+            # Lower part: uses updated z[j]
+            lower_mask = (js < i)
+            sum_lower  = jnp.sum(aij[lower_mask] * z[js[lower_mask]])
+
+            # Upper part: uses OLD z0[j] == 0 (since z0 is zero)
+            upper_mask = (js > i)
+            sum_upper  = jnp.sum(aij[upper_mask] * z0[js[upper_mask]])
+
+            # Gauss–Seidel update
+            new_val = (r[i] - sum_lower - sum_upper) / a_ii
+            z_new_i = (1 - omega) * z[i] + omega * new_val
+
+            return z.at[i].set(z_new_i)
+
+        # Sequential row sweep
+        z_final = lax.fori_loop(0, N, body, z0)
+        return z_final
+
+    return sor_apply
+
+
+
+
+def make_multicoloured_relaxation(sparse_matvec, inv_diag_fct, basis_vectors, 
+                                 ny, nx, ncolours=9, omega=1.4, iterations=1):
+    
+    N = ny * nx
+    colour_sets_scalar = [ jnp.where(basis_vectors[c] == 1)[0] for c in range(ncolours)]
+    
+    colour_sets = [
+        jnp.concatenate([rows, rows + N])
+        for rows in colour_sets_scalar
+    ]
+
+    #@jax.jit
+    def relax(vals, b, x0):
+        x = x0
+        inv_diag = inv_diag_fct(vals)
+
+        for it in range(iterations):
+            for rows in colour_sets:               # rows = indices for this colour
+                r = b - sparse_matvec(vals, x)     # recompute residual using latest x
+                delta = omega * inv_diag[rows] * r[rows]
+                x = x.at[rows].add(delta[rows])
+            
+            for rows in colour_sets[::-1]:         # rows = indices for this colour
+                r = b - sparse_matvec(vals, x)     # recompute residual using latest x
+                delta = omega * inv_diag[rows] * r[rows]
+                x = x.at[rows].add(delta[rows])
+
+            #jax.debug.print("GS residual norm: {x}", x=jnp.dot(r, r))
+
+        return x
+    
+    return relax
+
+
+
+def make_sparse_gs_precond_bicgstab_solver(sp_matvec,
+                                           inv_diag_fct,
+                                           basis_vectors,
+                                           ny, nx,
+                                           iterations=200,
+                                           tol=1e-6):
+
+
+    relax_solver =  make_multicoloured_relaxation(sp_matvec, inv_diag_fct, basis_vectors,
+                                                  ny, nx, omega=1, iterations=1)
+
+
+    @jax.jit
+    def solver(vals, b, x0):
+        preconditioner = lambda r: relax_solver(vals, r, jnp.zeros_like(r))
+
+        # Initial residual
+        r0 = b - sp_matvec(vals, x0)
+        r_hat = r0  # shadow residual (fixed)
+
+        rho_old = jnp.array(1.0)
+        alpha   = jnp.array(1.0)
+        omega   = jnp.array(1.0)
+
+        v = jnp.zeros_like(b)
+        p = jnp.zeros_like(b)
+
+        # Store residual norm
+        rs = jnp.dot(r0, r0)
+
+        state = (0, x0, r0, r_hat, p, v, rho_old, alpha, omega, rs)
+
+        def cond_fn(state):
+            i, x, r, r_hat, p, v, rho_old, alpha, omega, rs = state
+            return jnp.logical_and(i < iterations, jnp.sqrt(rs) > tol)
+
+        def body_fn(state):
+            i, x, r, r_hat, p, v, rho_old, alpha, omega, rs = state
+        
+            jax.debug.print("BiCGStab res {val}", val=jnp.sqrt(rs))
+
+            rho_new = jnp.dot(r_hat, r)
+
+            # Breakdown protection
+            rho_new = jnp.where(rho_new == 0.0, 1e-30, rho_new)
+
+            beta = (rho_new / rho_old) * (alpha / omega)
+
+            # p_k = r + beta*(p - omega*v)
+            p_new = r + beta * (p - omega * v)
+
+            # Apply preconditioner
+            y = preconditioner(p_new)
+
+            # v = A y
+            v_new = sp_matvec(vals, y)
+
+            alpha_new = rho_new / jnp.dot(r_hat, v_new + 1e-30)
+
+            # s = r - alpha*v
+            s = r - alpha_new * v_new
+
+            # Early exit check
+            s_norm = jnp.sqrt(jnp.dot(s, s))
+
+            def update_from_s(state_s):
+                # Apply preconditioner to s
+                z = preconditioner(s)
+                t = sp_matvec(vals, z)
+
+                omega_new = jnp.dot(t, s) / jnp.dot(t, t + 1e-30)
+
+                x_new = x + alpha_new * y + omega_new * z
+                r_new = s - omega_new * t
+
+                rs_new = jnp.dot(r_new, r_new)
+
+                return (i+1, x_new, r_new, r_hat, p_new, v_new,
+                        rho_new, alpha_new, omega_new, rs_new)
+
+            def update_skip(state_s):
+                # If s is small enough, update x directly
+                x_new = x + alpha_new * y
+                r_new = s
+                rs_new = s_norm**2
+                return (i+1, x_new, r_new, r_hat, p_new, v_new,
+                        rho_new, alpha_new, omega, rs_new)
+
+            # If s is very small → skip omega step
+            return jax.lax.cond(s_norm < 1e-14,
+                            update_skip,
+                            update_from_s,
+                            operand=None)
+
+        final_state = jax.lax.while_loop(cond_fn, body_fn, state)
+        i, x_final, r_final, r_hat, p, v, rho_old, alpha, omega, rs_final = final_state
+
+        jax.debug.print("BiCGStab final residual {r}", r=jnp.sqrt(rs_final))
+        return x_final
+
+    return solver
+
+def make_sparse_bicgstab_solver(sp_matvec,
+                                precond=None,   # function r -> M^{-1} r (e.g. point SOR sweep)
+                                iterations=200,
+                                tol=1e-6):
+
+    """
+    Returns a matrix-free BiCGStab solver:
+        x = solver(vals, b, x0)
+
+    sp_matvec(vals, x): required
+    precond(r): optional (apply M^{-1} r)
+    """
+
+    if precond is None:
+        # Identity preconditioner if none supplied
+        precond = lambda r: r
+
+    @jax.jit
+    def solver(vals, b, x0):
+
+        # Initial residual
+        r0 = b - sp_matvec(vals, x0)
+        r_hat = r0  # shadow residual (fixed)
+
+        rho_old = jnp.array(1.0)
+        alpha   = jnp.array(1.0)
+        omega   = jnp.array(1.0)
+
+        v = jnp.zeros_like(b)
+        p = jnp.zeros_like(b)
+
+        # Store residual norm
+        rs = jnp.dot(r0, r0)
+
+        state = (0, x0, r0, r_hat, p, v, rho_old, alpha, omega, rs)
+
+        def cond_fn(state):
+            i, x, r, r_hat, p, v, rho_old, alpha, omega, rs = state
+            return jnp.logical_and(i < iterations, jnp.sqrt(rs) > tol)
+
+        def body_fn(state):
+            i, x, r, r_hat, p, v, rho_old, alpha, omega, rs = state
+        
+            jax.debug.print("BiCGStab res {val}", val=jnp.sqrt(rs))
+
+            rho_new = jnp.dot(r_hat, r)
+
+            # Breakdown protection
+            rho_new = jnp.where(rho_new == 0.0, 1e-30, rho_new)
+
+            beta = (rho_new / rho_old) * (alpha / omega)
+
+            # p_k = r + beta*(p - omega*v)
+            p_new = r + beta * (p - omega * v)
+
+            # Apply preconditioner
+            y = precond(p_new)
+
+            # v = A y
+            v_new = sp_matvec(vals, y)
+
+            alpha_new = rho_new / jnp.dot(r_hat, v_new + 1e-30)
+
+            # s = r - alpha*v
+            s = r - alpha_new * v_new
+
+            # Early exit check
+            s_norm = jnp.sqrt(jnp.dot(s, s))
+
+            def update_from_s(state_s):
+                # Apply preconditioner to s
+                z = precond(s)
+                t = sp_matvec(vals, z)
+
+                omega_new = jnp.dot(t, s) / jnp.dot(t, t + 1e-30)
+
+                x_new = x + alpha_new * y + omega_new * z
+                r_new = s - omega_new * t
+
+                rs_new = jnp.dot(r_new, r_new)
+
+                return (i+1, x_new, r_new, r_hat, p_new, v_new,
+                        rho_new, alpha_new, omega_new, rs_new)
+
+            def update_skip(state_s):
+                # If s is small enough, update x directly
+                x_new = x + alpha_new * y
+                r_new = s
+                rs_new = s_norm**2
+                return (i+1, x_new, r_new, r_hat, p_new, v_new,
+                        rho_new, alpha_new, omega, rs_new)
+
+            # If s is very small → skip omega step
+            return jax.lax.cond(s_norm < 1e-14,
+                            update_skip,
+                            update_from_s,
+                            operand=None)
+
+        final_state = jax.lax.while_loop(cond_fn, body_fn, state)
+        i, x_final, r_final, r_hat, p, v, rho_old, alpha, omega, rs_final = final_state
+
+        jax.debug.print("BiCGStab final residual {r}", r=jnp.sqrt(rs_final))
+        return x_final
+
+    return solver
+
+def make_sparse_damped_jacobi_solver(sp_matvec, inverse_diag_fct,
+                                     iterations=10, tol=1e-5, omega=0.75):
+
+    def solver(vals, b, x0):
+
+        M_inv = inverse_diag_fct(vals)
+
+        # Initial residual
+        r0 = b - sp_matvec(vals, x0)
+        rs0 = jnp.dot(r0, r0)   # plain L2 residual is fine for Jacobi
+
+        # State: (iter, x, r, rs)
+        initial_state = (0, x0, r0, rs0)
+
+        def cond_fun(state):
+            i, x, r, rs = state
+            return jnp.logical_and(i < iterations, jnp.sqrt(rs) > tol)
+
+        def body_fun(state):
+            i, x, r, rs = state
+
+            # Jacobi update: x_{k+1} = x_k + ω M^{-1} r_k
+            x_new = x + omega * (M_inv * r)
+
+            # New residual
+            r_new = b - sp_matvec(vals, x_new)
+            rs_new = jnp.dot(r_new, r_new)
+        
+            jax.debug.print("Damped Jacobi res: {res}", res=jnp.sqrt(rs_new))
+
+            return (i + 1, x_new, r_new, rs_new)
+
+        i, x_final, r_final, rs_final = jax.lax.while_loop(
+            cond_fun, body_fun, initial_state
+        )
+
+        jax.debug.print("Damped Jacobi final residual: {res}", res=jnp.sqrt(rs_final))
+        return x_final
+
+    return jax.jit(solver)
 
 def sparse_cg_solver(sp_matvec, vals, b, x0, iterations=10):
     r = b - sp_matvec(vals, x0)

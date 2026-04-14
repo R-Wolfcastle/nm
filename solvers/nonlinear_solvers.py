@@ -13,7 +13,8 @@ sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\
-                           make_sparse_jacrev_fct_shared_basis
+                           make_sparse_jacrev_fct_shared_basis,\
+                           make_sparse_jacrev_fct_shared_basis_new
 import constants_years as c
 from grid import *
 
@@ -22,7 +23,11 @@ import residuals as rdl
 from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp,\
                            create_sparse_petsc_la_solver_with_custom_vjp_given_csr
 from residuals import *
-from cg import make_sparse_matvec, make_sparse_dpgc_solver_comp
+from cg import make_sparse_matvec, make_sparse_dpgc_solver_comp,\
+               make_sparse_damped_jacobi_solver,\
+               make_sparse_bicgstab_solver, make_point_sor_preconditioner,\
+               make_multicoloured_relaxation,\
+               make_sparse_gs_precond_bicgstab_solver
 
 
 def print_residual_things(residual, rhs, init_residual, i):
@@ -1683,19 +1688,15 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
-    mask = (i_coordinate_sets>=0)
 
-
-    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis_new(
                                                         basis_vectors,\
-                                                        i_coordinate_sets,\
-                                                        j_coordinate_sets,\
-                                                        mask,\
                                                         2,
                                                         active_indices=(0,1)
                                                        )
     #sparse_jacrev = jax.jit(sparse_jacrev)
 
+    mask = (i_coordinate_sets>=0)
 
     i_coordinate_sets = i_coordinate_sets[mask]
     j_coordinate_sets = j_coordinate_sets[mask]
@@ -1711,7 +1712,6 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                  j_coordinate_sets, j_coordinate_sets+(ny*nx)]
                                    )
                        ])
-
    
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
     #                                                          coords,
@@ -1722,17 +1722,29 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
                                                               indirect=True,
-                                                              ksp_type='bcgs',
-                                                              preconditioner="jacobi",
+                                                              #ksp_type='gmres',
+                                                              #ksp_type='bcgs',
+                                                              ksp_type='cg',
+                                                              #preconditioner="jacobi", #might just about be workable
+                                                              preconditioner="sor", #better than jacobi
                                                               monitor_ksp=True,
-                                                              ksp_max_iter=3000)
+                                                              ksp_max_iter=200)
+    #Basically can only be used for newton-krylov type stuff where you're not expecting the LA problem to actually be solved
+    #until quite near the end...
+
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords,(ny*nx*2, ny*nx*2))
 
 
-    #sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
+    sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     #cg_solver = make_sparse_dpgc_solver_comp(sparse_matvec, extract_inverse_diagonal,
     #                                         iterations=500)
-
+    #j_solver = make_sparse_damped_jacobi_solver(sparse_matvec, extract_inverse_diagonal, iterations=12)
+    #preconditioner = make_point_sor_preconditioner(coords, (ny*nx*2, ny*nx*2))
+    bcgs_solver = make_sparse_bicgstab_solver(sparse_matvec, iterations=200)
+    #relax_solver = make_multicoloured_relaxation(sparse_matvec, extract_inverse_diagonal, basis_vectors, ny, nx)
+    
+    #bcgs_solver = make_sparse_gs_precond_bicgstab_solver(sparse_matvec, extract_inverse_diagonal, 
+    #                                                     basis_vectors, ny, nx, iterations=200)
 
     res_fct = lambda x: jnp.max(jnp.abs(x))
     #res_fct = lambda x: jnp.mean(jnp.abs(x))
@@ -1874,9 +1886,12 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
             rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
 
-            print("solving LA problem with crummy CG method")
+            print("solving LA problem")
             du = la_solver(nz_jac_values, rhs)
             #du = cg_solver(nz_jac_values, rhs, du)
+            #du = j_solver(nz_jac_values, rhs, du)
+            #du = relax_solver(nz_jac_values, rhs, du)
+            #du = bcgs_solver(nz_jac_values, rhs, du)
 
 
             print("du norm: {}".format(jnp.max(jnp.abs(du))))
@@ -1931,6 +1946,9 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
             
             du = la_solver(nz_jac_values, rhs)
             #du = cg_solver(nz_jac_values, rhs, du)
+            #du = j_solver(nz_jac_values, rhs, du)
+            #du = relax_solver(nz_jac_values, rhs, du)
+            #du = bcgs_solver(nz_jac_values, rhs, du)
 
             u_1d = (u_1d + du[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + du[(ny*nx):]) * ice_mask
@@ -1948,6 +1966,10 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
         print("===========================================")
         
+        plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
+        #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
+        plt.colorbar()
+        plt.show()
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
         ##plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
         #plt.colorbar()

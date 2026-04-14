@@ -231,7 +231,7 @@ def wonky_stream_rotated():
     # --- build original domain ---
     lx = 128_000
     ly = 128_000
-    resolution = 500
+    resolution = 1000
 
     nr0 = int(ly/resolution)
     nc0 = int(lx/resolution)
@@ -245,8 +245,8 @@ def wonky_stream_rotated():
 
     thk0 = jnp.zeros((nr0,nc0)) + 512 - 256*x0/lx
     thk0 = thk0.at[:,-2:].set(0)
-    thk0 = thk0.at[70:90, -10:].set(0)
-    #thk0 = thk0.at[int(70*1000/resolution):int(90*1000/resolution), -int(10*1000/resolution):].set(0)
+    #thk0 = thk0.at[70:90, -10:].set(0)
+    thk0 = thk0.at[int(70*1000/resolution):int(90*1000/resolution), -int(10*1000/resolution):].set(0)
     b0   = jnp.zeros((nr0,nc0)) - 256 - 256*x0/lx
 
     C0 = stickiness(xx0, yy0, resolution)
@@ -368,8 +368,8 @@ def tiny_ice_shelf():
 
 
 
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
 
 #plt.imshow(thk)
@@ -389,8 +389,10 @@ gradient_function = cc_gradient_function(delta_y, delta_x)
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_pic_iterations = 10
-n_newt_iterations = 5
+#n_pic_iterations = 10
+#n_newt_iterations = 5
+n_pic_iterations = 2
+n_newt_iterations = 38
 
 uc = jnp.where(thk>0, 1, 0)
 uc = binary_erosion(uc)
@@ -668,8 +670,8 @@ qp_initial_guess = jnp.zeros((2*nr*nc,))
 
 
 
-#show_vel_field(u_obs, v_obs, cmap="RdYlBu_r", vmin=0, vmax=2500)
-#raise
+show_vel_field(u_obs, v_obs, cmap="RdYlBu_r", vmin=0, vmax=2500)
+raise
 
 
 
