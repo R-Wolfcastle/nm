@@ -131,7 +131,6 @@ def make_sparse_dpgc_solver_comp(sp_matvec, inverse_diag_fct, iterations=10, tol
 
 def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterations=10, tol=1e-20):
 
-
     def conditional(state):
         i, _, r, _, rs = state
         return jnp.logical_and(i<iterations, jnp.abs(rs)>tol)
@@ -177,7 +176,6 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
         return xi
     
     return jax.jit(solver)
-
 
 def make_point_sor_preconditioner(coordinates, jac_shape, omega=1.0):
     """

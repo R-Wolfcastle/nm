@@ -281,29 +281,30 @@ lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surfac
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_iterations = 100
+n_iterations = 70
 
 solver = make_pic_velocity_solver_function_acrobatic(nr, nc, delta_y, delta_x,
                                                      b, ice_mask, n_iterations,
                                                      mucoef_0, C, sliding="basic_weertman")
 
 
-u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-
-show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
-
-
-
-#solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
-#                                                         delta_y, delta_x,
-#                                                         b, ice_mask,
-#                                                         10, 10,
-#                                                         mucoef_0, C,
-#                                                         sliding="basic_weertman")
+#u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 #
-#u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-#
-#
+#show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
+
+
+
+solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+                                                         delta_y, delta_x,
+                                                         b, ice_mask,
+                                                         70, 1,
+                                                         mucoef_0, C,
+                                                         sliding="basic_weertman")
+
+u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+
+show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0, vmax=3000)
+
 #show_vel_field(u_out-u_out_comp, v_out-v_out_comp, cmap="RdBu_r", vmin=-200, vmax=200)
 
 

@@ -1723,8 +1723,8 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
-                                                              indirect=False,
-                                                              monitor_ksp=False)
+                                                              indirect=True,
+                                                              monitor_ksp=True)
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
     #                                                          coords,
     #                                                          (ny*nx*2, ny*nx*2),
