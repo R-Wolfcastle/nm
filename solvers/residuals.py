@@ -217,27 +217,25 @@ def compute_linear_ssa_residuals_function_acrobatic(ny, nx, dy, dx, b,
         v_NE = v_padded[:-2,    2:]
         v_SW = v_padded[2:,    :-2]
         v_SE = v_padded[2:,     2:]
-
        
         visc_x =     2 * ( mu_e*(u_E - u_P) - mu_w*(u_P - u_W) ) +\
                    0.5 * ( mu_n*(u_N - u_P) - mu_s*(u_P - u_S) ) +\
                  0.125 * ( mu_se*(3*v_P + v_E - v_S - 3*v_SE) +\
                            mu_ne*(3*v_NE - v_E + v_N - 3*v_P) +\
                            mu_sw*(3*v_SW - v_W + v_S - 3*v_P) +\
-                           mu_ne*(3*v_P - v_N + v_W - 3*v_NW)
+                           mu_nw*(3*v_P - v_N + v_W - 3*v_NW)
                          )
         
-        visc_y =     2 * ( mu_n*(v_n - v_P) - mu_s*(v_P - v_S) ) +\
+        visc_y =     2 * ( mu_n*(v_N - v_P) - mu_s*(v_P - v_S) ) +\
                    0.5 * ( mu_e*(v_E - v_P) - mu_w*(v_P - v_W) ) +\
                  0.125 * ( mu_se*(3*u_P + u_S - u_E - 3*u_SE) +\
                            mu_ne*(3*u_NE - u_N + u_E - 3*u_P) +\
                            mu_sw*(3*u_SW - u_S + u_W - 3*u_P) +\
-                           mu_ne*(3*u_P - u_W + u_N - 3*u_NW)
+                           mu_nw*(3*u_P - u_W + u_N - 3*u_NW)
                          )
 
-        
-        x_mom_residual = visc_x + volume_x
-        y_mom_residual = visc_y + volume_y
+        x_mom_residual = 2*visc_x + volume_x
+        y_mom_residual = 2*visc_y + volume_y
 
         return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
 

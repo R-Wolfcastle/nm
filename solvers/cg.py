@@ -5,6 +5,7 @@ import sys
 import jax
 from jax import lax
 import jax.numpy as jnp
+from jax.experimental.sparse import BCOO as jax_bcoo
 
 #local apps
 sys.path.insert(1, '/Users/eartsu/new_model/testing/utils/')
@@ -125,6 +126,56 @@ def make_sparse_dpgc_solver_comp(sp_matvec, inverse_diag_fct, iterations=10, tol
         jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
         return xi
 
+    return jax.jit(solver)
+
+
+def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterations=10, tol=1e-20):
+
+
+    def conditional(state):
+        i, _, r, _, rs = state
+        return jnp.logical_and(i<iterations, jnp.abs(rs)>tol)
+    
+    def solver(vals, b, x0):
+
+        A_sp = jax_bcoo((vals, coords.T), shape=(jac_width, jac_width))
+    
+        M_inv = inverse_diag_fct(vals)
+   
+        r0 = b - A_sp @ x0
+    
+        d0 = M_inv * r0
+    
+        rs0 = jnp.dot(r0, M_inv * r0)
+    
+        initial_state = (0, x0, r0, d0, rs0)
+    
+        def update(state):
+            i, xi, r, d, rs = state
+    
+            Ad = A_sp @ d
+    
+            alpha = rs / jnp.dot(Ad, d)
+    
+            xi = xi + alpha * d
+    
+            r = r - alpha * Ad
+    
+            rs_new = jnp.dot(r, M_inv * r)
+    
+            beta = rs_new/rs
+    
+            d = M_inv * r + beta * d
+    
+            rs = rs_new
+
+            return (i+1, xi, r, d, rs)
+    
+        i, xi, r, d, rs = jax.lax.while_loop(conditional, update, initial_state)
+        jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
+    
+        return xi
+    
     return jax.jit(solver)
 
 

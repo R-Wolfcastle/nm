@@ -27,7 +27,8 @@ from cg import make_sparse_matvec, make_sparse_dpgc_solver_comp,\
                make_sparse_damped_jacobi_solver,\
                make_sparse_bicgstab_solver, make_point_sor_preconditioner,\
                make_multicoloured_relaxation,\
-               make_sparse_gs_precond_bicgstab_solver
+               make_sparse_gs_precond_bicgstab_solver,\
+               make_sparse_dpcg_solver_jsp_comp
 
 
 def print_residual_things(residual, rhs, init_residual, i):
@@ -1612,7 +1613,7 @@ def make_pic_velocity_solver_function_densetest(ny, nx, dy, dx,
 
 def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                                  b, ice_mask,
-                                                 n_pic_iterations, n_newt_iterations,
+                                                 n_iterations,
                                                  mucoef_0, C_0, sliding="linear",
                                                  periodic=False, B_field=None,
                                                  temperature_field=None):
@@ -1630,6 +1631,8 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
     fc_velocity_gradient                       = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
                                                                                ice_mask, add_uv_ghost_cells,
                                                                                add_scalar_ghost_cells)
+    nc_velocity_gradient                       = nc_velocity_gradient_function(dy, dx,
+                                                                               add_uv_ghost_cells)
     cc_gradient                                = cc_gradient_function(dy, dx)
     
     #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
@@ -1646,6 +1649,14 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                                    fc_velocity_gradient,
                                                    ice_mask, mucoef_0,
                                                    temperature_field)
+    
+    nc_viscosity_fct = node_centred_viscosity_function(ny, nx, dy, dx,
+                                                   add_scalar_ghost_cells,
+                                                   nc_velocity_gradient,
+                                                   ice_mask, mucoef_0,
+                                                   temperature_field)
+
+
     beta_fct = beta_function(b, sliding)
 
     #get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
@@ -1709,34 +1720,33 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                    )
                        ])
    
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
+                                                              monitor_ksp=False)
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
     #                                                          coords,
     #                                                          (ny*nx*2, ny*nx*2),
     #                                                          indirect=True,
-    #                                                          monitor_ksp=False)
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
-                                                              coords,
-                                                              (ny*nx*2, ny*nx*2),
-                                                              indirect=True,
-                                                              #ksp_type='gmres',
-                                                              #ksp_type='bcgs',
-                                                              ksp_type='cg',
-                                                              #preconditioner="jacobi", #might just about be workable
-                                                              preconditioner="sor", #better than jacobi
-                                                              monitor_ksp=True,
-                                                              ksp_max_iter=200)
+    #                                                          #ksp_type='gmres',
+    #                                                          #ksp_type='bcgs',
+    #                                                          ksp_type='cg',
+    #                                                          preconditioner="jacobi", #might just about be workable
+    #                                                          #preconditioner="sor", #better than jacobi
+    #                                                          monitor_ksp=True,
+    #                                                          ksp_max_iter=400)
     #Basically can only be used for newton-krylov type stuff where you're not expecting the LA problem to actually be solved
     #until quite near the end...
 
-    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords,(ny*nx*2, ny*nx*2))
-
-
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     #cg_solver = make_sparse_dpgc_solver_comp(sparse_matvec, extract_inverse_diagonal,
-    #                                         iterations=500)
+    #                                         iterations=200)
+    cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
+                                            iterations=200)
     #j_solver = make_sparse_damped_jacobi_solver(sparse_matvec, extract_inverse_diagonal, iterations=12)
     #preconditioner = make_point_sor_preconditioner(coords, (ny*nx*2, ny*nx*2))
-    bcgs_solver = make_sparse_bicgstab_solver(sparse_matvec, iterations=200)
+    #bcgs_solver = make_sparse_bicgstab_solver(sparse_matvec, iterations=200)
     #relax_solver = make_multicoloured_relaxation(sparse_matvec, extract_inverse_diagonal, basis_vectors, ny, nx)
     
     #bcgs_solver = make_sparse_gs_precond_bicgstab_solver(sparse_matvec, extract_inverse_diagonal, 
@@ -1771,10 +1781,11 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
         init_res = 0
 
         mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
+        mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
         beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
 
         du = jnp.zeros((nx*ny*2,))
-        for i in range(n_pic_iterations):
+        for i in range(n_iterations):
             #NOTE: making this twice as large makes PIG look a little better...
             #mu_ew = 2*mu_ew
             #mu_ns = 2*mu_ns
@@ -1795,18 +1806,17 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
 
             print("constructing LA problem")
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_linear_ssa,
-                                                 (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta)
+                                                 (u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta)
                                                           )
 
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
-           
 
 
-            full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
-            full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
-            
+            #full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
+            #full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            #
             #plt.imshow(jnp.log(jnp.abs(full_jac[:,:])).reshape((ny*nx*2,2*nx*ny)))
             #plt.colorbar()
             #plt.show()
@@ -1816,13 +1826,13 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
             #plt.show()
             
 
-            #print(full_jac[:(ny*nx),:(ny*nx)])
+            ##print(full_jac[:(ny*nx),:(ny*nx)])
             #print("--------------------------------")
             #print(full_jac[(ny*nx):,:(ny*nx)])
             #print("--------------------------------")
             #print(full_jac[:(ny*nx),(ny*nx):])
             #print("--------------------------------")
-            #print(full_jac[(ny*nx):,(ny*nx):])
+            ##print(full_jac[(ny*nx):,(ny*nx):])
             #print("--------------------------------")
             #print("--------------------------------")
             #print("--------------------------------")
@@ -1877,11 +1887,11 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
             ##nz_jac_values = jnp.where(jnp.abs(nz_jac_values) < 1e-10, 0.0, nz_jac_values)
             ##jax.debug.print("{x}", x=nz_jac_values)
 
-            rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
+            rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta))
 
             print("solving LA problem")
-            du = la_solver(nz_jac_values, rhs)
-            #du = cg_solver(nz_jac_values, rhs, du)
+            #du = la_solver(nz_jac_values, rhs)
+            du = cg_solver(nz_jac_values, rhs, du)
             #du = j_solver(nz_jac_values, rhs, du)
             #du = relax_solver(nz_jac_values, rhs, du)
             #du = bcgs_solver(nz_jac_values, rhs, du)
@@ -1903,24 +1913,27 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
 
             
             mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
+            mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
             beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
             
-            rhs_new = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
+            rhs_new = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta))
             
             if i==0:
                 initial_residual = jnp.max(rhs)
             print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
             
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
-        #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
-        #plt.colorbar()
-        #plt.show()
+        plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
+        plt.colorbar()
+        plt.show()
 
         
         final_residual_pic = res_fct(rhs_new)
 
         print("Final Picard residual: {}".format(final_residual_pic))
         print("Picard residual reduction factor: {}".format(initial_residual/final_residual_pic))
+
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
 
     return solver
 
@@ -2027,22 +2040,22 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                    )
                        ])
    
-    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
-    #                                                          coords,
-    #                                                          (ny*nx*2, ny*nx*2),
-    #                                                          indirect=True,
-    #                                                          monitor_ksp=False)
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
                                                               indirect=True,
-                                                              #ksp_type='gmres',
-                                                              #ksp_type='bcgs',
-                                                              ksp_type='cg',
-                                                              #preconditioner="jacobi", #might just about be workable
-                                                              preconditioner="sor", #better than jacobi
-                                                              monitor_ksp=True,
-                                                              ksp_max_iter=200)
+                                                              monitor_ksp=False)
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+    #                                                          coords,
+    #                                                          (ny*nx*2, ny*nx*2),
+    #                                                          indirect=True,
+    #                                                          #ksp_type='gmres',
+    #                                                          #ksp_type='bcgs',
+    #                                                          ksp_type='cg',
+    #                                                          #preconditioner="jacobi", #might just about be workable
+    #                                                          preconditioner="sor", #better than jacobi
+    #                                                          monitor_ksp=True,
+    #                                                          ksp_max_iter=200)
     #Basically can only be used for newton-krylov type stuff where you're not expecting the LA problem to actually be solved
     #until quite near the end...
 
@@ -2280,14 +2293,14 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
         print("===========================================")
         
-        plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
-        #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
-        plt.colorbar()
-        plt.show()
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
         ##plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
         #plt.colorbar()
         #plt.show()
+        ##plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
+        ###plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
+        ##plt.colorbar()
+        ##plt.show()
 
 
         

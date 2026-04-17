@@ -4,7 +4,8 @@ import time
 
 ##local apps
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
-from nonlinear_solvers import 
+from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
+                              make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap
 
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -82,12 +83,102 @@ def stickiness(x, y, resolution):
 
     return beta
 
+def wonky_stream_rotated():
+    # --- build original domain ---
+    lx = 128_000
+    ly = 128_000
+    resolution = 1000
+
+    nr0 = int(ly/resolution)
+    nc0 = int(lx/resolution)
+
+    x0 = jnp.linspace(0, lx, nc0)
+    y0 = jnp.linspace(0, ly, nr0)
+    xx0, yy0 = jnp.meshgrid(x0, y0)
+
+    delta_x = x0[1]-x0[0]
+    delta_y = y0[1]-y0[0]
+
+    thk0 = jnp.zeros((nr0,nc0)) + 512 - 256*x0/lx
+    thk0 = thk0.at[:,-2:].set(0)
+    #thk0 = thk0.at[70:90, -10:].set(0)
+    thk0 = thk0.at[int(70*1000/resolution):int(90*1000/resolution), -int(10*1000/resolution):].set(0)
+    b0   = jnp.zeros((nr0,nc0)) - 256 - 256*x0/lx
+
+    C0 = stickiness(xx0, yy0, resolution)
+    grounded0 = jnp.where((b0+thk0)>thk0*(1-0.917/1.027), 1, 0)
+    C0 = jnp.where((grounded0>0) | (thk0==0), C0, 0)
+
+    # side damping
+    C0 = C0.at[:2,:].set(1e12)
+    C0 = C0.at[-2:,:].set(1e12)
+    C0 = C0.at[:,:2].set(1e12)
+
+    surface0 = jnp.maximum(thk0+b0, thk0*(1-c.RHO_I/c.RHO_W))
+    b0 = jnp.where(C0>1e11, 0.01 + surface0 - thk0, b0)
+
+    mucoef0 = mucoef_rifted(xx0, yy0, resolution)
+    q0 = jnp.zeros_like(C0)
+    ice_mask0 = (thk0>0).astype(int)
+
+    # ---------------------------------------
+    #  ROTATION BY -45 degrees (clockwise)
+    # ---------------------------------------
+    theta = jnp.pi/8
+    R = jnp.array([[ jnp.cos(theta), -jnp.sin(theta)],
+                   [ jnp.sin(theta),  jnp.cos(theta)]])
+
+    # New padded domain dimensions
+    L = lx
+    W = ly
+    diag = int(jnp.ceil(jnp.sqrt(2)*L/resolution))
+    nr = diag
+    nc = diag
+
+    # Build new coords
+    x = jnp.linspace(-diag*resolution/2, diag*resolution/2, nc)
+    y = jnp.linspace(-diag*resolution/2, diag*resolution/2, nr)
+    XX, YY = jnp.meshgrid(x, y)
+
+    # Map (XX,YY) back to original coordinates via inverse rotation
+    invR = R.T
+    XY_old = jnp.stack([
+        invR[0,0]*XX + invR[0,1]*YY,
+        invR[1,0]*XX + invR[1,1]*YY
+    ], axis=0)
+
+    Xold = XY_old[0] + L/2
+    Yold = XY_old[1] + W/2
+
+    # nearest neighbour lookup indices
+    i = jnp.round(Yold / resolution).astype(int)
+    j = jnp.round(Xold / resolution).astype(int)
+
+    valid = (i>=0)&(i<nr0)&(j>=0)&(j<nc0)
+
+    def sample(arr):
+        out = jnp.zeros_like(XX)
+        out = out.at[valid].set(arr[i[valid], j[valid]])
+        return out
+
+    thk  = sample(thk0)
+    b    = sample(b0)
+    C    = sample(C0)
+    mucoef_0 = sample(mucoef0)
+    q    = sample(q0)
+    surface  = sample(surface0)
+    grounded = sample(grounded0)
+    ice_mask = sample(ice_mask0)
+
+    return (diag*resolution, diag*resolution,
+            nr, nc, x, y, resolution, resolution,
+            thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
 
 def wonky_stream():
     lx = 128_000
     ly = 128_000
 
-    resolution = 4000
+    resolution = 2000
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -181,11 +272,39 @@ def tiny_ice_shelf():
 
 
 
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
 lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
 
 
 
+u_init = jnp.zeros_like(b) + 100
+v_init = jnp.zeros_like(b)
 
+n_iterations = 100
+
+solver = make_pic_velocity_solver_function_acrobatic(nr, nc, delta_y, delta_x,
+                                                     b, ice_mask, n_iterations,
+                                                     mucoef_0, C, sliding="basic_weertman")
+
+
+u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+
+show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
+
+
+
+#solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+#                                                         delta_y, delta_x,
+#                                                         b, ice_mask,
+#                                                         10, 10,
+#                                                         mucoef_0, C,
+#                                                         sliding="basic_weertman")
+#
+#u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+#
+#
+#show_vel_field(u_out-u_out_comp, v_out-v_out_comp, cmap="RdBu_r", vmin=-200, vmax=200)
 
 
 

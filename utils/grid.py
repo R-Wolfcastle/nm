@@ -100,7 +100,7 @@ def nc_gradient_function(dy, dx):
     return jax.jit(node_gradient)
 
 
-def nc_vel_gradient_function(dy, dx, add_uv_ghost_cells):
+def nc_velocity_gradient_function(dy, dx, add_uv_ghost_cells):
 
     def node_gradient(u, v):
         u, v = add_uv_ghost_cells(u, v)
@@ -1462,7 +1462,7 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
         mucoef = add_s_ghost_cells(mucoef)
         mucoef_nc = interp_cc_to_nc(mucoef)
 
-        nc_ice_mask = jnp.where(interp_cc_to_nc(ice_mask)>0.999, 1, 0)
+        nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
         
         u = u.reshape((ny, nx))
         v = v.reshape((ny, nx))
