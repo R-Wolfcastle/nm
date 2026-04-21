@@ -15,7 +15,8 @@ from grid import binary_erosion, binary_dilation,\
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers")
 from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
                               make_pic_velocity_solver_function_densetest,\
-                              make_pic_velocity_solver_function_acrobatic
+                              make_pic_velocity_solver_function_acrobatic,\
+                              make_pic_velocity_solver_function_gpusafe
 
 #3rd party
 import jax
@@ -418,9 +419,9 @@ def run_fwd():
                                                              sliding="basic_weertman",
                                                              temperature_field=temp)
     
-    n_pic_iterations = 100
+    n_pic_iterations = 75
     
-    solver = make_pic_velocity_solver_function_acrobatic(nr, nc, res, res,
+    solver = make_pic_velocity_solver_function_gpusafe(nr, nc, res, res,
                                                          topg, ice_mask, n_pic_iterations,
                                                          phi, C, sliding="basic_weertman",
                                                          temperature_field=temp)
@@ -441,7 +442,7 @@ run_fwd()
 
 
 
-#raise
+raise
 ######INVERSE PROBLEM GUBBINS:
 
 

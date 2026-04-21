@@ -40,8 +40,7 @@ def make_sparse_matvec(matrix_width, coords):
         diag_vals = vals[diag_mask]
         diag_indices = i_coords[diag_mask]
         
-        #If there are zeros in this, we're screwed anyway
-        return 1/jnp.zeros(matrix_width).at[diag_indices].add(diag_vals)
+        return 1/(jnp.zeros(matrix_width).at[diag_indices].add(diag_vals) + 1e-15)
 
 
     return sparse_matvec, A_inner_product, extract_inverse_diagonal
@@ -140,20 +139,25 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
         A_sp = jax_bcoo((vals, coords.T), shape=(jac_width, jac_width))
     
         M_inv = inverse_diag_fct(vals)
-   
+  
+        #jax.debug.print("M_inv: {x}", x=M_inv)
+
         r0 = b - A_sp @ x0
-    
+
         d0 = M_inv * r0
     
         rs0 = jnp.dot(r0, M_inv * r0)
     
         initial_state = (0, x0, r0, d0, rs0)
+            
+        #jax.debug.print("IS Max: {x}",x=(jnp.max(x0), jnp.max(r0), jnp.max(d0), jnp.max(rs0)))
     
         def update(state):
             i, xi, r, d, rs = state
     
             Ad = A_sp @ d
-    
+        
+
             alpha = rs / jnp.dot(Ad, d)
     
             xi = xi + alpha * d
