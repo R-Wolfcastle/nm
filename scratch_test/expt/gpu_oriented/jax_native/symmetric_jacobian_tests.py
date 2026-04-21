@@ -6,7 +6,8 @@ import time
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
 from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
-                              make_pic_velocity_solver_function_gpusafe
+                              make_pic_velocity_solver_function_gpusafe,\
+                              make_pic_velocity_solver_function_expl_advection_gpusafe
 
 sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -179,7 +180,7 @@ def wonky_stream():
     lx = 128_000
     ly = 128_000
 
-    resolution = 1000
+    resolution = 500
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -282,31 +283,43 @@ lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surfac
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_iterations = 20
+n_iterations = 70
 
-solver = make_pic_velocity_solver_function_gpusafe(nr, nc, delta_y, delta_x,
+#solver = make_pic_velocity_solver_function_gpusafe(nr, nc, delta_y, delta_x,
+#                                                   b, ice_mask, n_iterations,
+#                                                   mucoef_0, C, sliding="basic_weertman")
+#
+#
+#u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+#
+#show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
+#
+##raise
+#
+#solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+#                                                         delta_y, delta_x,
+#                                                         b, ice_mask,
+#                                                         70, 1,
+#                                                         mucoef_0, C,
+#                                                         sliding="basic_weertman")
+#
+#u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+#
+#show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0, vmax=3000)
+#
+#show_vel_field(u_out-u_out_comp, v_out-v_out_comp, cmap="RdBu_r", vmin=-200, vmax=200)
+
+n_timesteps = 5
+
+prognostic_solver = make_pic_velocity_solver_function_expl_advection_gpusafe(nr, nc, delta_y, delta_x,
                                                    b, ice_mask, n_iterations,
-                                                   mucoef_0, C, sliding="basic_weertman")
+                                                   mucoef_0, C, n_timesteps, sliding="basic_weertman")
 
+u, v, h = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 
-u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+show_vel_field(u, v, cmap="RdYlBu_r", vmin=0, vmax=3000)
 
-show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
-
-#raise
-
-solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
-                                                         delta_y, delta_x,
-                                                         b, ice_mask,
-                                                         70, 1,
-                                                         mucoef_0, C,
-                                                         sliding="basic_weertman")
-
-u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-
-show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0, vmax=3000)
-
-show_vel_field(u_out-u_out_comp, v_out-v_out_comp, cmap="RdBu_r", vmin=-200, vmax=200)
-
-
+plt.imshow(h)
+plt.colorbar()
+plt.show()
 

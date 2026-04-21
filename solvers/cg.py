@@ -175,7 +175,7 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
             return (i+1, xi, r, d, rs)
     
         i, xi, r, d, rs = jax.lax.while_loop(conditional, update, initial_state)
-        jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
+        #jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
     
         return xi
     
