@@ -1,5 +1,8 @@
+import os
 import sys
-sys.path.insert(1, "/users/eartsu/new_model/testing/nm/utils/")
+nm_home = os.environ['NM_HOME']   
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 import constants_years as c
 
 import jax

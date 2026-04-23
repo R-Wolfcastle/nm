@@ -2,6 +2,7 @@
 
 #1st party
 from pathlib import Path
+import os
 import sys
 from functools import partial
 
@@ -12,7 +13,9 @@ import numpy as np
 from petsc4py import PETSc
 
 #local apps
-sys.path.insert(1, '/Users/eartsu/new_model/testing/utils/')
+nm_home = os.environ['NM_HOME']   
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from sparsity_utils import scipy_coo_to_csr,\
                            dodgy_coo_to_csr,\
                            jax_coo_to_csr

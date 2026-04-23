@@ -1,4 +1,5 @@
 #1st Party
+import os
 import sys
 
 #3rd Party
@@ -9,7 +10,13 @@ import jax.scipy.linalg as lalg
 from jax.scipy.optimize import minimize
 
 #local apps
-sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
+nm_home = os.environ['NM_HOME']   
+
+if nm_home is None:
+    raise RuntimeError("NM_HOME is not set")
+
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\
@@ -19,7 +26,7 @@ from sparsity_utils import scipy_coo_to_csr,\
 import constants_years as c
 from grid import *
 
-sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers/")
+sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 import residuals as rdl
 from linear_solvers import create_sparse_petsc_la_solver_with_custom_vjp,\
                            create_sparse_petsc_la_solver_with_custom_vjp_given_csr
@@ -487,7 +494,7 @@ def make_newton_velocity_solver_function_custom_vjp(ny, nx, dy, dx,\
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
                                                               indirect=False)
-    
+ 
 
 
 
@@ -1909,7 +1916,7 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
-                                            iterations=75)
+                                            iterations=150)
 
     res_fct = lambda x: jnp.max(jnp.abs(x))
     

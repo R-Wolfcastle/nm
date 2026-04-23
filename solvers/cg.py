@@ -1,4 +1,5 @@
 #1st party
+import os
 import sys
 
 #3rd party
@@ -8,7 +9,10 @@ import jax.numpy as jnp
 from jax.experimental.sparse import BCOO as jax_bcoo
 
 #local apps
-sys.path.insert(1, '/Users/eartsu/new_model/testing/utils/')
+
+nm_home = os.environ['NM_HOME']
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from sparsity_utils import jax_coo_to_csr
 
 
