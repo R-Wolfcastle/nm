@@ -180,7 +180,7 @@ def wonky_stream():
     lx = 128_000
     ly = 128_000
 
-    resolution = 250
+    resolution = 500
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -309,7 +309,7 @@ n_iterations = 75
 #
 #show_vel_field(u_out-u_out_comp, v_out-v_out_comp, cmap="RdBu_r", vmin=-200, vmax=200)
 
-n_timesteps = 1
+n_timesteps = 5
 
 prognostic_solver = make_pic_velocity_solver_function_expl_advection_gpusafe(nr, nc, delta_y, delta_x,
                                                    b, ice_mask, n_iterations,

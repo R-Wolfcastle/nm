@@ -210,6 +210,67 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
     return jax.jit(solver)
     #return solver
 
+
+
+
+def make_sparse_dpcg_solver_jsp_comp_fori(
+    coords,
+    inverse_diag_fct,
+    jac_width,
+    iterations=10,
+    tol=1e-20,
+):
+
+    def solver(vals, b, x0):
+
+        # Sparse matrix (unchanged)
+        A_sp = jax_bcoo((vals, coords.T),
+                        shape=(jac_width, jac_width))
+
+        M_inv = inverse_diag_fct(vals)
+
+        # Initial CG state (same math as before)
+        r0  = b - A_sp @ x0
+        d0  = M_inv * r0
+        rs0 = jnp.dot(r0, M_inv * r0)
+
+        # State = (x, r, d, rs)
+        init_state = (x0, r0, d0, rs0)
+
+        def body(i, state):
+            x, r, d, rs = state
+
+            # Convergence test (scalar, but used only for masking)
+            converged = rs < tol
+
+            Ad = A_sp @ d
+
+            alpha = rs / jnp.dot(Ad, d)
+
+            x_new = x + alpha * d
+            r_new = r - alpha * Ad
+
+            rs_new = jnp.dot(r_new, M_inv * r_new)
+            beta   = rs_new / rs
+            d_new  = M_inv * r_new + beta * d
+
+            # Masked updates after convergence
+            x  = jnp.where(converged, x,  x_new)
+            r  = jnp.where(converged, r,  r_new)
+            d  = jnp.where(converged, d,  d_new)
+            rs = jnp.where(converged, rs, rs_new)
+
+            return (x, r, d, rs)
+
+        x, r, d, rs = jax.lax.fori_loop(
+            0, iterations, body, init_state
+        )
+
+        return x
+
+    return jax.jit(solver)
+
+
 def make_point_sor_preconditioner(coordinates, jac_shape, omega=1.0):
     """
     Returns a function M(r, vals) that applies ONE forward SOR sweep:

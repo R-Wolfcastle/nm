@@ -37,7 +37,8 @@ from cg import make_sparse_matvec, make_sparse_dpgc_solver_comp,\
                make_sparse_bicgstab_solver, make_point_sor_preconditioner,\
                make_multicoloured_relaxation,\
                make_sparse_gs_precond_bicgstab_solver,\
-               make_sparse_dpcg_solver_jsp_comp
+               make_sparse_dpcg_solver_jsp_comp,\
+               make_sparse_dpcg_solver_jsp_comp_fori
 
 
 def print_residual_things(residual, rhs, init_residual, i):
@@ -2079,6 +2080,8 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
 
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
+    #cg_solver = make_sparse_dpcg_solver_jsp_comp_fori(coords, extract_inverse_diagonal, ny*nx*2,
+    #                                        iterations=200)
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
                                             iterations=200)
 
@@ -2093,13 +2096,12 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
                                                               indirect=True,
                                                               #ksp_type='gmres',
                                                               #ksp_type='bcgs',
-                                                              ksp_type='cg',
-                                                              #preconditioner="jacobi", #might just about be workable
+                                                              ksp_type='preonly',
+                                                              preconditioner="jacobi", #might just about be workable
                                                               #preconditioner="sor", #better than jacobi
-                                                              preconditioner="hypre",
+                                                              #preconditioner="sor",
                                                               #monitor_ksp=True,
-                                                              ksp_max_iter=30)
-    
+                                                              ksp_max_iter=20)
 
     def conditional(state):
         i, res, init_res, _,_,_,_,_,_,_,_ = state
@@ -2138,50 +2140,49 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
 
             #jax.debug.print("Pic res: {x}", x=res)
 
-            t0 = time.perf_counter()
+            #t0 = time.perf_counter()
             nz_jac_values, rhs = assemble_jacobian(
                 u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta
             )
-            nz_jac_values.block_until_ready()
-            t_jac = time.perf_counter() - t0
+            #nz_jac_values.block_until_ready()
+            #t_jac = time.perf_counter() - t0
 
             #jax.debug.print("NZ jac values: {x}", x=nz_jac_values)
             
-            t0 = time.perf_counter()
+            #t0 = time.perf_counter()
             #duv = cg_solver(nz_jac_values, rhs, jnp.zeros_like(duv))
             duv = la_solver(nz_jac_values, rhs)
 
-            duv.block_until_ready()
-            t_cg = time.perf_counter() - t0
+            #duv.block_until_ready()
+            #t_cg = time.perf_counter() - t0
 
 
-            t0 = time.perf_counter()
+            #t0 = time.perf_counter()
             u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
-            u_1d.block_until_ready()
-            t_update = time.perf_counter() - t0
+            #u_1d.block_until_ready()
+            #t_update = time.perf_counter() - t0
 
-            t0 = time.perf_counter()
+            #t0 = time.perf_counter()
             mu_ew, mu_ns = fc_viscosity_fct(q, u_1d, v_1d)
             mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
             beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
-            mu_ew.block_until_ready()
-            t_visc = time.perf_counter() - t0
+            #mu_ew.block_until_ready()
+            #t_visc = time.perf_counter() - t0
 
-            print(
-                f"PIC iter {i:3d} | "
-                f"Jac: {t_jac:7.4f}s | "
-                f"CG: {t_cg:7.4f}s | "
-                f"Upd: {t_update:7.4f}s | "
-                f"Visc: {t_visc:7.4f}s"
-            )
-
+            #print(
+            #    f"PIC iter {i:3d} | "
+            #    f"Jac: {t_jac:7.4f}s | "
+            #    f"CG: {t_cg:7.4f}s | "
+            #    f"Upd: {t_update:7.4f}s | "
+            #    f"Visc: {t_visc:7.4f}s"
+            #)
 
             return (i+1, res_fct(rhs), init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv)
 
 
-        #i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(conditional, update, initial_state)
-        i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = fake_lax_while_loop(conditional, update, initial_state)
+        i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(conditional, update, initial_state)
+        #i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = fake_lax_while_loop(conditional, update, initial_state)
 
         jax.debug.print("Pic res: {x}", x=res)
         jax.debug.print("Pic res reduction factor: {x}", x=init_res/res)

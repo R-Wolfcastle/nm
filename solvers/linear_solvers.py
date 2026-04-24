@@ -202,7 +202,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
 
         #set ksp iterations
         opts['ksp_max_it'] = ksp_max_iter
-        opts['ksp_rtol'] = 1e-20
+        opts['ksp_rtol'] = 1e-10
         opts['ksp_norm_type'] = "unpreconditioned"
         #opts['ksp_norm_type'] = "preconditioned"
     
