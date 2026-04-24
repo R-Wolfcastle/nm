@@ -228,7 +228,7 @@ def wonky_stream():
 def tiny_ice_shelf():
     lx = 1_500
     ly = 1_500
-    resolution = 500 #m
+    resolution = 250 #m
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -296,31 +296,38 @@ n_iterations = 75
 #
 #raise
 #
-solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
-                                                         delta_y, delta_x,
-                                                         b, ice_mask,
-                                                         70, 1,
-                                                         mucoef_0, C,
-                                                         sliding="basic_weertman")
-
-u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-rause
+#solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+#                                                         delta_y, delta_x,
+#                                                         b, ice_mask,
+#                                                         70, 1,
+#                                                         mucoef_0, C,
+#                                                         sliding="basic_weertman")
+#
+#u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+#raise
 #show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0, vmax=3000)
 #
 #show_vel_field(u_out-u_out_comp, v_out-v_out_comp, cmap="RdBu_r", vmin=-200, vmax=200)
 
-n_timesteps = 5
+n_timesteps = 1
 
 prognostic_solver = make_pic_velocity_solver_function_expl_advection_gpusafe(nr, nc, delta_y, delta_x,
                                                    b, ice_mask, n_iterations,
                                                    mucoef_0, C, n_timesteps, sliding="basic_weertman")
 
+
+
+## Warm-up
+#u, v, h = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+#u.block_until_ready()
+
+# Timed run
+#t0 = time.time()
 u, v, h = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+#u.block_until_ready()
+#print("Total runtime:", time.time() - t0)
 
-u.block_until_ready()
-
-print(u.device)
-
+raise
 show_vel_field(u, v, cmap="RdYlBu_r", vmin=0, vmax=3000)
 
 plt.imshow(h)

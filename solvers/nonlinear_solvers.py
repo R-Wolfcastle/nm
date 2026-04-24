@@ -1,6 +1,7 @@
 #1st Party
 import os
 import sys
+import time
 
 #3rd Party
 import jax
@@ -1619,8 +1620,6 @@ def make_pic_velocity_solver_function_densetest(ny, nx, dy, dx,
     return solver
 
 
-
-
 def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
                                               b, ice_mask,
                                               n_iterations,
@@ -1780,6 +1779,165 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
     return solver
 
 
+def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
+                                              b, ice_mask,
+                                              n_iterations,
+                                              mucoef_0, C_0,
+                                              sliding="linear",
+                                              res_tol=1e-10,
+                                              periodic=False,
+                                              B_field=None,
+                                              temperature_field=None):
+
+    if temperature_field is None:
+        temperature_field = (jnp.zeros((ny,nx))+263.15)
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    #Note: interp_cc_to_nc is not made in a function factory
+    
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    
+    fc_velocity_gradient                       = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
+                                                                               ice_mask, add_uv_ghost_cells,
+                                                                               add_scalar_ghost_cells)
+    nc_velocity_gradient                       = nc_velocity_gradient_function(dy, dx,
+                                                                               add_uv_ghost_cells)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    
+    
+    fc_viscosity_fct = fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, 
+                                                   add_uv_ghost_cells,
+                                                   add_scalar_ghost_cells,
+                                                   interp_cc_to_fc,
+                                                   fc_velocity_gradient,
+                                                   ice_mask, mucoef_0,
+                                                   temperature_field)
+    
+    nc_viscosity_fct = node_centred_viscosity_function(ny, nx, dy, dx,
+                                                   add_scalar_ghost_cells,
+                                                   nc_velocity_gradient,
+                                                   ice_mask, mucoef_0,
+                                                   temperature_field)
+
+
+    beta_fct = beta_function(b, sliding)
+
+    get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_acrobatic(ny, nx, dy, dx, b,
+                                                       interp_cc_to_fc,
+                                                       fc_velocity_gradient,
+                                                       cc_gradient,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells)
+    
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=periodic)
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+
+    basis_vectors = jnp.stack(basis_vectors).astype(jnp.float64)
+
+    #sparse_jacrev = make_sparse_jacrev_fct_shared_basis_new(
+    #                                                    basis_vectors,\
+    #                                                    2,
+    #                                                    active_indices=(0,1)
+    #                                                   )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+    mask = (i_coordinate_sets>=0)
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+   
+
+
+    assemble_jacobian = assemble_sparse_2x2_block_jacobian_function(basis_vectors, ny*nx, mask,
+                                                                    get_uv_residuals_linear_ssa)
+
+
+    sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
+    cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
+                                            iterations=400)
+
+    res_fct = lambda x: jnp.max(jnp.abs(x))
+    
+    omega=1
+
+    def conditional(state):
+        i, res, _,_,_,_,_,_,_,_ = state
+        return jnp.logical_and(i<n_iterations, jnp.abs(res)>res_tol)
+
+
+    def solver(q, p, u_trial, v_trial, h):
+        
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+
+        u_1d = u_trial.copy().reshape(-1)
+        v_1d = v_trial.copy().reshape(-1)
+        h_1d = h.copy().reshape(-1)
+
+        ice_mask = jnp.where(h>0,1,0).reshape(-1)
+
+        u_1d = u_1d * ice_mask
+        v_1d = v_1d * ice_mask
+
+        residual = jnp.inf
+        init_res = 0
+
+        mu_ew, mu_ns = fc_viscosity_fct(q, u_1d, v_1d)
+        mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
+        beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+        
+        duv = jnp.zeros((nx*ny*2,))
+
+        initial_state = (0, residual, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv) 
+
+        def update(state):
+            i, res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = state
+
+            jax.debug.print("Pic res: {x}", x=res)
+
+            nz_jac_values, rhs = assemble_jacobian(
+                u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta
+            )
+
+            #jax.debug.print("NZ jac values: {x}", x=nz_jac_values)
+
+            duv = cg_solver(nz_jac_values, rhs, duv)
+
+            u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
+            v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
+            
+            mu_ew, mu_ns = fc_viscosity_fct(q, u_1d, v_1d)
+            mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
+            beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+
+            return (i+1, res_fct(rhs), u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv)
+
+
+        i, res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(conditional, update, initial_state)
+
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+    return solver
+
+
 
 def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc, 
                            add_uv_ghost_cells, add_s_ghost_cells):
@@ -1815,6 +1973,13 @@ def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
         return h + source*delta_t - flux_term/(dy*dx)
 
     return jax.jit(advection_step)
+
+
+def fake_lax_while_loop(conditional, update, initial_state):
+    state = initial_state
+    while conditional(state):
+        state = update(state)
+    return state
 
 
 def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
@@ -1909,22 +2074,35 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
                        ])
    
 
-
     assemble_jacobian = assemble_sparse_2x2_block_jacobian_function(basis_vectors, ny*nx, mask,
                                                                     get_uv_residuals_linear_ssa)
 
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
-                                            iterations=150)
+                                            iterations=200)
 
     res_fct = lambda x: jnp.max(jnp.abs(x))
     
     omega=1
 
 
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=True,
+                                                              #ksp_type='gmres',
+                                                              #ksp_type='bcgs',
+                                                              ksp_type='cg',
+                                                              #preconditioner="jacobi", #might just about be workable
+                                                              #preconditioner="sor", #better than jacobi
+                                                              preconditioner="hypre",
+                                                              #monitor_ksp=True,
+                                                              ksp_max_iter=30)
+    
+
     def conditional(state):
-        i, res, _,_,_,_,_,_,_,_ = state
+        i, res, init_res, _,_,_,_,_,_,_,_ = state
         return jnp.logical_and(i<n_iterations, jnp.abs(res)>res_tol)
 
 
@@ -1942,42 +2120,71 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
         u_1d = u_1d * ice_mask
         v_1d = v_1d * ice_mask
 
-        residual = jnp.inf
-        init_res = 0
 
         mu_ew, mu_ns = fc_viscosity_fct(q, u_1d, v_1d)
         mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
         beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
         
+        _, r0 = assemble_jacobian(
+            u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta
+        )
+        
         duv = jnp.zeros((nx*ny*2,))
 
-        initial_state = (0, residual, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv) 
+        initial_state = (0, res_fct(r0), res_fct(r0), u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv) 
 
         def update(state):
-            i, res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = state
+            i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = state
 
             #jax.debug.print("Pic res: {x}", x=res)
 
+            t0 = time.perf_counter()
             nz_jac_values, rhs = assemble_jacobian(
                 u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta
             )
+            nz_jac_values.block_until_ready()
+            t_jac = time.perf_counter() - t0
 
             #jax.debug.print("NZ jac values: {x}", x=nz_jac_values)
+            
+            t0 = time.perf_counter()
+            #duv = cg_solver(nz_jac_values, rhs, jnp.zeros_like(duv))
+            duv = la_solver(nz_jac_values, rhs)
 
-            duv = cg_solver(nz_jac_values, rhs, duv)
+            duv.block_until_ready()
+            t_cg = time.perf_counter() - t0
 
+
+            t0 = time.perf_counter()
             u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
-            
+            u_1d.block_until_ready()
+            t_update = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
             mu_ew, mu_ns = fc_viscosity_fct(q, u_1d, v_1d)
             mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
             beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+            mu_ew.block_until_ready()
+            t_visc = time.perf_counter() - t0
 
-            return (i+1, res_fct(rhs), u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv)
+            print(
+                f"PIC iter {i:3d} | "
+                f"Jac: {t_jac:7.4f}s | "
+                f"CG: {t_cg:7.4f}s | "
+                f"Upd: {t_update:7.4f}s | "
+                f"Visc: {t_visc:7.4f}s"
+            )
 
 
-        i, res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(conditional, update, initial_state)
+            return (i+1, res_fct(rhs), init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv)
+
+
+        #i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(conditional, update, initial_state)
+        i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = fake_lax_while_loop(conditional, update, initial_state)
+
         jax.debug.print("Pic res: {x}", x=res)
+        jax.debug.print("Pic res reduction factor: {x}", x=init_res/res)
 
         return u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx))
 
@@ -1999,7 +2206,8 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
 
             return ts+1, u, v, h
 
-        ts_end, u, v, h = jax.lax.while_loop(prognostic_condition, update, initial_state)
+        #ts_end, u, v, h = jax.lax.while_loop(prognostic_condition, update, initial_state)
+        ts_end, u, v, h = fake_lax_while_loop(prognostic_condition, update, initial_state)
 
         return u.reshape((ny, nx)), v.reshape((ny, nx)), h.reshape((ny, nx))
 

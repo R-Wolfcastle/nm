@@ -1,6 +1,7 @@
 #1st party
 import os
 import sys
+import time
 
 #3rd party
 import jax
@@ -131,6 +132,11 @@ def make_sparse_dpgc_solver_comp(sp_matvec, inverse_diag_fct, iterations=10, tol
 
     return jax.jit(solver)
 
+def fake_lax_while_loop(conditional, update, initial_state):
+    state = initial_state
+    while conditional(state):
+        state = update(state)
+    return state
 
 def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterations=10, tol=1e-20):
 
@@ -158,9 +164,15 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
     
         def update(state):
             i, xi, r, d, rs = state
-    
+   
+            #t0 = time.perf_counter()
             Ad = A_sp @ d
-        
+            #Ad.block_until_ready()
+            #t_matvec = time.perf_counter()-t0
+
+
+
+            #t_0 = time.perf_counter()
 
             alpha = rs / jnp.dot(Ad, d)
     
@@ -175,15 +187,28 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
             d = M_inv * r + beta * d
     
             rs = rs_new
+            
+            #Ad.block_until_ready()
+            #t_rest = time.perf_counter()-t0
+        
+            #print(
+            #    f"CG iter {i:3d} | "
+            #    f"Matvec: {t_matvec:7.4f}s | "
+            #    f"Rest:   {t_rest:7.4f}s | "
+            #)
+
 
             return (i+1, xi, r, d, rs)
     
         i, xi, r, d, rs = jax.lax.while_loop(conditional, update, initial_state)
+        #i, xi, r, d, rs = fake_lax_while_loop(conditional, update, initial_state)
+        
         #jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
     
         return xi
     
     return jax.jit(solver)
+    #return solver
 
 def make_point_sor_preconditioner(coordinates, jac_shape, omega=1.0):
     """
