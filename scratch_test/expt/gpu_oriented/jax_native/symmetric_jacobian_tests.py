@@ -1,15 +1,16 @@
 #1st party
 import sys
 import time
+import os
 
 ##local apps
-sys.path.insert(1, "../../../../solvers/")
+nm_home = os.environ['NM_HOME']
+sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
                               make_pic_velocity_solver_function_gpusafe,\
                               make_pic_velocity_solver_function_expl_advection_gpusafe
-
-sys.path.insert(1, "../../../../utils/")
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
                            create_gif_from_png_fps, create_high_quality_gif_from_pngfps,\
                            create_imageio_gif, create_webp_from_pngs, create_gif_global_palette
@@ -180,7 +181,7 @@ def wonky_stream():
     lx = 128_000
     ly = 128_000
 
-    resolution = 1000
+    resolution = 2000
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -327,7 +328,7 @@ u, v, h = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_
 #u.block_until_ready()
 #print("Total runtime:", time.time() - t0)
 
-raise
+#raise
 show_vel_field(u, v, cmap="RdYlBu_r", vmin=0, vmax=3000)
 
 plt.imshow(h)

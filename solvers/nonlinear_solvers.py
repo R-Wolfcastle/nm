@@ -1877,7 +1877,7 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
-                                            iterations=400)
+                                            iterations=100)
 
     res_fct = lambda x: jnp.max(jnp.abs(x))
     
@@ -2042,7 +2042,7 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
-                                            iterations=400)
+                                            iterations=4000)
 
     res_fct = lambda x: jnp.max(jnp.abs(x))
     
@@ -2319,8 +2319,8 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
             #jax.debug.print("NZ jac values: {x}", x=nz_jac_values)
             
             #t0 = time.perf_counter()
-            #duv = cg_solver(nz_jac_values, rhs, jnp.zeros_like(duv))
-            duv = la_solver(nz_jac_values, rhs)
+            duv = cg_solver(nz_jac_values, rhs, jnp.zeros_like(duv))
+            #duv = la_solver(nz_jac_values, rhs)
 
             #duv.block_until_ready()
             #t_cg = time.perf_counter() - t0

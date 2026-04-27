@@ -2,9 +2,11 @@
 #1st party
 import sys
 import time
+import os
 
 #local apps
-sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils")
+nm_home = os.environ['NM_HOME']
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 import constants_years as c
 from plotting_stuff import show_vel_field
 from grid import binary_erosion, binary_dilation,\
@@ -12,10 +14,11 @@ from grid import binary_erosion, binary_dilation,\
         cc_resistive_and_deviatoric_stress_tensors,\
         linear_extrapolate_over_cf_function_cornersafe
 
-sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/solvers")
+sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
-                              make_pic_velocity_solver_function_densetest
-
+                              make_pic_velocity_solver_function_densetest,\
+                              make_pic_velocity_solver_function_gpusafe,\
+                              make_pic_velocity_solver_function_expl_advection_gpusafe
 #3rd party
 import jax
 import jax.numpy as jnp
@@ -233,15 +236,15 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
 #                                        resolution)
 
     phi, C, topg, thk = (bed_r[var_].values for var_ in ["mucoef",
-                                                         #"c_third",
-                                                         "c_one",
+                                                         "c_third",
+                                                         #"c_one",
                                                          "topg", 
                                                          "thk"])
 
-    C[:2, :] = 1e10
-    C[-2:,:] = 1e10
-    C[:, :2] = 1e10
-    C[:,-2:] = 1e10
+    C[:4, :] = 1e15
+    C[-4:,:] = 1e15
+    C[:, :4] = 1e15
+    C[:,-4:] = 1e15
 
     #thk_eroded = binary_erosion(thk)
     
@@ -352,15 +355,15 @@ def tiny_ice_shelf():
 
 
 #PIG WHOLE
-#tlxy = (-1_700_000, -50_000)
-#brxy = (-1_500_000, -370_000)
+tlxy = (-1_700_000, -50_000)
+brxy = (-1_500_000, -370_000)
 
 
-#PIG ICE SHELF
-tlxy = (-1_654_000, -190_000)
-brxy = (-1_550_000, -346_000)
+##PIG ICE SHELF
+#tlxy = (-1_654_000, -190_000)
+#brxy = (-1_550_000, -346_000)
 
-res = 1000
+res = 2000
 
 phi, C, topg, thk, ice_mask, temp = setup_domain(res, tlxy, brxy)
 
@@ -415,12 +418,24 @@ def run_fwd():
                                                              n_pic_iterations,
                                                              n_newt_iterations,
                                                              phi, C,
-                                                             sliding="linear",
-                                                             #sliding="basic_weertman",
+                                                             #sliding="linear",
+                                                             sliding="basic_weertman",
                                                              temperature_field=temp)
     
     u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+
+    #n_iterations = 50
+
+    #solver = make_pic_velocity_solver_function_gpusafe(nr, nc, res, res,
+    #                                                   topg, ice_mask, n_iterations,
+    #                                                   phi, C, sliding="basic_weertman")
+    #
+    #u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
     
+    show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
+    
+    raise
+
     
     #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/PIGGING_TEA_BREAK/u_double_visc.npy", u_out)
     #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/PIGGING_TEA_BREAK/v_double_visc.npy", v_out)
@@ -429,14 +444,14 @@ def run_fwd():
     show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=4500)
 
 
-#run_fwd()
+run_fwd()
 
 
 
 
 
 
-#raise
+raise
 ######INVERSE PROBLEM GUBBINS:
 
 
