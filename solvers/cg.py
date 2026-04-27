@@ -1,5 +1,7 @@
 #1st party
+import os
 import sys
+import time
 
 #3rd party
 import jax
@@ -8,7 +10,10 @@ import jax.numpy as jnp
 from jax.experimental.sparse import BCOO as jax_bcoo
 
 #local apps
-sys.path.insert(1, '/Users/eartsu/new_model/testing/utils/')
+
+nm_home = os.environ['NM_HOME']
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from sparsity_utils import jax_coo_to_csr
 
 
@@ -127,6 +132,11 @@ def make_sparse_dpgc_solver_comp(sp_matvec, inverse_diag_fct, iterations=10, tol
 
     return jax.jit(solver)
 
+def fake_lax_while_loop(conditional, update, initial_state):
+    state = initial_state
+    while conditional(state):
+        state = update(state)
+    return state
 
 def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterations=10, tol=1e-20):
 
@@ -154,9 +164,15 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
     
         def update(state):
             i, xi, r, d, rs = state
-    
+   
+            #t0 = time.perf_counter()
             Ad = A_sp @ d
-        
+            #Ad.block_until_ready()
+            #t_matvec = time.perf_counter()-t0
+
+
+
+            #t_0 = time.perf_counter()
 
             alpha = rs / jnp.dot(Ad, d)
     
@@ -171,15 +187,89 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
             d = M_inv * r + beta * d
     
             rs = rs_new
+            
+            #Ad.block_until_ready()
+            #t_rest = time.perf_counter()-t0
+        
+            #print(
+            #    f"CG iter {i:3d} | "
+            #    f"Matvec: {t_matvec:7.4f}s | "
+            #    f"Rest:   {t_rest:7.4f}s | "
+            #)
+
 
             return (i+1, xi, r, d, rs)
     
         i, xi, r, d, rs = jax.lax.while_loop(conditional, update, initial_state)
+        #i, xi, r, d, rs = fake_lax_while_loop(conditional, update, initial_state)
+        
         #jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
     
         return xi
     
     return jax.jit(solver)
+    #return solver
+
+
+
+
+def make_sparse_dpcg_solver_jsp_comp_fori(
+    coords,
+    inverse_diag_fct,
+    jac_width,
+    iterations=10,
+    tol=1e-20,
+):
+
+    def solver(vals, b, x0):
+
+        # Sparse matrix (unchanged)
+        A_sp = jax_bcoo((vals, coords.T),
+                        shape=(jac_width, jac_width))
+
+        M_inv = inverse_diag_fct(vals)
+
+        # Initial CG state (same math as before)
+        r0  = b - A_sp @ x0
+        d0  = M_inv * r0
+        rs0 = jnp.dot(r0, M_inv * r0)
+
+        # State = (x, r, d, rs)
+        init_state = (x0, r0, d0, rs0)
+
+        def body(i, state):
+            x, r, d, rs = state
+
+            # Convergence test (scalar, but used only for masking)
+            converged = rs < tol
+
+            Ad = A_sp @ d
+
+            alpha = rs / jnp.dot(Ad, d)
+
+            x_new = x + alpha * d
+            r_new = r - alpha * Ad
+
+            rs_new = jnp.dot(r_new, M_inv * r_new)
+            beta   = rs_new / rs
+            d_new  = M_inv * r_new + beta * d
+
+            # Masked updates after convergence
+            x  = jnp.where(converged, x,  x_new)
+            r  = jnp.where(converged, r,  r_new)
+            d  = jnp.where(converged, d,  d_new)
+            rs = jnp.where(converged, rs, rs_new)
+
+            return (x, r, d, rs)
+
+        x, r, d, rs = jax.lax.fori_loop(
+            0, iterations, body, init_state
+        )
+
+        return x
+
+    return jax.jit(solver)
+
 
 def make_point_sor_preconditioner(coordinates, jac_shape, omega=1.0):
     """

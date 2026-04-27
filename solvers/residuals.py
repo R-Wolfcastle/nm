@@ -1,11 +1,14 @@
 #1st party
 from pathlib import Path
+import os
 import sys
 import time
 from functools import partial
 
 ##local apps
-sys.path.insert(1, "/Users/eartsu/new_model/testing/nm/utils/")
+nm_home = os.environ['NM_HOME']   
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\
