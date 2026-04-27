@@ -242,6 +242,108 @@ def compute_nonlinear_ssa_residuals_function_acrobatic(ny, nx, dy, dx, b,
     return jax.jit(compute_linear_ssa_residuals)
 
 
+def compute_nonlinear_ssa_residuals_function_acrobatic(ny, nx, dy, dx, b,
+                                          interp_cc_to_fc,
+                                          fc_vel_gradient,
+                                          cc_gradient,
+                                          fc_viscosity_function,
+                                          nc_viscosity_function,
+                                          add_uv_ghost_cells,
+                                          add_s_ghost_cells):
+
+    def compute_linear_ssa_residuals(u_1d, v_1d, h_1d, beta):
+
+        mu_ew, mu_ns = fc_viscosity_function(u_1d, v_1d)
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        ice_mask = jnp.where(h.copy()>0, 1, 0)
+
+        s_gnd = h + b
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+        
+        s = add_s_ghost_cells(s)
+
+        dsdx, dsdy = cc_gradient(s)
+        dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
+        dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
+        dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
+        dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
+        dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
+        dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
+        dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
+        dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+
+
+        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
+
+        #momentum_term
+
+        #get thickness on the faces
+        h = add_s_ghost_cells(h)
+        h_ew, h_ns = interp_cc_to_fc(h)
+        h_nc = interp_cc_to_nc(h) #Note: interp_cc_to_nc is not made in a function factory
+        
+        mu_ew = mu_ew * h_ew
+        mu_ns = mu_ns * h_ns
+        mu_nc = mu_nc * h_nc
+
+        mu_e  = mu_ew[:,  1:]
+        mu_w  = mu_ew[:, :-1]
+        mu_n  = mu_ns[:-1, :]
+        mu_s  = mu_ns[1:,  :]
+        mu_nw = mu_nc[:-1, :-1]
+        mu_ne = mu_nc[:-1,  1:]
+        mu_se = mu_nc[1:,   1:]
+        mu_sw = mu_nc[1:,  :-1]
+
+        u_padded, v_padded = add_uv_ghost_cells(u, v)
+        u_P  = u_padded[1:-1, 1:-1]
+        u_N  = u_padded[:-2,  1:-1]
+        u_S  = u_padded[2:,   1:-1]
+        u_W  = u_padded[1:-1,  :-2]
+        u_E  = u_padded[1:-1,   2:]
+        u_NW = u_padded[:-2,   :-2]
+        u_NE = u_padded[:-2,    2:]
+        u_SW = u_padded[2:,    :-2]
+        u_SE = u_padded[2:,     2:]
+        v_P  = v_padded[1:-1, 1:-1]
+        v_N  = v_padded[:-2,  1:-1]
+        v_S  = v_padded[2:,   1:-1]
+        v_W  = v_padded[1:-1,  :-2]
+        v_E  = v_padded[1:-1,   2:]
+        v_NW = v_padded[:-2,   :-2]
+        v_NE = v_padded[:-2,    2:]
+        v_SW = v_padded[2:,    :-2]
+        v_SE = v_padded[2:,     2:]
+       
+        visc_x =     2 * ( mu_e*(u_E - u_P) - mu_w*(u_P - u_W) ) +\
+                   0.5 * ( mu_n*(u_N - u_P) - mu_s*(u_P - u_S) ) +\
+                 0.125 * ( mu_se*(3*v_P + v_E - v_S - 3*v_SE) +\
+                           mu_ne*(3*v_NE - v_E + v_N - 3*v_P) +\
+                           mu_sw*(3*v_SW - v_W + v_S - 3*v_P) +\
+                           mu_nw*(3*v_P - v_N + v_W - 3*v_NW)
+                         )
+        
+        visc_y =     2 * ( mu_n*(v_N - v_P) - mu_s*(v_P - v_S) ) +\
+                   0.5 * ( mu_e*(v_E - v_P) - mu_w*(v_P - v_W) ) +\
+                 0.125 * ( mu_se*(3*u_P + u_S - u_E - 3*u_SE) +\
+                           mu_ne*(3*u_NE - u_N + u_E - 3*u_P) +\
+                           mu_sw*(3*u_SW - u_S + u_W - 3*u_P) +\
+                           mu_nw*(3*u_P - u_W + u_N - 3*u_NW)
+                         )
+
+        x_mom_residual = 2*visc_x + volume_x
+        y_mom_residual = 2*visc_y + volume_y
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_linear_ssa_residuals)
+
 def compute_linear_ssa_residuals_function_acrobatic(ny, nx, dy, dx, b,
                                           interp_cc_to_fc,
                                           fc_vel_gradient,

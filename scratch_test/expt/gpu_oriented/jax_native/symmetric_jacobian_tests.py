@@ -180,7 +180,7 @@ def wonky_stream():
     lx = 128_000
     ly = 128_000
 
-    resolution = 500
+    resolution = 1000
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
