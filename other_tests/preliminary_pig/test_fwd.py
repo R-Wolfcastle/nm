@@ -412,25 +412,26 @@ def run_fwd():
     n_pic_iterations = 14
     n_newt_iterations = 12
     
-    solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
-                                                             res, res,
-                                                             topg, ice_mask,
-                                                             n_pic_iterations,
-                                                             n_newt_iterations,
-                                                             phi, C,
-                                                             #sliding="linear",
-                                                             sliding="basic_weertman",
-                                                             temperature_field=temp)
-    
-    u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-
-    #n_iterations = 50
-
-    #solver = make_pic_velocity_solver_function_gpusafe(nr, nc, res, res,
-    #                                                   topg, ice_mask, n_iterations,
-    #                                                   phi, C, sliding="basic_weertman")
+    #solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+    #                                                         res, res,
+    #                                                         topg, ice_mask,
+    #                                                         n_pic_iterations,
+    #                                                         n_newt_iterations,
+    #                                                         phi, C,
+    #                                                         #sliding="linear",
+    #                                                         sliding="basic_weertman",
+    #                                                         temperature_field=temp)
     #
     #u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+
+    n_iterations = 50
+
+    solver = make_pic_velocity_solver_function_gpusafe(nr, nc, res, res,
+                                                       topg, ice_mask, n_iterations,
+                                                       phi, C, sliding="basic_weertman",
+                                                       temperature_field=temp)
+    
+    u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
     
     show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
     
