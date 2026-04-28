@@ -608,9 +608,9 @@ def make_sparse_damped_jacobi_solver(sp_matvec, inverse_diag_fct,
 
             # New residual
             r_new = b - sp_matvec(vals, x_new)
+            
             rs_new = jnp.dot(r_new, r_new)
-        
-            jax.debug.print("Damped Jacobi res: {res}", res=jnp.sqrt(rs_new))
+            #jax.debug.print("Damped Jacobi res: {res}", res=jnp.sqrt(rs_new))
 
             return (i + 1, x_new, r_new, rs_new)
 

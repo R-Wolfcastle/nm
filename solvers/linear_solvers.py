@@ -182,7 +182,6 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
 
 
 
-
     # create_solver_object:
         
    
@@ -264,6 +263,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
 
         ksp.solve(b, x)
       
+        print(ksp.getIterationNumber())
         
         #reason = ksp.getConvergedReason()
         #print("KSP converged reason:", reason)
