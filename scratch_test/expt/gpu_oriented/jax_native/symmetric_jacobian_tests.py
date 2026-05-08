@@ -9,7 +9,10 @@ sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
                               make_pic_velocity_solver_function_gpusafe,\
-                              make_pic_velocity_solver_function_expl_advection_gpusafe
+                              make_pic_velocity_solver_function_expl_advection_gpusafe,\
+                              make_pseudotime_velocity_solver_function,\
+                              make_picnewton_velocity_solver_function_acrobatic
+
 sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
                            create_gif_from_png_fps, create_high_quality_gif_from_pngfps,\
@@ -29,8 +32,6 @@ import matplotlib.pyplot as plt
 
 
 np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
-
-
 
 
 
@@ -177,55 +178,6 @@ def wonky_stream_rotated():
             nr, nc, x, y, resolution, resolution,
             thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
 
-def wonky_stream():
-    lx = 128_000
-    ly = 128_000
-
-    resolution = 2000
-
-    nr = int(ly/resolution)
-    nc = int(lx/resolution)
-
-    x = jnp.linspace(0, lx, nc)
-    y = jnp.linspace(0, ly, nr)
-   
-    xx, yy = jnp.meshgrid(x,y)
-
-    delta_x = x[1]-x[0]
-    delta_y = y[1]-y[0]
-
-
-    thk = jnp.zeros((nr,nc)) + 512 - 256*x/lx
-    thk = thk.at[:,-2:].set(0)
-    b = jnp.zeros((nr, nc)) - 256 - 256*x/lx
-
-   
-    C = stickiness(xx, yy, resolution)
-    
-    grounded = jnp.where((b+thk)>thk*(1-0.917/1.027), 1, 0)
-    C = jnp.where((grounded>0) | (thk==0), C, 0)
-    
-    C = C.at[:1,:].set(1e12)
-    C = C.at[-1:,:].set(1e12)
-    C = C.at[:,:1].set(1e12)
-    
-
-    surface = jnp.maximum(thk+b, thk * (1-c.RHO_I/c.RHO_W))
-
-    b = jnp.where(C>1e11, 0.01+surface-thk, b)
-    
-    mucoef_0 = mucoef_rifted(xx, yy, resolution)
-
-    q = jnp.zeros_like(C)
-
-    ice_mask = jnp.where(thk>0, 1, 0)
-
-
-    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded
-
-
-
-
 def tiny_ice_shelf():
     lx = 1_500
     ly = 1_500
@@ -275,6 +227,53 @@ def tiny_ice_shelf():
 
 
 
+
+def wonky_stream():
+    lx = 128_000
+    ly = 128_000
+
+    resolution = 2000
+
+    nr = int(ly/resolution)
+    nc = int(lx/resolution)
+
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(0, ly, nr)
+   
+    xx, yy = jnp.meshgrid(x,y)
+
+    delta_x = x[1]-x[0]
+    delta_y = y[1]-y[0]
+
+
+    thk = jnp.zeros((nr,nc)) + 512 - 256*x/lx
+    thk = thk.at[:,-2:].set(0)
+    b = jnp.zeros((nr, nc)) - 256 - 256*x/lx
+
+   
+    C = stickiness(xx, yy, resolution)
+    
+    grounded = jnp.where((b+thk)>thk*(1-0.917/1.027), 1, 0)
+    C = jnp.where((grounded>0) | (thk==0), C, 0)
+    
+    C = C.at[:2,:].set(1e12)
+    C = C.at[-2:,:].set(1e12)
+    C = C.at[:,:2].set(1e12)
+    
+
+    surface = jnp.maximum(thk+b, thk * (1-c.RHO_I/c.RHO_W))
+
+    b = jnp.where(C>1e11, 0.01+surface-thk, b)
+    
+    mucoef_0 = mucoef_rifted(xx, yy, resolution)
+
+    q = jnp.zeros_like(C)
+
+    ice_mask = jnp.where(thk>0, 1, 0)
+
+
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded
+
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
 lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
@@ -284,18 +283,28 @@ lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surfac
 u_init = jnp.zeros_like(b) + 100
 v_init = jnp.zeros_like(b)
 
-n_iterations = 75
-
+#n_iterations = 75
+#
 #solver = make_pic_velocity_solver_function_gpusafe(nr, nc, delta_y, delta_x,
 #                                                   b, ice_mask, n_iterations,
 #                                                   mucoef_0, C, sliding="basic_weertman")
-#
-#
 #u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 #
 #show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
-#
-#raise
+
+
+n_pic_iterations = 10
+n_newt_iterations = 25
+
+solver = make_picnewton_velocity_solver_function_acrobatic(nr, nc, delta_y, delta_x,
+                                                   b, ice_mask, 
+                                                   n_pic_iterations, n_newt_iterations,
+                                                   mucoef_0, C, sliding="basic_weertman")
+u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+
+show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
+
+raise
 #
 #solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
 #                                                         delta_y, delta_x,
@@ -335,3 +344,10 @@ plt.imshow(h)
 plt.colorbar()
 plt.show()
 
+
+##THE BIN:
+##solver = make_pseudotime_velocity_solver_function(nr, nc, delta_y, delta_x,
+##                                                   b, ice_mask, n_iterations,
+##                                                   mucoef_0, C, sliding="basic_weertman")
+##u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+##show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
