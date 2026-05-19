@@ -1938,18 +1938,18 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
     omega=1
 
 
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
-                                                              coords,
-                                                              (ny*nx*2, ny*nx*2),
-                                                              indirect=True,
-                                                              #ksp_type='gmres',
-                                                              #ksp_type='bcgs',
-                                                              ksp_type='preonly',
-                                                              preconditioner="jacobi", #might just about be workable
-                                                              #preconditioner="sor", #better than jacobi
-                                                              #preconditioner="sor",
-                                                              #monitor_ksp=True,
-                                                              ksp_max_iter=20)
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+    #                                                          coords,
+    #                                                          (ny*nx*2, ny*nx*2),
+    #                                                          indirect=True,
+    #                                                          #ksp_type='gmres',
+    #                                                          #ksp_type='bcgs',
+    #                                                          ksp_type='preonly',
+    #                                                          preconditioner="jacobi", #might just about be workable
+    #                                                          #preconditioner="sor", #better than jacobi
+    #                                                          #preconditioner="sor",
+    #                                                          #monitor_ksp=True,
+    #                                                          ksp_max_iter=20)
 
     def conditional(state):
         i, res, init_res, _,_,_,_,_,_,_,_ = state
@@ -2032,8 +2032,8 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
         i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(conditional, update, initial_state)
         #i, res, init_res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = fake_lax_while_loop(conditional, update, initial_state)
 
-        jax.debug.print("Pic res: {x}", x=res)
-        jax.debug.print("Pic res reduction factor: {x}", x=init_res/res)
+        #jax.debug.print("Pic res: {x}", x=res)
+        #jax.debug.print("Pic res reduction factor: {x}", x=init_res/res)
 
         return u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx))
 
@@ -2055,8 +2055,8 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
 
             return ts+1, u, v, h
 
-        #ts_end, u, v, h = jax.lax.while_loop(prognostic_condition, update, initial_state)
-        ts_end, u, v, h = fake_lax_while_loop(prognostic_condition, update, initial_state)
+        ts_end, u, v, h = jax.lax.while_loop(prognostic_condition, update, initial_state)
+        #ts_end, u, v, h = fake_lax_while_loop(prognostic_condition, update, initial_state)
 
         return u.reshape((ny, nx)), v.reshape((ny, nx)), h.reshape((ny, nx))
 

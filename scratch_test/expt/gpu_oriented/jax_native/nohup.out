@@ -1,0 +1,71 @@
+Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/xla_bridge.py", line 487, in discover_pjrt_plugins
+    plugin_module.initialize()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax_plugins/xla_cuda12/__init__.py", line 370, in initialize
+    _check_cuda_versions(raise_on_first_error = True)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax_plugins/xla_cuda12/__init__.py", line 274, in _check_cuda_versions
+    for d in range(cuda_versions.cuda_device_count())
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+Traceback (most recent call last):
+  File "/uolstore/home/staff_lnxhome02/eartsu/Documents/nm/scratch_test/expt/gpu_oriented/jax_native/symmetric_jacobian_tests.py", line 9, in <module>
+    from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
+  File "/uolstore/home/users/eartsu/Documents/nm/solvers/nonlinear_solvers.py", line 28, in <module>
+    from grid import *
+  File "/uolstore/home/users/eartsu/Documents/nm/utils/grid.py", line 17, in <module>
+    DIRS = jnp.array([
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/numpy/array_constructors.py", line 312, in array
+    out_array: Array = lax._convert_element_type(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/lax/lax.py", line 1695, in _convert_element_type
+    return convert_element_type_p.bind(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/core.py", line 648, in bind
+    return self.bind_with_trace(prev_trace, args, avals, params)
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/lax/lax.py", line 4989, in _convert_element_type_bind_with_trace
+    operand = core.Primitive.bind_with_trace(convert_element_type_p, trace, args,
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/core.py", line 656, in bind_with_trace
+    return trace.process_primitive(self, args, params)
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/core.py", line 1217, in process_primitive
+    return primitive.impl(*args, **params)
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/dispatch.py", line 91, in apply_primitive
+    outs = fun(*args)
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/traceback_util.py", line 196, in reraise_with_filtered_traceback
+    return fun(*args, **kwargs)
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/pjit.py", line 256, in cache_miss
+    executable, pgle_profiler, const_args) = _run_python_pjit(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/pjit.py", line 141, in _run_python_pjit
+    out_flat, compiled, profiler, const_args = _pjit_call_impl_python(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/pjit.py", line 1160, in _pjit_call_impl_python
+    compiled = computation.compile()
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/interpreters/pxla.py", line 2516, in compile
+    executable = UnloadedMeshExecutable.from_hlo(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/interpreters/pxla.py", line 3064, in from_hlo
+    xla_executable = _cached_compilation(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/interpreters/pxla.py", line 2845, in _cached_compilation
+    xla_executable = compiler.compile_or_get_cached(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/compiler.py", line 478, in compile_or_get_cached
+    return _compile_and_write_cache(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/compiler.py", line 746, in _compile_and_write_cache
+    executable = backend_compile_and_load(
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/profiler.py", line 383, in wrapper
+    with TraceAnnotation(name, **decorator_kwargs):
+KeyboardInterrupt
+Pic res: 0.0260009765625
+Pic res reduction factor: 7.368878223234056e+20
+Pic res: 0.0039691925048828125
+Pic res reduction factor: 27579938890941.23
+Pic res: 0.003555774688720703
+Pic res reduction factor: 1.079207045983674e+22
+Pic res: 0.003554821014404297
+Pic res reduction factor: 8.790186456992978e+21
+Pic res: 0.0040264129638671875
+Pic res reduction factor: 6.886015263773881e+21
+WARNING! There are options you set that were not used!
+WARNING! could be spelling mistake, etc!
+There are 3 unused database options. They are:
+Option left: name:-ksp_max_it value: 20 source: code
+Option left: name:-ksp_norm_type value: unpreconditioned source: code
+Option left: name:-ksp_rtol value: 1e-10 source: code
