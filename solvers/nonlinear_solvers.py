@@ -2396,6 +2396,239 @@ def make_pic_velocity_solver_function_acrobatic(ny, nx, dy, dx,
 
     return solver
 
+def make_picnewton_velocity_solver_function_no_cf_extrap_expl_advection(ny, nx, dy, dx,
+                                                 b, ice_mask,
+                                                 n_pic_iterations, n_newt_iterations, n_timesteps,
+                                                 mucoef_0, C_0, sliding="linear",
+                                                 periodic=False, B_field=None,
+                                                 temperature_field=None):
+
+    if temperature_field is None:
+        temperature_field = (jnp.zeros((ny,nx))+263.15)
+
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    
+    fc_velocity_gradient                       = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
+                                                                               ice_mask, add_uv_ghost_cells,
+                                                                               add_scalar_ghost_cells)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    
+    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
+    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
+    
+    #extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
+    #extrapolate_over_cf                        = linear_extrapolate_over_cf_function_cornersafe(ice_mask)
+    #extrapolate_over_cf                        = mean_linear_extrapolate_over_cf_function(ice_mask)
+    
+    viscosity_fct = fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, 
+                                                   add_uv_ghost_cells,
+                                                   add_scalar_ghost_cells,
+                                                   interp_cc_to_fc,
+                                                   fc_velocity_gradient,
+                                                   ice_mask, mucoef_0,
+                                                   temperature_field)
+    beta_fct = beta_function(b, sliding)
+
+    get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
+                                                       interp_cc_to_fc,
+                                                       fc_velocity_gradient,
+                                                       cc_gradient,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells)
+    
+    get_uv_residuals_nonlinear_ssa = compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(
+                                                       ny, nx, dy, dx, b,
+                                                       beta_fct, ice_mask,
+                                                       interp_cc_to_fc,
+                                                       fc_velocity_gradient,
+                                                       cc_gradient,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells,
+                                                       mucoef_0, C_0,
+                                                       temperature_field)
+
+    
+    advection_step = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc, 
+                                            add_uv_ghost_cells, add_scalar_ghost_cells)
+
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=periodic)
+    #j_coord_ar = jnp.arange(ny*nx)
+    #pattern = jnp.zeros((nx*ny, nx*ny))*jnp.nan
+    #for _, i_coord_ar in zip(basis_vectors, i_coordinate_sets):
+    #    mask = ~jnp.isnan(i_coord_ar)
+
+    #    pattern = pattern.at[i_coord_ar[mask].astype(jnp.int32),\
+    #                         j_coord_ar[mask].astype(jnp.int32)].set(1)
+
+    #plt.imshow(np.array(pattern[:, 26].reshape((ny,nx))))
+    #plt.show()
+    #raise
+
+
+
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis_new(
+                                                        basis_vectors,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+    mask = (i_coordinate_sets>=0)
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+   
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=True,
+                                                              ksp_type="gmres",
+                                                              preconditioner="hypre",
+                                                              monitor_ksp=False,
+                                                              ksp_max_iter=20)
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+    #                                                          coords,
+    #                                                          (ny*nx*2, ny*nx*2),
+    #                                                          indirect=False,
+    #                                                          monitor_ksp=False)
+
+    res_fct = lambda x: jnp.max(jnp.abs(x))
+    
+    omega=1
+    
+
+    def momentum_solver(q, p, u_trial, v_trial, h):
+        
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+
+        u_1d = u_trial.copy().reshape(-1)
+        v_1d = v_trial.copy().reshape(-1)
+        h_1d = h.copy().reshape(-1)
+
+        ice_mask = jnp.where(h>0,1,0).reshape(-1)
+            
+        u_1d = u_1d * ice_mask
+        v_1d = v_1d * ice_mask
+
+        residual = jnp.inf
+        init_res = 0
+
+        mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
+        beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+
+        du = jnp.zeros((nx*ny*2,))
+        for i in range(n_pic_iterations):
+            #print("constructing LA problem")
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_linear_ssa,
+                                                 (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta)
+                                                          )
+
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+           
+
+
+            full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
+            full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            
+            rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
+
+            #print("solving LA problem")
+            du = la_solver(nz_jac_values, rhs)
+            #print("du norm: {}".format(jnp.max(jnp.abs(du))))
+
+            u_1d = (u_1d + omega*du[:(ny*nx)]) * ice_mask
+            v_1d = (v_1d + omega*du[(ny*nx):]) * ice_mask
+            
+            mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
+            beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+            
+            rhs_new = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
+            
+            if i==0:
+                initial_residual = jnp.max(rhs)
+            #print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
+        
+        final_residual_pic = res_fct(rhs_new)
+
+        #print("Final Picard residual: {}".format(final_residual_pic))
+        #print("Picard residual reduction factor: {}".format(initial_residual/final_residual_pic))
+
+
+        for i in range(n_newt_iterations):
+            #h_1d = jnp.where(jnp.sqrt(u_1d**2 + v_1d**2 + 1)<3e4, h_1d, 0)
+            #h = h_1d.reshape((ny,nx))
+
+            dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_nonlinear_ssa,
+                                                             (u_1d, v_1d, q, p, h_1d)
+                                                          )
+
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+                                             dJv_du[mask], dJv_dv[mask]])
+
+           
+            rhs = -jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))
+            
+            du = la_solver(nz_jac_values, rhs)
+
+            u_1d = (u_1d + du[:(ny*nx)]) * ice_mask
+            v_1d = (v_1d + du[(ny*nx):]) * ice_mask
+            
+            rhs_new = -jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))
+            
+            #print(f"nonlinear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
+
+        final_residual = res_fct(rhs_new)
+
+        #print("Final Newton residual: {}".format(final_residual))
+        #print("Newton residual reduction factor: {}".format(final_residual_pic/final_residual))
+        
+        print("TOTAL residual reduction factor: {}".format(initial_residual/final_residual))
+
+        print("===========================================")
+        
+        
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+    def run_model_forward(q, p, u_trial, v_trial, h_init):
+        h = h_init
+        u, v = u_trial, v_trial
+
+        for ts in range(n_timesteps):
+            u, v = momentum_solver(q, p, u, v, h)
+            h = advection_step(u, v, h.reshape(-1))
+
+        return u.reshape((ny, nx)), v.reshape((ny, nx)), h.reshape((ny, nx))
+
+    return run_model_forward
+
+
+
 def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, dx,
                                                  b, ice_mask,
                                                  n_pic_iterations, n_newt_iterations,

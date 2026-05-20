@@ -24,6 +24,7 @@ nm_home = os.environ['NM_HOME']
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
+                              make_picnewton_velocity_solver_function_no_cf_extrap_expl_advection,\
                               make_pic_velocity_solver_function_gpusafe,\
                               make_pic_velocity_solver_function_expl_advection_gpusafe
 sys.path.insert(1, os.path.join(nm_home, 'utils'))
@@ -155,10 +156,17 @@ for res in [4000, 2000, 1000, 500, 250, 125, 62.5]:
     n_iterations = 100
     
     n_timesteps = 5
+
+    prognostic_solver = make_picnewton_velocity_solver_function_no_cf_extrap_expl_advection(nr, nc,
+                                                         delta_y, delta_x,
+                                                         b, ice_mask,
+                                                         10, 5, n_timesteps,
+                                                         mucoef_0, C,
+                                                         sliding="basic_weertman")
     
-    prognostic_solver = make_pic_velocity_solver_function_expl_advection_gpusafe(nr, nc, delta_y, delta_x,
-                                                       b, ice_mask, n_iterations,
-                                                       mucoef_0, C, n_timesteps, sliding="basic_weertman")
+    #prognostic_solver = make_pic_velocity_solver_function_expl_advection_gpusafe(nr, nc, delta_y, delta_x,
+    #                                                   b, ice_mask, n_iterations,
+    #                                                   mucoef_0, C, n_timesteps, sliding="basic_weertman")
     
     
     
