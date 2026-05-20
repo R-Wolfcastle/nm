@@ -1465,6 +1465,42 @@ def assemble_sparse_2x2_block_jacobian_function(basis_vectors, N, mask, residual
 
     return jax.jit(assemble_sparse_2x2_block_jacobian)
 
+def assemble_sparse_2x2_block_jacobian_function_nl(basis_vectors, N, mask, residuals_function):
+
+    def assemble_sparse_2x2_block_jacobian(u_1d, v_1d, q, p, h_1d):
+
+        residuals, linearised_residuals_function = jax.linearize(
+            residuals_function,
+            u_1d, v_1d, q, p, h_1d
+        )
+        transposed_linearised_residuals_function = jax.linear_transpose(
+            linearised_residuals_function,
+            u_1d, v_1d, q, p, h_1d
+        )
+
+        def apply_lin_to_bv(bv):
+            dRu_du, dRu_dv, _,_,_ = transposed_linearised_residuals_function(
+                (bv, jnp.zeros_like(bv))
+            )
+            dRv_du, dRv_dv, _,_,_ = transposed_linearised_residuals_function(
+                (jnp.zeros_like(bv), bv)
+            )
+            return dRu_du, dRv_du, dRu_dv, dRv_dv
+
+        dRu_du, dRv_du, dRu_dv, dRv_dv = jax.vmap(apply_lin_to_bv)(basis_vectors)
+
+        nz_vals = jnp.concatenate([
+            dRu_du.reshape(-1)[mask],
+            dRu_dv.reshape(-1)[mask],
+            dRv_du.reshape(-1)[mask],
+            dRv_dv.reshape(-1)[mask]
+        ])
+
+        rhs = -jnp.concatenate(residuals)
+
+        return nz_vals, rhs
+
+    return jax.jit(assemble_sparse_2x2_block_jacobian)
 
 
 def make_sparse_jacrev_fct_shared_basis(basis_vectors, i_coord_sets, j_coord_sets,\

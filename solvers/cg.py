@@ -203,7 +203,7 @@ def make_sparse_dpcg_solver_jsp_comp(coords, inverse_diag_fct, jac_width, iterat
         i, xi, r, d, rs = jax.lax.while_loop(conditional, update, initial_state)
         #i, xi, r, d, rs = fake_lax_while_loop(conditional, update, initial_state)
         
-        #jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
+        jax.debug.print("LA final residual {x}", x=jnp.abs(rs))
     
         return xi
     
@@ -583,7 +583,7 @@ def make_sparse_bicgstab_solver(sp_matvec,
     return solver
 
 def make_sparse_damped_jacobi_solver(sp_matvec, inverse_diag_fct,
-                                     iterations=10, tol=1e-5, omega=0.75):
+                                     iterations=10, tol=1e-5, omega=0.8):
 
     def solver(vals, b, x0):
 
@@ -592,6 +592,8 @@ def make_sparse_damped_jacobi_solver(sp_matvec, inverse_diag_fct,
         # Initial residual
         r0 = b - sp_matvec(vals, x0)
         rs0 = jnp.dot(r0, r0)   # plain L2 residual is fine for Jacobi
+        
+        jax.debug.print("Damped Jacobi initial residual: {res}", res=jnp.sqrt(rs0))
 
         # State: (iter, x, r, rs)
         initial_state = (0, x0, r0, rs0)
@@ -619,6 +621,7 @@ def make_sparse_damped_jacobi_solver(sp_matvec, inverse_diag_fct,
         )
 
         jax.debug.print("Damped Jacobi final residual: {res}", res=jnp.sqrt(rs_final))
+        jax.debug.print("Damped Jacobi rrf: {rrf}", rrf=(jnp.sqrt(rs0)/jnp.sqrt(rs_final)))
         return x_final
 
     return jax.jit(solver)

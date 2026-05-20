@@ -57,6 +57,56 @@ def interp_cc_to_fc_function(ny, nx):
     return jax.jit(interp_cc_to_fc)
 
 
+def interp_nc_to_fc_function(ny, nx):
+
+    def interp_nc_to_fc(var_nc):
+
+        # var_nc shape: (ny-1, nx-1)
+
+        # --- east-west faces (vertical faces) ---
+        var_ew = jnp.zeros((ny, nx+1))
+
+        # interior faces: average nodes above/below the face
+        var_ew = var_ew.at[1:-1, 1:-1].set(
+            0.5 * (var_nc[:-1, :] + var_nc[1:, :])
+        )
+
+        # boundaries: copy nearest node (consistent with your cc->fc)
+        var_ew = var_ew.at[0, 1:-1].set(var_nc[0, :])
+        var_ew = var_ew.at[-1, 1:-1].set(var_nc[-1, :])
+
+        var_ew = var_ew.at[:, 0].set(var_ew[:, 1])
+        var_ew = var_ew.at[:, -1].set(var_ew[:, -2])
+
+        # --- north-south faces (horizontal faces) ---
+        var_ns = jnp.zeros((ny+1, nx))
+
+        var_ns = var_ns.at[1:-1, 1:-1].set(
+            0.5 * (var_nc[:, :-1] + var_nc[:, 1:])
+        )
+
+        var_ns = var_ns.at[1:-1, 0].set(var_nc[:, 0])
+        var_ns = var_ns.at[1:-1, -1].set(var_nc[:, -1])
+
+        var_ns = var_ns.at[0, :].set(var_ns[1, :])
+        var_ns = var_ns.at[-1, :].set(var_ns[-2, :])
+
+        return var_ew, var_ns
+
+    return jax.jit(interp_nc_to_fc)
+
+def interp_fc_to_nc(var_ew, var_ns):
+
+    # var_ew: (ny, nx+1)
+    # var_ns: (ny+1, nx)
+
+    return 0.25 * (
+        var_ew[:-1, :-1] + var_ew[1:, :-1] +   # west/east faces around node
+        var_ns[:-1, :-1] + var_ns[:-1, 1:]     # south/north faces around node
+    )
+
+
+
 @jax.jit
 def interp_cc_to_nc(var):
     return 0.25 * (var[:-1, :-1] + var[1:, :-1] + var[:-1, 1:] + var[1:, 1:])
@@ -72,6 +122,23 @@ def cc_gradient_function(dy, dx):
         return dvar_dx, dvar_dy
 
     return jax.jit(cc_gradient)
+
+
+def cc_vel_gradient_function(dy, dx, add_uv_ghost_cells):
+
+    def cc_gradient(u, v):
+        u, v = add_uv_ghost_cells(u, v)
+
+        du_dx = (0.5/dx) * (u[1:-1, 2:] - u[1:-1,:-2])
+        du_dy = (0.5/dy) * (u[:-2,1:-1] - u[2:, 1:-1])
+        
+        dv_dx = (0.5/dx) * (v[1:-1, 2:] - v[1:-1,:-2])
+        dv_dy = (0.5/dy) * (v[:-2,1:-1] - v[2:, 1:-1])
+
+        return du_dx, du_dy, dv_dx, dv_dy
+
+    return jax.jit(cc_gradient)
+
 
 def fc_gradient_functions(dy, dx):
 
@@ -1459,13 +1526,14 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
     temp_cc = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc)
     B_nc = interp_cc_to_nc(B_cc)
+        
+    nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
 
     def nc_viscosity(q, u, v):
         mucoef = mucoef_0*jnp.exp(q)
         mucoef = add_s_ghost_cells(mucoef)
         mucoef_nc = interp_cc_to_nc(mucoef)
 
-        nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
         
         u = u.reshape((ny, nx))
         v = v.reshape((ny, nx))
