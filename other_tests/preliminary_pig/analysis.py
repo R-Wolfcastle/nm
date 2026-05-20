@@ -36,9 +36,6 @@ np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.i
 jax.config.update("jax_enable_x64", True)
 
 
-
-
-
 def clean_mask_scipy(mask, connectivity=1):
     """
     mask: bool or 0/1 array, foreground=True
