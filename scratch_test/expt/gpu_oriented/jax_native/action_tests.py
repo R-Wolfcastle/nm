@@ -91,7 +91,7 @@ def stickiness(x, y, resolution):
 def tiny_ice_shelf():
     lx = 1_500
     ly = 1_500
-    resolution = 125 #m
+    resolution = 100 #m
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -135,11 +135,9 @@ def tiny_ice_shelf():
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b,\
            C, mucoef_0, q, jnp.where(thk>0,1,0), surface, grounded 
 
-def wonky_stream():
+def wonky_stream(resolution=1000):
     lx = 128_000
     ly = 128_000
-
-    resolution = 2000
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -183,16 +181,22 @@ def wonky_stream():
 
 
 
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C,\
-#        mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
 lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C,\
-        mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
+        mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C,\
+#                mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
 
-u_init = jnp.zeros_like(b) + 100
-v_init = jnp.zeros_like(b)
+#plt.imshow(thk)
+#plt.colorbar()
+#plt.show()
+
+key = jax.random.PRNGKey(0)
+noise = jax.random.uniform(key, shape=b.shape, minval=-1000, maxval=1000)
+u_init = jnp.zeros_like(b) + 100# + 2000 + noise
+v_init = jnp.zeros_like(b)# + noise
 
 pic_iterations = 75
-newt_iterations = 1
+newt_iterations = 45
 
 solver = make_action_velocity_solver_function(nr, nc, delta_y, delta_x,
                                               b, ice_mask,
@@ -200,7 +204,7 @@ solver = make_action_velocity_solver_function(nr, nc, delta_y, delta_x,
                                               mucoef_0, C, sliding="basic_weertman")
 
 u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-#show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
+show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
 
 
 

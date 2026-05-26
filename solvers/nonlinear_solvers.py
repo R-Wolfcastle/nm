@@ -24,7 +24,8 @@ from sparsity_utils import scipy_coo_to_csr,\
                            make_sparse_jacrev_fct_shared_basis,\
                            make_sparse_jacrev_fct_shared_basis_new,\
                            assemble_sparse_2x2_block_jacobian_function,\
-                           assemble_sparse_2x2_block_jacobian_function_nl
+                           assemble_sparse_2x2_block_jacobian_function_nl,\
+                           assemble_sparse_2x2_block_jacobian_function_general
 import constants_years as c
 from grid import *
 
@@ -1768,7 +1769,8 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
     
     #############
     #setting up bvs and coords for a single block of the jacobian
-    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+    #NOTE: Need to adjust discretisation so stencil radius can stay at 1 rather than 2!!!
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 2,
                                                                                   periodic_x=periodic)
     i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
     j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
@@ -1799,11 +1801,11 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
                        ])
    
 
-
-    #assemble_jacobian_linear = assemble_sparse_2x2_block_jacobian_function(basis_vectors, ny*nx, mask,
-    #                                                                get_uv_residuals_linear_ssa)
-    #assemble_jacobian_nonlinear = assemble_sparse_2x2_block_jacobian_function_nl(basis_vectors, ny*nx, mask,
-    #                                                                get_uv_residuals_nonlinear_ssa)
+    assemble_jacobian = assemble_sparse_2x2_block_jacobian_function_general(basis_vectors, ny*nx,
+                                                                            mask,
+                                                                            residuals_function)
+    assemble_jacobian_comparison = assemble_sparse_2x2_block_jacobian_function(basis_vectors, ny*nx, mask,
+                                                                    get_uv_residuals_linear_ssa)
 
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
@@ -1851,49 +1853,73 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
         residual = jnp.inf
         init_res = 0
 
-        beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+        #beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
         
         duv = jnp.zeros((nx*ny*2,))
 
-        initial_state = (0, residual, u_1d, v_1d, h_1d,  beta, duv) 
+        initial_state = (0, residual, u_1d, v_1d, h_1d, duv) 
 
-        def pic_update(state):
-            i, res, u_1d, v_1d, h_1d,  beta, duv = state
+        def newton_update(state):
+            i, res, u_1d, v_1d, h_1d, duv = state
 
             jax.debug.print("Pic res: {x}", x=res)
 
-            #nz_jac_values, rhs = assemble_jacobian_linear(
+            #start_t = time.time()
+            #nz_jac_values, rhs = assemble_jacobian_comparison(
             #    u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta
             #)
+            #end_t = time.time()
+            #print(f"act time: {time}")
 
-            Ru, Rv = residuals_function(u_1d, v_1d, q, p, h_1d)
+            nz_jac_values, rhs = assemble_jacobian(
+                u_1d, v_1d, [q, p, h_1d]
+            )
+            
+            
+            #full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
+            #full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            ##plt.imshow(full_jac)
+            ##plt.colorbar()
+            ##plt.show()
+            ##raise
+            ##
+            ##print(nz_jac_values)
+            ##raise
 
-            #plt.imshow(Ru.reshape((ny, nx)))
+            #Ru, Rv = residuals_function(u_1d, v_1d, q, p, h_1d)
+
+            ##plt.imshow(jnp.log10(jnp.abs(Ru).reshape((ny, nx))))
+            ##plt.colorbar()
+            ##plt.show()
+            ###raise
+
+            #dRdu, dRdv = jax.jacrev(residuals_function, argnums=(0,1))(u_1d, v_1d, q, p, h_1d)
+            #dRu_du = dRdu[0].reshape((ny*nx, ny*nx))
+            #dRu_dv = dRdu[1].reshape((ny*nx, ny*nx))
+            #dRv_du = dRdv[0].reshape((ny*nx, ny*nx))
+            #dRv_dv = dRdv[1].reshape((ny*nx, ny*nx))
+
+            #dense_full_jac = jnp.block([[dRu_du, dRu_dv],
+            #                            [dRv_du, dRv_dv]])
+
+            ##plt.imshow(dense_full_jac)
+            ##plt.colorbar()
+            ##plt.show()
+            #plt.imshow(dense_full_jac-full_jac)
             #plt.colorbar()
             #plt.show()
+            ##
+            ##plt.imshow(jnp.log10(jnp.abs((dense_full_jac-dense_full_jac.T)/dense_full_jac)))
+            ##plt.colorbar()
+            ##plt.show()
+            ##raise
 
-            dRdu, dRdv = jax.jacrev(residuals_function, argnums=(0,1))(u_1d, v_1d, q, p, h_1d)
-            dRu_du = dRdu[0].reshape((ny*nx, ny*nx))
-            dRu_dv = dRdu[1].reshape((ny*nx, ny*nx))
-            dRv_du = dRdv[0].reshape((ny*nx, ny*nx))
-            dRv_dv = dRdv[1].reshape((ny*nx, ny*nx))
+            duv = 0.5 * cg_solver(nz_jac_values, rhs, duv)
 
-            dense_full_jac = jnp.block([[dRu_du, dRu_dv],
-                                        [dRv_du, dRv_dv]])
+#            print(duv)
 
-            plt.imshow(dense_full_jac)
-            plt.colorbar()
-            plt.show()
-            
-            plt.imshow(dense_full_jac-dense_full_jac.T)
-            plt.colorbar()
-            plt.show()
-            raise
-
-            #duv = cg_solver(nz_jac_values, rhs, duv)
-
-            #u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
-            #v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
+            u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
+            v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
             #
             #mu_ew, mu_ns = fc_viscosity_fct(q, u_1d, v_1d)
             #mu_nc = nc_viscosity_fct(q, u_1d, v_1d)
@@ -1924,14 +1950,16 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
 #            #jax.debug.print("NZ jac values: {x}", x=nz_jac_values)
 #
 #            duv = cg_solver(nz_jac_values, rhs, duv)
+
+            jax.debug.print("newt res: {res}", res=res)
 #
 #            u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
 #            v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
 #            
-#            return (i+1, res_fct(rhs), u_1d, v_1d, h_1d, duv)
+            return (i+1, res_fct(rhs), u_1d, v_1d, h_1d, duv)
             
-        #i, res, u_1d, v_1d, h_1d, beta, duv = jax.lax.while_loop(picard_conditional, pic_update, initial_state)
-        i, res, u_1d, v_1d, h_1d, beta, duv = fake_lax_while_loop(picard_conditional, pic_update, initial_state)
+        #i, res, u_1d, v_1d, h_1d, duv = jax.lax.while_loop(newton_conditional, newton_update, initial_state)
+        i, res, u_1d, v_1d, h_1d, duv = fake_lax_while_loop(newton_conditional, newton_update, initial_state)
         
 #        newt_initial_state = (0, res, u_1d, v_1d, h_1d, duv)
 
@@ -1975,6 +2003,7 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                                                                add_uv_ghost_cells)
     cc_gradient                                = cc_gradient_function(dy, dx)
     
+    extrapolate_over_cf                        = linear_extrapolate_over_cf_function_cornersafe(ice_mask)
     
     fc_viscosity_fct = fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, 
                                                    add_uv_ghost_cells,
@@ -2000,12 +2029,25 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                                        add_uv_ghost_cells,
                                                        add_scalar_ghost_cells)
     #get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_acrobatic(ny, nx,
-    get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_acrobatic_symmetric(ny, nx,
+    #get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_acrobatic_symmetric(ny, nx,
+    #                                                   dy, dx, b,
+    #                                                   interp_cc_to_fc,
+    #                                                   interp_cc_to_nc,
+    #                                                   interp_nc_to_fc,
+    #                                                   interp_fc_to_nc,
+    #                                                   fc_velocity_gradient,
+    #                                                   nc_velocity_gradient,
+    #                                                   cc_gradient,
+    #                                                   beta_fct,
+    #                                                   add_uv_ghost_cells,
+    #                                                   add_scalar_ghost_cells,
+    #                                                   mucoef_0, C_0,
+    #                                                   temperature_field)
+
+    get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, nx,
                                                        dy, dx, b,
                                                        interp_cc_to_fc,
                                                        interp_cc_to_nc,
-                                                       interp_nc_to_fc,
-                                                       interp_fc_to_nc,
                                                        fc_velocity_gradient,
                                                        nc_velocity_gradient,
                                                        cc_gradient,
@@ -2013,7 +2055,10 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                                        add_uv_ghost_cells,
                                                        add_scalar_ghost_cells,
                                                        mucoef_0, C_0,
-                                                       temperature_field)
+                                                       temperature_field,
+                                                       extrapolate_over_cf)
+
+
 
     #############
     #setting up bvs and coords for a single block of the jacobian
@@ -2054,12 +2099,15 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
     assemble_jacobian_nonlinear = assemble_sparse_2x2_block_jacobian_function_nl(basis_vectors, ny*nx, mask,
                                                                     get_uv_residuals_nonlinear_ssa)
 
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=True,
+                                                              ksp_max_iter=20)
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
                                             iterations=1000)
-    #cg_solver = make_sparse_damped_jacobi_solver(sparse_matvec, extract_inverse_diagonal,
-    #                                        iterations=30)
 
     res_fct = lambda x: jnp.max(jnp.abs(x))
     
@@ -2112,7 +2160,8 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
 
             #jax.debug.print("NZ jac values: {x}", x=nz_jac_values)
 
-            duv = cg_solver(nz_jac_values, rhs, duv)
+            #duv = cg_solver(nz_jac_values, rhs, duv)
+            duv = la_solver(nz_jac_values, rhs)
 
             u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
@@ -2132,8 +2181,8 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                 u_1d, v_1d, q, p, h_1d
             )
             
-            full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
-            full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            #full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
+            #full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
             
             #plt.imshow(jnp.log(jnp.abs(full_jac[:,:])).reshape((ny*nx*2,2*nx*ny)))
             #plt.colorbar()
@@ -2145,14 +2194,16 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
 
             #jax.debug.print("NZ jac values: {x}", x=nz_jac_values)
 
-            duv = cg_solver(nz_jac_values, rhs, duv)
+            #duv = cg_solver(nz_jac_values, rhs, jnp.zeros_like(duv))
+            duv = la_solver(nz_jac_values, rhs)
 
             u_1d = (u_1d + omega*duv[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + omega*duv[(ny*nx):]) * ice_mask
             
             return (i+1, res_fct(rhs), u_1d, v_1d, h_1d, duv)
             
-        i, res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(picard_conditional, pic_update, initial_state)
+        #i, res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = jax.lax.while_loop(picard_conditional, pic_update, initial_state)
+        i, res, u_1d, v_1d, h_1d, mu_ew, mu_ns, mu_nc, beta, duv = fake_lax_while_loop(picard_conditional, pic_update, initial_state)
         
         newt_initial_state = (0, res, u_1d, v_1d, h_1d, duv)
 
@@ -2470,7 +2521,8 @@ def make_pic_velocity_solver_function_expl_advection_gpusafe(ny, nx, dy, dx,
                                    )
                        ])
    
-
+    
+    #assemble_jacobian = assemble_sparse_2x2_block_jacobian_function_general(basis_vectors, ny*nx, mask,
     assemble_jacobian = assemble_sparse_2x2_block_jacobian_function(basis_vectors, ny*nx, mask,
                                                                     get_uv_residuals_linear_ssa)
 

@@ -171,6 +171,17 @@ def nc_gradient_function(dy, dx):
 
 
 def nc_velocity_gradient_function(dy, dx, add_uv_ghost_cells):
+    
+    #def node_gradient(u, v):
+    #    u, v = add_uv_ghost_cells(u, v)
+    #    
+    #    du_dx_node = 1 / ( dx / (u[1:, 1:] - u[1:, :-1] + 1e-25) + dx / (u[:-1, 1:] - u[:-1, :-1] + 1e-25) )
+    #    du_dy_node = 1 / ( dy / (u[:-1, 1:] - u[1:, 1:] + 1e-25) + dy / (u[:-1, :-1] - u[1:, :-1] + 1e-25) )
+
+    #    dv_dx_node = 1 / ( dx / (v[1:, 1:] - v[1:, :-1] + 1e-25) + dx / (v[:-1, 1:] - v[:-1, :-1] + 1e-25) )
+    #    dv_dy_node = 1 / ( dy / (v[:-1, 1:] - v[1:, 1:] + 1e-25) + dy / (v[:-1, :-1] - v[1:, :-1] + 1e-25) )
+
+    #    return du_dx_node, du_dy_node, dv_dx_node, dv_dy_node
 
     def node_gradient(u, v):
         u, v = add_uv_ghost_cells(u, v)
@@ -294,6 +305,32 @@ def add_ghost_cells_fcts(ny, nx, periodic=False):
         v = v.at[0,-1].set(-v[1,-2])
 
         return u, v
+
+    def add_stress_free_ghost_cells(u_int, v_int):
+        u = jnp.zeros((ny+2, nx+2))
+        u = u.at[1:-1,1:-1].set(u_int)
+        u = u.at[0,  1:-1].set(u[1,  1:-1])
+        u = u.at[-1, 1:-1].set(u[-2, 1:-1])
+        u = u.at[1:-1,  0].set(u[1:-1,  1])
+        u = u.at[1:-1, -1].set(u[1:-1, -2])
+        u = u.at[0, 0].set(u[1, 1])
+        u = u.at[-1,-1].set(u[-2,-2])
+        u = u.at[-1, 0].set(u[-2, 1])
+        u = u.at[0, -1].set(u[1, -2])
+    
+        v = jnp.zeros((ny+2, nx+2))
+        v = v.at[1:-1,1:-1].set(v_int)
+        v = v.at[0,  1:-1].set(v[1,  1:-1])
+        v = v.at[-1, 1:-1].set(v[-2, 1:-1])
+        v = v.at[1:-1,  0].set(v[1:-1,  1])
+        v = v.at[1:-1, -1].set(v[1:-1, -2])
+        v = v.at[0, 0].set(v[1, 1])
+        v = v.at[-1,-1].set(v[-2,-2])
+        v = v.at[-1, 0].set(v[-2, 1])
+        v = v.at[0, -1].set(v[1, -2])
+    
+        return u, v
+
 
     def add_continuation_ghost_cells(h_int):
 
@@ -1160,7 +1197,7 @@ def beta_function(b, mode="linear"):
             s_gnd = h + b
             s_flt = h * (1-c.RHO_I/c.RHO_W)
 
-            beta =  jnp.where(s_gnd>s_flt, C, 0)
+            beta = jnp.where(s_gnd>s_flt, C, 0)
             beta = jnp.where(h>0, beta, 1)
             #beta =  jnp.where(True, C, 0)
 

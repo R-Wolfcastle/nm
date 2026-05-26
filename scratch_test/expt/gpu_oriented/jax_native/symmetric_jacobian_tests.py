@@ -182,7 +182,8 @@ def wonky_stream_rotated():
 def tiny_ice_shelf():
     lx = 1_500
     ly = 1_500
-    resolution = 250 #m
+    #resolution = 62.5 #m
+    resolution = 31.25 #m
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -295,32 +296,30 @@ n_iterations = 100
 
 
 n_pic_iterations = 10
-n_newt_iterations = 25
+n_newt_iterations = 30
 
 solver = make_picnewton_velocity_solver_function_acrobatic(nr, nc, delta_y, delta_x,
                                                    b, ice_mask, 
                                                    n_pic_iterations, n_newt_iterations,
-                                                   mucoef_0, C, sliding="basic_weertman")
+                                                   mucoef_0, C, sliding="linear")
 u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 
-show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
-
+show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
 raise
-#
-#solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
-#                                                         delta_y, delta_x,
-#                                                         b, ice_mask,
-#                                                         70, 1,
-#                                                         mucoef_0, C,
-#                                                         sliding="basic_weertman")
-#
-#u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-#raise
-#show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0, vmax=3000)
-#
+
+solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+                                                         delta_y, delta_x,
+                                                         b, ice_mask,
+                                                         30, 20,
+                                                         mucoef_0, C,
+                                                         sliding="linear")
+
+u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0)
+raise
 #show_vel_field(u_out-u_out_comp, v_out-v_out_comp, cmap="RdBu_r", vmin=-200, vmax=200)
 
-n_timesteps = 5
+n_timesteps = 1
 
 prognostic_solver = make_pic_velocity_solver_function_expl_advection_gpusafe(nr, nc, delta_y, delta_x,
                                                    b, ice_mask, n_iterations,
