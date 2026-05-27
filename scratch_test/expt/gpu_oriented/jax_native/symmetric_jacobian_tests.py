@@ -11,7 +11,8 @@ from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
                               make_pic_velocity_solver_function_gpusafe,\
                               make_pic_velocity_solver_function_expl_advection_gpusafe,\
                               make_pseudotime_velocity_solver_function,\
-                              make_picnewton_velocity_solver_function_acrobatic
+                              make_picnewton_velocity_solver_function_acrobatic,\
+                              make_picnewton_velocity_solver_function_full_cvjp
 
 sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -184,6 +185,8 @@ def tiny_ice_shelf():
     ly = 1_500
     #resolution = 62.5 #m
     resolution = 31.25 #m
+    #resolution = 15.625 #m
+    #resolution = 7.8125
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -199,7 +202,7 @@ def tiny_ice_shelf():
 
     thk_profile = 500# - 300*x/lx
     thk = jnp.zeros((nr, nc))+thk_profile
-    thk = thk.at[:,  -1:].set(0)
+    thk = thk.at[:,  -2:].set(0)
     thk = thk.at[-5:,-4:].set(0)
 
     b = jnp.zeros_like(thk)-600
@@ -274,8 +277,8 @@ def wonky_stream():
 
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded
 
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
 
 print(f"DOFS: {jnp.log2(nr*nc)}")
@@ -295,8 +298,8 @@ n_iterations = 100
 #show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
 
 
-n_pic_iterations = 10
-n_newt_iterations = 30
+n_pic_iterations = 0
+n_newt_iterations = 9
 
 solver = make_picnewton_velocity_solver_function_acrobatic(nr, nc, delta_y, delta_x,
                                                    b, ice_mask, 
@@ -307,10 +310,11 @@ u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, 
 show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
 raise
 
-solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+solver_comp = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+#solver_comp = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
                                                          delta_y, delta_x,
                                                          b, ice_mask,
-                                                         30, 20,
+                                                         10, 10,
                                                          mucoef_0, C,
                                                          sliding="linear")
 

@@ -1804,8 +1804,8 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
     assemble_jacobian = assemble_sparse_2x2_block_jacobian_function_general(basis_vectors, ny*nx,
                                                                             mask,
                                                                             residuals_function)
-    assemble_jacobian_comparison = assemble_sparse_2x2_block_jacobian_function(basis_vectors, ny*nx, mask,
-                                                                    get_uv_residuals_linear_ssa)
+    #assemble_jacobian_comparison = assemble_sparse_2x2_block_jacobian_function(basis_vectors, ny*nx, mask,
+    #                                                                get_uv_residuals_linear_ssa)
 
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
@@ -2044,7 +2044,8 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
     #                                                   mucoef_0, C_0,
     #                                                   temperature_field)
 
-    get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, nx,
+    #get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, nx,
+    get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_an_option(ny, nx,
                                                        dy, dx, b,
                                                        interp_cc_to_fc,
                                                        interp_cc_to_nc,
@@ -2102,8 +2103,9 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
-                                                              indirect=True,
-                                                              ksp_max_iter=20)
+                                                              indirect=False,
+                                                              ksp_max_iter=20,
+                                                              monitor_ksp=True)
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
@@ -2180,6 +2182,13 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
             nz_jac_values, rhs = assemble_jacobian_nonlinear(
                 u_1d, v_1d, q, p, h_1d
             )
+
+            #plt.imshow(rhs[:(nx*ny)].reshape((ny,nx)))
+            #plt.colorbar()
+            #plt.show()
+            #plt.imshow(rhs[(nx*ny):].reshape((ny,nx)))
+            #plt.colorbar()
+            #plt.show()
             
             #full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
             #full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)

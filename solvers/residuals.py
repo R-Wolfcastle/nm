@@ -430,6 +430,185 @@ def laplacian_stabilization_residual(
 
     return stab_x, stab_y
 
+def compute_nonlinear_ssa_residuals_function_variational_visc_an_option(ny, nx, dy, dx, b,
+                                          interp_cc_to_fc,
+                                          interp_cc_to_nc,
+                                          fc_vel_gradient,
+                                          nc_vel_gradient,
+                                          cc_gradient,
+                                          beta_fct,
+                                          add_uv_ghost_cells,
+                                          add_s_ghost_cells,
+                                          mucoef_0, C_0,
+                                          temp_cc, extrap_over_cf):
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_nc = interp_cc_to_nc(B_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+    
+    #nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
+    #TODO: make that better, do same for fc_ew and fc_ns:
+    #fc_ice_mask =
+
+
+    def compute_nl_ssa_residuals(u_1d, v_1d, q, p, h_1d):
+
+        mucoef = mucoef_0*jnp.exp(q)
+        C = C_0*jnp.exp(p)
+
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        ice_mask = jnp.where(h.copy()>0, 1, 0)
+        
+        #calving_front = jnp.zeros_like(ice_mask)
+        #calving_front = calving_front.at[:,-3].set(1)
+        #nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
+        nc_ice_mask = interp_cc_to_nc(add_s_ghost_cells(jnp.where(h>0, 1, 0)))
+
+        #calving_front = jnp.where(
+        #    jnp.concatenate([jnp.zeros((ny,1)), jnp.where(h[:,1:]>0, 0, 1)], axis=1) > 0,
+        #    1, 0
+        #)  # shape (ny, nx)
+
+        s_gnd = h + b
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+        
+        s = add_s_ghost_cells(s)
+
+        dsdx, dsdy = cc_gradient(s)
+        dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
+        dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
+        dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
+        dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
+        dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
+        dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
+        dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
+        dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+
+        beta = beta_fct(C, u, v, h)
+
+        #C = add_s_ghost_cells(C)
+        #beta_linear_nc = interp_cc_to_nc(C)
+        #
+        #u_g, v_g = add_uv_ghost_cells(u, v)
+        #beta_u_nc = beta_linear_nc * interp_cc_to_nc(u_g)
+        #beta_v_nc = beta_linear_nc * interp_cc_to_nc(v_g)
+
+        #linear_sliding_term_x = 0.25 * (beta_u_nc[:-1, :-1] + beta_u_nc[1:, :-1] + beta_u_nc[:-1, 1:] + beta_u_nc[1:, 1:]) * ice_mask + u * (1-ice_mask)
+        #linear_sliding_term_y = 0.25 * (beta_v_nc[:-1, :-1] + beta_v_nc[1:, :-1] + beta_v_nc[:-1, 1:] + beta_v_nc[1:, 1:]) * ice_mask + v * (1-ice_mask)
+
+
+        #jax.debug.print("{x}", x=(h.shape, dsdx.shape, ice_mask.shape))
+
+        volume_x = -(beta * u - c.RHO_I * c.g * h * dsdx * ice_mask) * dx * dy
+        volume_y = -(beta * v - c.RHO_I * c.g * h * dsdy * ice_mask) * dy * dx
+        #volume_x = -(linear_sliding_term_x - 1*c.RHO_I * c.g * h * dsdx) * dx * dy
+        #volume_y = -(linear_sliding_term_y - 1*c.RHO_I * c.g * h * dsdy) * dy * dx
+
+
+        #jax.debug.print("{x}", x=jnp.count_nonzero(calving_front))
+        #terminus_stress = 0.5 * c.RHO_I * c.g * h**2 * (1 - c.RHO_W/c.RHO_I)  # shape (ny, nx)
+        
+        #jax.debug.print("{x}", x=jnp.sum(calving_front * terminus_stress * dy))
+        
+        #volume_x = volume_x + calving_front * terminus_stress * dy
+
+
+        ############ momentum_term ###########
+        #get thickness on the faces
+        h = add_s_ghost_cells(h)
+        #h_ew, h_ns = interp_cc_to_fc(h)
+        h_nc = interp_cc_to_nc(h) #Note: interp_cc_to_nc is not made in a function factory
+       
+        mucoef = add_s_ghost_cells(mucoef)
+        #mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        mucoef_nc = interp_cc_to_nc(mucoef)
+
+       
+        #u = extrap_over_cf(u)
+        #v = extrap_over_cf(v)
+        #various node-centred derivatives
+        dudx_nc, dudy_nc,\
+        dvdx_nc, dvdy_nc = nc_vel_gradient(u, v)
+    
+
+        #calculate node-centred viscosity:
+        mu_nc = B_nc * mucoef_nc * (dudx_nc**2 + dvdy_nc**2 + dudx_nc*dvdy_nc +\
+                    0.25*(dudy_nc+dvdx_nc)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)) *\
+                    nc_ice_mask
+
+        #jax.debug.print("{x}", x=jnp.max(dudx_nc))
+        mu_nc = mu_nc * h_nc
+        
+        mu_nw = mu_nc[:-1, :-1]
+        mu_ne = mu_nc[:-1,  1:]
+        mu_se = mu_nc[1:,   1:]
+        mu_sw = mu_nc[1:,  :-1]
+
+        dudx_nw = dudx_nc[:-1, :-1]
+        dudx_ne = dudx_nc[:-1,  1:]
+        dudx_se = dudx_nc[1:,   1:]
+        dudx_sw = dudx_nc[1:,  :-1]
+        
+        dvdx_nw = dvdx_nc[:-1, :-1]
+        dvdx_ne = dvdx_nc[:-1,  1:]
+        dvdx_se = dvdx_nc[1:,   1:]
+        dvdx_sw = dvdx_nc[1:,  :-1]
+
+        dudy_nw = dudy_nc[:-1, :-1]
+        dudy_ne = dudy_nc[:-1,  1:]
+        dudy_se = dudy_nc[1:,   1:]
+        dudy_sw = dudy_nc[1:,  :-1]
+
+        dvdy_nw = dvdy_nc[:-1, :-1]
+        dvdy_ne = dvdy_nc[:-1,  1:]
+        dvdy_se = dvdy_nc[1:,   1:]
+        dvdy_sw = dvdy_nc[1:,  :-1]
+
+
+        #NOTE: Those factors of 0.5 might be wrong.... CCHECK! NOTE: Checked. They're right.
+        #NOTE: This only works if dx=dy. Otherwise, faff around with some factors of dx and dy.
+        visc_x = ( mu_sw * ( 2 * dudx_sw + dvdy_sw + 0.5 * (dvdx_sw + dudy_sw) ) +\
+                   mu_nw * ( 2 * dudx_nw + dvdy_nw - 0.5 * (dvdx_nw + dudy_nw) ) +\
+                   mu_ne * (-2 * dudx_ne - dvdy_ne - 0.5 * (dvdx_ne + dudy_ne) ) +\
+                   mu_se * (-2 * dudx_se - dvdy_se + 0.5 * (dvdx_se + dudy_se) ) ) * 0.5 * dx
+        
+        visc_y = ( mu_sw * ( 2 * dvdy_sw + dudx_sw + 0.5 * (dvdx_sw + dudy_sw) ) +\
+                   mu_nw * (-2 * dvdy_nw - dudx_nw + 0.5 * (dvdx_nw + dudy_nw) ) +\
+                   mu_ne * (-2 * dvdy_ne - dudx_ne - 0.5 * (dvdx_ne + dudy_ne) ) +\
+                   mu_se * ( 2 * dvdy_se + dudx_se - 0.5 * (dvdx_se + dudy_se) ) ) * 0.5 * dx
+
+        
+        #visc_x = 0.5 * dy * visc_x
+        #visc_y = 0.5 * dx * visc_y
+
+        stab_x, stab_y = laplacian_stabilization_residual(
+            u, v,
+            1e10,
+            dx, dy,
+            add_uv_ghost_cells
+        )
+
+        #jax.debug.print("{x}", x=(jnp.max(visc_x), jnp.max(volume_x)))
+        
+        jax.debug.print("{x}", x=jnp.sum(visc_x*ice_mask))
+        #jax.debug.print("{x}", x=jnp.sum(c.RHO_I * c.g * h * dsdx * dx * dy * ice_mask))
+        
+        x_mom_residual = visc_x*ice_mask + volume_x #+ #stab_x*ice_mask
+        y_mom_residual = visc_y*ice_mask + volume_y #+ stab_y*ice_mask
+
+        #x_mom_residual = visc_x*ice_mask + volume_x
+        #y_mom_residual = visc_y*ice_mask + volume_y
+
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_nl_ssa_residuals)
+
 def compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, nx, dy, dx, b,
                                           interp_cc_to_fc,
                                           interp_cc_to_nc,
@@ -462,14 +641,15 @@ def compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, 
         h = h_1d.reshape((ny, nx))
 
         ice_mask = jnp.where(h.copy()>0, 1, 0)
-        nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
-        #nc_ice_mask = interp_cc_to_nc(add_s_ghost_cells(jnp.where(h>0, 1, 0)))
+        calving_front = jnp.zeros_like(ice_mask)
+        calving_front = calving_front.at[:,-3].set(1)
+        #nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
+        nc_ice_mask = interp_cc_to_nc(add_s_ghost_cells(jnp.where(h>0, 1, 0)))
 
-        calving_front = jnp.where(
-            jnp.concatenate([jnp.zeros((ny,1)), jnp.where(h[:,1:]>0, 0, 1)], axis=1) > 0,
-            1, 0
-        )  # shape (ny, nx)
-
+        #calving_front = jnp.where(
+        #    jnp.concatenate([jnp.zeros((ny,1)), jnp.where(h[:,1:]>0, 0, 1)], axis=1) > 0,
+        #    1, 0
+        #)  # shape (ny, nx)
 
         s_gnd = h + b
         s_flt = h * (1-c.RHO_I/c.RHO_W)
@@ -489,20 +669,37 @@ def compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, 
 
         beta = beta_fct(C, u, v, h)
 
-        volume_x = -(beta * u - 1*c.RHO_I * c.g * h * dsdx) * dx * dy
-        volume_y = -(beta * v - 1*c.RHO_I * c.g * h * dsdy) * dy * dx
+        #C = add_s_ghost_cells(C)
+        #beta_linear_nc = interp_cc_to_nc(C)
+        #
+        #u_g, v_g = add_uv_ghost_cells(u, v)
+        #beta_u_nc = beta_linear_nc * interp_cc_to_nc(u_g)
+        #beta_v_nc = beta_linear_nc * interp_cc_to_nc(v_g)
+
+        #linear_sliding_term_x = 0.25 * (beta_u_nc[:-1, :-1] + beta_u_nc[1:, :-1] + beta_u_nc[:-1, 1:] + beta_u_nc[1:, 1:]) * ice_mask + u * (1-ice_mask)
+        #linear_sliding_term_y = 0.25 * (beta_v_nc[:-1, :-1] + beta_v_nc[1:, :-1] + beta_v_nc[:-1, 1:] + beta_v_nc[1:, 1:]) * ice_mask + v * (1-ice_mask)
+
+
+        #jax.debug.print("{x}", x=(h.shape, dsdx.shape, ice_mask.shape))
+
+        volume_x = -(beta * u - c.RHO_I * c.g * h * dsdx * ice_mask * 0) * dx * dy
+        volume_y = -(beta * v - c.RHO_I * c.g * h * dsdy * ice_mask * 0) * dy * dx
+        #volume_x = -(linear_sliding_term_x - 1*c.RHO_I * c.g * h * dsdx) * dx * dy
+        #volume_y = -(linear_sliding_term_y - 1*c.RHO_I * c.g * h * dsdy) * dy * dx
 
 
         #jax.debug.print("{x}", x=jnp.count_nonzero(calving_front))
-        terminus_stress = 0.5 * c.RHO_I * c.g * h**2 * (1 - c.RHO_I/c.RHO_W)  # shape (ny, nx)
+        terminus_stress = 0.5 * c.RHO_I * c.g * h**2 * (1 - c.RHO_W/c.RHO_I)  # shape (ny, nx)
         
-        #volume_x = volume_x + 10000*calving_front * terminus_stress * dy
+        jax.debug.print("{x}", x=jnp.sum(calving_front * terminus_stress * dy))
+        
+        volume_x = volume_x + calving_front * terminus_stress * dy
 
 
         ############ momentum_term ###########
         #get thickness on the faces
         h = add_s_ghost_cells(h)
-        h_ew, h_ns = interp_cc_to_fc(h)
+        #h_ew, h_ns = interp_cc_to_fc(h)
         h_nc = interp_cc_to_nc(h) #Note: interp_cc_to_nc is not made in a function factory
        
         mucoef = add_s_ghost_cells(mucoef)
@@ -520,8 +717,9 @@ def compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, 
         #calculate node-centred viscosity:
         mu_nc = B_nc * mucoef_nc * (dudx_nc**2 + dvdy_nc**2 + dudx_nc*dvdy_nc +\
                     0.25*(dudy_nc+dvdx_nc)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)) *\
-                    1#nc_ice_mask
+                    nc_ice_mask
 
+        #jax.debug.print("{x}", x=jnp.max(dudx_nc))
         mu_nc = mu_nc * h_nc
         
         mu_nw = mu_nc[:-1, :-1]
@@ -550,31 +748,36 @@ def compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, 
         dvdy_sw = dvdy_nc[1:,  :-1]
 
 
-        #NOTE: Those factors of 0.5 might be wrong.... CCHECK!!!!!
+        #NOTE: Those factors of 0.5 might be wrong.... CCHECK! NOTE: Checked. They're right.
+        #NOTE: This only works if dx=dy. Otherwise, faff around with some factors of dx and dy.
         visc_x = ( mu_sw * ( 2 * dudx_sw + dvdy_sw + 0.5 * (dvdx_sw + dudy_sw) ) +\
                    mu_nw * ( 2 * dudx_nw + dvdy_nw - 0.5 * (dvdx_nw + dudy_nw) ) +\
                    mu_ne * (-2 * dudx_ne - dvdy_ne - 0.5 * (dvdx_ne + dudy_ne) ) +\
-                   mu_se * (-2 * dudx_se - dvdy_se + 0.5 * (dvdx_se + dudy_se) ) )
+                   mu_se * (-2 * dudx_se - dvdy_se + 0.5 * (dvdx_se + dudy_se) ) ) * 0.5 * dx
         
         visc_y = ( mu_sw * ( 2 * dvdy_sw + dudx_sw + 0.5 * (dvdx_sw + dudy_sw) ) +\
                    mu_nw * (-2 * dvdy_nw - dudx_nw + 0.5 * (dvdx_nw + dudy_nw) ) +\
                    mu_ne * (-2 * dvdy_ne - dudx_ne - 0.5 * (dvdx_ne + dudy_ne) ) +\
-                   mu_se * ( 2 * dvdy_se + dudx_se - 0.5 * (dvdx_se + dudy_se) ) )
+                   mu_se * ( 2 * dvdy_se + dudx_se - 0.5 * (dvdx_se + dudy_se) ) ) * 0.5 * dx
 
         
-        visc_x = 0.5 * dy * visc_x
-        visc_y = 0.5 * dx * visc_y
-
+        #visc_x = 0.5 * dy * visc_x
+        #visc_y = 0.5 * dx * visc_y
 
         stab_x, stab_y = laplacian_stabilization_residual(
             u, v,
-            5e10,
+            1e10,
             dx, dy,
             add_uv_ghost_cells
         )
+
+        #jax.debug.print("{x}", x=(jnp.max(visc_x), jnp.max(volume_x)))
         
-        x_mom_residual = visc_x*ice_mask + volume_x + stab_x*ice_mask
-        y_mom_residual = visc_y*ice_mask + volume_y + stab_y*ice_mask
+        jax.debug.print("{x}", x=jnp.sum(visc_x*ice_mask))
+        #jax.debug.print("{x}", x=jnp.sum(c.RHO_I * c.g * h * dsdx * dx * dy * ice_mask))
+        
+        x_mom_residual = visc_x*ice_mask + volume_x #+ #stab_x*ice_mask
+        y_mom_residual = visc_y*ice_mask + volume_y #+ stab_y*ice_mask
 
         #x_mom_residual = visc_x*ice_mask + volume_x
         #y_mom_residual = visc_y*ice_mask + volume_y
@@ -1359,13 +1562,16 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(ny, nx, dy, dx, b,
 
         mucoef = add_s_ghost_cells(mucoef)
         mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-        #jax.debug.print("mucoef_ew = {x}",x=mucoef_ew)
 
         #calculate face-centred viscosity:
         mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
                     0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
         mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
                     0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        
+        jax.debug.print("max dudx_ns = {x}",x=jnp.max(dudx_ns))
+        jax.debug.print("max dudx_ew = {x}",x=jnp.max(dudx_ew))
+
         
         #to account for calving front boundary condition, set effective viscosities
         #of faces of all cells with zero thickness to zero:

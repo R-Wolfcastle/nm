@@ -27,7 +27,7 @@ B_COLD = 0.5 * (A_COLD**(-1/GLEN_N)) #This is the real one
 ICE_VISCOSITY = 1.0e13/31_557_600         # Dynamic viscosity of ice (Pa·s)
 
 # Misc additions
-EPSILON_VISC = 1e-5
+EPSILON_VISC = 1e-2
 #Ok, so probably this is far too high a number, which gives quite low viscosities
 #where the strain rates are zero. However, in the ice stream case with periodic
 #boundary conditions, with an even number of y cells, the viscosity in the centre
