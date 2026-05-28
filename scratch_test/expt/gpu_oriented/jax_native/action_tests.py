@@ -13,7 +13,8 @@ from nonlinear_solvers import make_pic_velocity_solver_function_acrobatic,\
                               make_pic_velocity_solver_function_expl_advection_gpusafe,\
                               make_pseudotime_velocity_solver_function,\
                               make_picnewton_velocity_solver_function_acrobatic,\
-                              make_action_velocity_solver_function
+                              make_action_velocity_solver_function,\
+                              make_picnewton_velocity_solver_function_full_cvjp
 
 sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from plotting_stuff import show_vel_field, make_gif, show_damage_field,\
@@ -87,6 +88,60 @@ def stickiness(x, y, resolution):
     beta = jnp.where(((y > W1) & (y < W - W1)), BETA_MID * (1.0 + jnp.cos(16.0 * jnp.pi * x/L)), beta)
 
     return beta
+
+
+def twisty_stream():
+    lx = 180_000
+    ly = 180_000
+    resolution = 2_000 #m
+    
+    
+    stencil_radius = 1
+    stencil_width = 2*stencil_radius+1
+    
+    nr = int(ly/resolution)
+    nc = int(lx/resolution)
+    
+    assert nc % stencil_width == 0, "domain must be tileable by stencil width in periodic bcs case"
+    
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(0, ly, nr)
+    
+    delta_x = x[1]-x[0]
+    delta_y = y[1]-y[0]
+
+
+    thk = jnp.zeros((nr,nc)) + 1000
+    #want a slope of 0.5 degrees.
+    sine_0pt5 = 0.0087265
+    
+    #b_profile = 1000 - 500*x/lx
+    b_profile = 1000 - sine_0pt5*x
+    b = jnp.zeros((nr, nc)) + b_profile
+    
+    
+    xs, ys = jnp.meshgrid(x,y)
+    R = ly
+    m = 0.25
+    C = 1e3 * (1 + 5e-3 + jnp.sin(2*jnp.pi*(ys+R/4)/R + m*jnp.sin(2*jnp.pi*xs/R)))
+    C = jnp.flipud(C)
+
+    
+    #mucoef_profile = 0.5+b_profile.copy()/2000
+    mucoef_profile = 1
+    mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+    
+    #plt.imshow(mucoef)
+    #plt.colorbar()
+    #plt.show()
+    #raise
+    
+    #mucoef = jnp.ones_like(C)
+    #mucoef_0 = jnp.ones_like(C)
+    q = jnp.zeros_like(C)
+    
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, jnp.ones_like(thk), b+thk, jnp.ones_like(thk)
+
 
 def tiny_ice_shelf():
     lx = 1_500
@@ -181,10 +236,12 @@ def wonky_stream(resolution=1000):
 
 
 
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C,\
-        mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C,\
+#        mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C,\
 #                mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C,\
+        mucoef_0, q, ice_mask, surface, grounded = twisty_stream()
 
 #plt.imshow(thk)
 #plt.colorbar()
@@ -195,18 +252,28 @@ noise = jax.random.uniform(key, shape=b.shape, minval=-1000, maxval=1000)
 u_init = jnp.zeros_like(b) + 100# + 2000 + noise
 v_init = jnp.zeros_like(b)# + noise
 
-pic_iterations = 75
-newt_iterations = 45
+pic_iterations = 1
+newt_iterations = 6
 
 solver = make_action_velocity_solver_function(nr, nc, delta_y, delta_x,
                                               b, ice_mask,
                                               pic_iterations, newt_iterations,
-                                              mucoef_0, C, sliding="basic_weertman")
+                                              mucoef_0, C, sliding="linear", periodic=True)
 
 u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
+raise
 
 
+solver_comp = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+                                                         delta_y, delta_x,
+                                                         b, ice_mask,
+                                                         10, 10,
+                                                         mucoef_0, C,
+                                                         sliding="linear",
+                                                         periodic=True)
 
+u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0)
 
 

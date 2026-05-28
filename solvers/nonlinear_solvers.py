@@ -1752,18 +1752,30 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
     cc_gradient                                = cc_gradient_function(dy, dx)
     cc_vel_gradient                            = cc_vel_gradient_function(dy, dx,
                                                                add_uv_ghost_cells)
+    nc_vel_gradient                            = nc_velocity_gradient_function(dy, dx,
+                                                               add_uv_ghost_cells)
     
     beta_fct = beta_function(b, sliding)
 
-    get_action = action_functional_function(ny, nx, dy, dx, b,
-                                            cc_gradient,
-                                            cc_vel_gradient,
-                                            beta_fct,
-                                            add_uv_ghost_cells,
-                                            add_scalar_ghost_cells,
-                                            extrapolate_over_cf,
-                                            mucoef_0, C_0,
-                                            temperature_field)
+    #get_action = action_functional_function(ny, nx, dy, dx, b,
+    #                                        cc_gradient,
+    #                                        cc_vel_gradient,
+    #                                        beta_fct,
+    #                                        add_uv_ghost_cells,
+    #                                        add_scalar_ghost_cells,
+    #                                        extrapolate_over_cf,
+    #                                        mucoef_0, C_0,
+    #                                        temperature_field)
+    
+    get_action = node_centred_action_functional_function_no_cf(ny, nx, dy, dx, b,
+                                          nc_vel_gradient,
+                                          beta_fct,
+                                          add_uv_ghost_cells,
+                                          add_scalar_ghost_cells,
+                                          mucoef_0, C_0,
+                                          temperature_field)
+
+
 
     residuals_function = jax.grad(get_action, argnums=(0,1))
     
@@ -1862,7 +1874,7 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
         def newton_update(state):
             i, res, u_1d, v_1d, h_1d, duv = state
 
-            jax.debug.print("Pic res: {x}", x=res)
+            #jax.debug.print("Pic res: {x}", x=res)
 
             #start_t = time.time()
             #nz_jac_values, rhs = assemble_jacobian_comparison(
@@ -2044,8 +2056,8 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
     #                                                   mucoef_0, C_0,
     #                                                   temperature_field)
 
-    #get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_messing_round(ny, nx,
-    get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_an_option(ny, nx,
+    get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_messing_round_no_cf(ny, nx,
+    #get_uv_residuals_nonlinear_ssa = compute_nonlinear_ssa_residuals_function_variational_visc_an_option(ny, nx,
                                                        dy, dx, b,
                                                        interp_cc_to_fc,
                                                        interp_cc_to_nc,
@@ -2060,6 +2072,19 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                                        extrapolate_over_cf)
 
 
+    get_uv_residuals_nonlinear_ssa_diagnosis = compute_nonlinear_ssa_residuals_function_variational_visc_diagnosis(ny, nx,
+                                                       dy, dx, b,
+                                                       interp_cc_to_fc,
+                                                       interp_cc_to_nc,
+                                                       fc_velocity_gradient,
+                                                       nc_velocity_gradient,
+                                                       cc_gradient,
+                                                       beta_fct,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells,
+                                                       mucoef_0, C_0,
+                                                       temperature_field,
+                                                       extrapolate_over_cf)
 
     #############
     #setting up bvs and coords for a single block of the jacobian
@@ -2105,7 +2130,7 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
                                                               (ny*nx*2, ny*nx*2),
                                                               indirect=False,
                                                               ksp_max_iter=20,
-                                                              monitor_ksp=True)
+                                                              monitor_ksp=False)
 
     sparse_matvec, _, extract_inverse_diagonal = make_sparse_matvec(ny*nx*2, coords)  
     cg_solver = make_sparse_dpcg_solver_jsp_comp(coords, extract_inverse_diagonal, ny*nx*2,
@@ -2178,6 +2203,8 @@ def make_picnewton_velocity_solver_function_acrobatic(ny, nx, dy, dx,
             i, res, u_1d, v_1d, h_1d, duv = state
             
             jax.debug.print("Newt res: {x}", x=res)
+
+            #get_uv_residuals_nonlinear_ssa_diagnosis(u_1d, v_1d, q, p, h_1d)
 
             nz_jac_values, rhs = assemble_jacobian_nonlinear(
                 u_1d, v_1d, q, p, h_1d

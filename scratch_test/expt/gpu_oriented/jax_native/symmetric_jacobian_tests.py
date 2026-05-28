@@ -179,14 +179,68 @@ def wonky_stream_rotated():
             nr, nc, x, y, resolution, resolution,
             thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
 
+def twisty_stream():
+    lx = 180_000
+    ly = 180_000
+    resolution = 1_000 #m
+    
+    
+    stencil_radius = 1
+    stencil_width = 2*stencil_radius+1
+    
+    nr = int(ly/resolution)
+    nc = int(lx/resolution)
+    
+    assert nc % stencil_width == 0, "domain must be tileable by stencil width in periodic bcs case"
+    
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(0, ly, nr)
+    
+    delta_x = x[1]-x[0]
+    delta_y = y[1]-y[0]
+
+
+    thk = jnp.zeros((nr,nc)) + 1000
+    #want a slope of 0.5 degrees.
+    sine_0pt5 = 0.0087265
+    
+    #b_profile = 1000 - 500*x/lx
+    b_profile = 1000 - sine_0pt5*x
+    b = jnp.zeros((nr, nc)) + b_profile
+    
+    
+    xs, ys = jnp.meshgrid(x,y)
+    R = ly
+    m = 0.25
+    C = 1e3 * (1 + 5e-3 + jnp.sin(2*jnp.pi*(ys+R/4)/R + m*jnp.sin(2*jnp.pi*xs/R)))
+    C = jnp.flipud(C)
+
+    
+    #mucoef_profile = 0.5+b_profile.copy()/2000
+    mucoef_profile = 1
+    mucoef_0 = jnp.zeros_like(b)+mucoef_profile
+    
+    #plt.imshow(mucoef)
+    #plt.colorbar()
+    #plt.show()
+    #raise
+    
+    #mucoef = jnp.ones_like(C)
+    #mucoef_0 = jnp.ones_like(C)
+    q = jnp.zeros_like(C)
+    
+    return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, jnp.ones_like(thk), b+thk, jnp.ones_like(thk)
+
 
 def tiny_ice_shelf():
     lx = 1_500
     ly = 1_500
     #resolution = 62.5 #m
-    resolution = 31.25 #m
-    #resolution = 15.625 #m
+    #resolution = 31.25 #m
+    resolution = 15.625 #m
     #resolution = 7.8125
+    #resolution = 3.90625
+    #resolution = 1.953125
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -203,12 +257,12 @@ def tiny_ice_shelf():
     thk_profile = 500# - 300*x/lx
     thk = jnp.zeros((nr, nc))+thk_profile
     thk = thk.at[:,  -2:].set(0)
-    thk = thk.at[-5:,-4:].set(0)
+    #thk = thk.at[-5:,-4:].set(0)
 
     b = jnp.zeros_like(thk)-600
-    b = b.at[:1, :].set(-440)
-    b = b.at[:, :1].set(-440)
-    b = b.at[-1:, :].set(-440)
+    b = b.at[:2, :].set(-440)
+    b = b.at[:, :2].set(-440)
+    b = b.at[-2:, :].set(-440)
 
     mucoef = jnp.ones_like(thk)
 
@@ -236,7 +290,7 @@ def wonky_stream():
     lx = 128_000
     ly = 128_000
 
-    resolution = 2000
+    resolution = 500
 
     nr = int(ly/resolution)
     nc = int(lx/resolution)
@@ -277,9 +331,14 @@ def wonky_stream():
 
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded
 
-lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
+#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = tiny_ice_shelf()
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream()
 #lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = wonky_stream_rotated()
+lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q, ice_mask, surface, grounded = twisty_stream()
+
+#plt.imshow(C, vmax=2000)
+#plt.colorbar()
+#plt.show()
 
 print(f"DOFS: {jnp.log2(nr*nc)}")
 
@@ -298,13 +357,14 @@ n_iterations = 100
 #show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=3000)
 
 
-n_pic_iterations = 0
-n_newt_iterations = 9
+n_pic_iterations = 4
+n_newt_iterations = 10
 
 solver = make_picnewton_velocity_solver_function_acrobatic(nr, nc, delta_y, delta_x,
                                                    b, ice_mask, 
                                                    n_pic_iterations, n_newt_iterations,
-                                                   mucoef_0, C, sliding="linear")
+                                                   mucoef_0, C, sliding="linear",
+                                                           periodic=True)
 u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
 
 show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
@@ -329,7 +389,7 @@ prognostic_solver = make_pic_velocity_solver_function_expl_advection_gpusafe(nr,
                                                    b, ice_mask, n_iterations,
                                                    mucoef_0, C, n_timesteps, sliding="basic_weertman")
 
-
+1
 
 ## Warm-up
 #u, v, h = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
