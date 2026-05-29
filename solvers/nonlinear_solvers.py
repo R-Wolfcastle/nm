@@ -1827,6 +1827,12 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
     #                                        iterations=30)
 
 
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
+                                                              ksp_max_iter=20,
+                                                              monitor_ksp=False)
 
 
     
@@ -1926,7 +1932,8 @@ def make_action_velocity_solver_function(ny, nx, dy, dx,
             ##plt.show()
             ##raise
 
-            duv = 0.5 * cg_solver(nz_jac_values, rhs, duv)
+            #duv = 0.5 * cg_solver(nz_jac_values, rhs, duv)
+            duv = 0.25 * la_solver(nz_jac_values, rhs)
 
 #            print(duv)
 
@@ -3981,6 +3988,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
             
             if i==0:
                 initial_residual = jnp.max(rhs)
+                print(f"INIT RES: {initial_residual}")
             print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
             
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
@@ -3988,11 +3996,11 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
         #plt.colorbar()
         #plt.show()
 
-        
-        final_residual_pic = res_fct(rhs_new)
+        if n_pic_iterations>0:     
+            final_residual_pic = res_fct(rhs_new)
 
-        print("Final Picard residual: {}".format(final_residual_pic))
-        print("Picard residual reduction factor: {}".format(initial_residual/final_residual_pic))
+            print("Final Picard residual: {}".format(final_residual_pic))
+            print("Picard residual reduction factor: {}".format(initial_residual/final_residual_pic))
 
 
         for i in range(n_newt_iterations):
@@ -4021,7 +4029,9 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
         final_residual = res_fct(rhs_new)
 
         print("Final Newton residual: {}".format(final_residual))
-        print("Newton residual reduction factor: {}".format(final_residual_pic/final_residual))
+        
+        if n_pic_iterations>0:
+           print("Newton residual reduction factor: {}".format(final_residual_pic/final_residual))
         
         print("TOTAL residual reduction factor: {}".format(initial_residual/final_residual))
 

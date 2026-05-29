@@ -2021,7 +2021,6 @@ def compute_ssa_uv_residuals_function_pnotC_givenT(ny, nx, dy, dx, b,
         dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
         dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
 
-
         beta = beta_fct(C, u, v, h)
 
         volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
@@ -2444,19 +2443,23 @@ def node_centred_action_functional_function_no_cf(ny, nx, dy, dx, b,
 
         dudx_nc, dudy_nc, dvdx_nc, dvdy_nc = nc_vel_gradient(u, v)
 
+        mask = jnp.ones_like(dudx_nc)
+        mask = mask.at[:,-1].set(0.5)
+
         visc_term = 2*(c.GLEN_N/(c.GLEN_N + 1)) *\
-                        jnp.sum(h_nc * B_nc * mucoef_nc * \
+                        jnp.sum(mask * h_nc * B_nc * mucoef_nc * \
                                  (dudx_nc**2 + dvdy_nc**2 + dudx_nc*dvdy_nc +\
                                   0.25*(dudy_nc+dvdx_nc)**2 + c.EPSILON_VISC**2
                                  )**(0.5/c.GLEN_N+0.5)
                                )
 
         #Frictional term
-        fric_term = jnp.sum(0.5 * beta_nc * (u_nc**2 + v_nc**2))
-
+        #fric_term = jnp.sum(0.5 * beta_nc * (u_nc**2 + v_nc**2))
+        fric_term = jnp.sum(0.5 * C * (u**2 + v**2))
 
         #Gravitational term
-        grav_term = c.RHO_I * c.g * jnp.sum( h_nc * (dsdx_nc * u_nc + dsdy_nc * v_nc) )
+        #grav_term = c.RHO_I * c.g * jnp.sum( h_nc * (dsdx_nc * u_nc + dsdy_nc * v_nc) )
+        grav_term = c.RHO_I * c.g * jnp.sum( h * (dsdx_nc * u + dsdy_nc * v) )
 
 
         #Boundary term

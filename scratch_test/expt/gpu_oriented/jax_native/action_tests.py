@@ -34,7 +34,7 @@ from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 
 
-np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
+#np.set_printoptions(precision=1, suppress=True, linewidth=np.inf, threshold=np.inf)
 
 
 def mucoef_rifted(x,y,resolution):
@@ -118,7 +118,8 @@ def twisty_stream():
     #b_profile = 1000 - 500*x/lx
     b_profile = 1000 - sine_0pt5*x
     b = jnp.zeros((nr, nc)) + b_profile
-    
+
+    s = b + thk
     
     xs, ys = jnp.meshgrid(x,y)
     R = ly
@@ -253,7 +254,7 @@ u_init = jnp.zeros_like(b) + 100# + 2000 + noise
 v_init = jnp.zeros_like(b)# + noise
 
 pic_iterations = 1
-newt_iterations = 6
+newt_iterations = 102
 
 solver = make_action_velocity_solver_function(nr, nc, delta_y, delta_x,
                                               b, ice_mask,
@@ -261,7 +262,7 @@ solver = make_action_velocity_solver_function(nr, nc, delta_y, delta_x,
                                               mucoef_0, C, sliding="linear", periodic=True)
 
 u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
+show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=5000)
 raise
 
 
@@ -273,7 +274,8 @@ solver_comp = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
                                                          sliding="linear",
                                                          periodic=True)
 
-u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0)
+#u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
+u_out_comp, v_out_comp = solver_comp(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_out, v_out, thk)
+show_vel_field(u_out_comp, v_out_comp, cmap="RdYlBu_r", vmin=0, vmax=5000)
 
 
