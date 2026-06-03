@@ -3375,19 +3375,19 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                    )
                        ])
    
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
-                                                              coords,
-                                                              (ny*nx*2, ny*nx*2),
-                                                              indirect=True,
-                                                              ksp_type="bcgs",
-                                                              preconditioner="jacobi",
-                                                              monitor_ksp=False,
-                                                              ksp_max_iter=20)
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
     #                                                          coords,
     #                                                          (ny*nx*2, ny*nx*2),
     #                                                          indirect=True,
-    #                                                          monitor_ksp=False)
+    #                                                          ksp_type="bcgs",
+    #                                                          preconditioner="jacobi",
+    #                                                          monitor_ksp=False,
+    #                                                          ksp_max_iter=20)
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+                                                              coords,
+                                                              (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
+                                                              monitor_ksp=False)
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
     #                                                          coords,
     #                                                          (ny*nx*2, ny*nx*2),
@@ -3721,7 +3721,8 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
                                                  temperature_field=None):
 
     if temperature_field is None:
-        temperature_field = (jnp.zeros((ny,nx))+263.15)
+        #temperature_field = (jnp.zeros((ny,nx))+263.15)
+        temperature_field = (jnp.zeros((ny,nx))+258.15)
 
 
     #functions for various things:
@@ -3819,10 +3820,15 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
                        ])
 
    
+    #la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
+    #                                                          coords,
+    #                                                          (ny*nx*2, ny*nx*2),
+    #                                                          indirect=True,
+    #                                                          monitor_ksp=False)
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(
                                                               coords,
                                                               (ny*nx*2, ny*nx*2),
-                                                              indirect=True,
+                                                              indirect=False,
                                                               monitor_ksp=False)
 
     #la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords,(ny*nx*2, ny*nx*2))
@@ -4023,6 +4029,10 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
             v_1d = (v_1d + du[(ny*nx):]) * ice_mask
             
             rhs_new = -jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))
+
+            #plt.imshow(jnp.log10(jnp.abs(rhs_new[:(nx*ny)])).reshape((ny,nx)), alpha=1, vmin=0)
+            #plt.colorbar()
+            #plt.show()
             
             print(f"nonlinear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
 

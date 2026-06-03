@@ -1,8 +1,9 @@
 from pathlib import Path
 import sys
+import os
 
-
-sys.path.insert(1, "../../../utils/")
+nm_home = os.environ['NM_HOME']
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
 from plotting_stuff import *
 
 
@@ -264,8 +265,7 @@ def define_z_coordinates(n_levels, thk):
     #is vertically uniform, then dudz is linear so u is quadratic in z.
     v_coords_1d = jnp.linspace(0,1,n_levels)**2
     
-    v_coords_expanded = v_coords_1d[None, :] 
-    #The ellipses are moot because this wouldn't work for 3d - it would have to be [None, None, :]
+    v_coords_expanded = v_coords_1d[None, :]
    
     base_expanded = base[:, None]
     thk_expanded = thk[:, None]
