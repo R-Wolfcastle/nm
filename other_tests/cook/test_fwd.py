@@ -532,35 +532,34 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
    
     #C to balance driving
     C = c.RHO_I * c.g * thk * (dsdx**2 + dsdy**2 + 1e-10)**0.5 / (vel_data + 1e-10)
-    #Set C to C_MAX outside basin
-    C = jnp.where(basin_mask, C, C_MAX)
     #Set C to zero on floating ice, 1 where there's no ice, and cap it at C_MAX 
-    C = jnp.minimum(C_MAX, 
-                    jnp.where(ice_mask==1, jnp.where(grounded_clean_eroded==1, C, 0), 1)
-        )
+    #C = jnp.minimum(C_MAX, 
+    #                jnp.where(ice_mask==1, jnp.where(grounded_clean_eroded==1, C, 0), 1)
+    #    )
 
     #plt.imshow(grounding_zone)
     #plt.show()
-    
-    C = jnp.where(grounding_zone==1, 10, C)
 
-    plt.imshow(C)
-    plt.colorbar()
-    plt.show()
+    C = jnp.where(grounded_clean_eroded==1, C, 0)
+    C = jnp.where(grounding_zone==1, 10, C)
 
     C = C.at[:3,  :].set(C_MAX)
     C = C.at[-3:, :].set(C_MAX)
     C = C.at[:, -3:].set(C_MAX)
     C = C.at[:,  :3].set(C_MAX)
+    
+    #Set C to C_MAX outside basin
+    C = jnp.where(basin_mask, C, C_MAX)
+    C = jnp.where(ice_mask==0, 1, C)
+    C = jnp.minimum(C_MAX, C)
 
     #plt.imshow(jnp.log10(C))
-    #plt.imshow(ice_mask, cmap="Grays", alpha=0.25)
+    ##plt.imshow(ice_mask, cmap="Grays", alpha=0.25)
     #plt.colorbar()
     #plt.show()
     #raise
 
     phi = jnp.ones_like(thk)
-
 
 
 
@@ -597,7 +596,7 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
 
     temp = None
     
-    return phi, C, topg, thk, ice_mask, temp, uo, uc
+    return phi, C, topg, thk, ice_mask, temp, uo, uc, C_MAX
 
 
 
@@ -610,8 +609,8 @@ res = 1000
 tlxy = (1_000_000,   -2_000_000)
 brxy = (1_154_000, -2_148_000)
 
-phi, C, topg, thk, ice_mask, temp, uo, uc = setup_domain(res, tlxy, brxy)
-#phi, C, topg, thk, ice_mask, temp, uo, uc = setup_annual_data(res, tlxy, brxy)
+phi, C, topg, thk, ice_mask, temp, uo, uc, C_MAX = setup_domain(res, tlxy, brxy)
+#phi, C, topg, thk, ice_mask, temp, uo, uc, C_MAX = setup_annual_data(res, tlxy, brxy)
 nr, nc = phi.shape
 print(nr, nc)
 
@@ -865,13 +864,13 @@ def solve_ip_second_order():
         C = C_0*jnp.exp(p.reshape((nr, nc)))
         dC_dx, dC_dy = left_top_centred_gradient_function(C)
     
-        C_regn_term = 5e-2 * jnp.sum( mask.reshape(-1) *\
+        C_regn_term = 5e-1 * jnp.sum( mask.reshape(-1) *\
                                     (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2) *\
                                     (1-border_cells_flat)
                                   )/(nr*nc)
     
 
-        phi_box_constraint = 1e1 * jnp.sum(
+        phi_box_constraint = 1e0 * jnp.sum(
             jax.nn.softplus(5*(phi - 4))**2 +
             jax.nn.softplus(10*(0.1 - phi))**2
         ) / (nr*nc)
@@ -915,25 +914,44 @@ def solve_ip_second_order():
 
             qp = initial_guess
             
-            #damping = 0*1e-4
+            damping = 1e-2
 
             cost = jnp.inf
 
+            
+            g_old = jnp.inf
+
+            qp_old = qp.copy()
+
             for itn in range(iterations):
+
+
+                get_grad = jax.grad(reduced_functional)
+                g = get_grad(qp)
+                
+                _, vjp_grad = jax.vjp(get_grad, qp)
+
+                g_np = np.array(g)
+            
+                gnorm = np.linalg.norm(g_np)
+                print(f"iter {itn}, ||g|| = {gnorm}")
+                
+                if itn == 0:
+                    first_gnorm = gnorm.copy()
+                
 
                 #seems pretty good having damping be at 1e-3 for the first 20 iterations, 
                 #then drop to 1e-4, then just stay there 
                 #damping = 1e-3 * (1 - 9*itn)/190 #Decreases by a factor of 10 every 20 iterations
                 #damping = 1e-3 if (itn<20) else 1e-4
-                damping = 0
-
-                get_grad = jax.grad(reduced_functional)
-                g = get_grad(qp)
-                _, vjp_grad = jax.vjp(get_grad, qp)
-
-                g_np = np.array(g)
-            
-                print(f"iter {itn}, ||g|| = {np.linalg.norm(g_np)}")
+                #damping = 0
+                if (gnorm/first_gnorm < 0.05):
+                    damping *= 0.1
+                    first_gnorm = gnorm.copy()
+                #else:
+                #    damping = 1e-2
+                #NOTE: I want to add something that goes back a step and increases damping if
+                #the gradient has increased
             
                 def matvec(v_np):
                     v = jnp.array(v_np, dtype=qp.dtype)
@@ -946,6 +964,7 @@ def solve_ip_second_order():
             
                 dqp_np, _ = cg(A, -g_np, maxiter=20)
               
+                g_old = g.copy()
 
                 dqp = jnp.array(dqp_np)
                 
@@ -956,6 +975,24 @@ def solve_ip_second_order():
 
                 qp = qp + dqp
 
+                #qp = jnp.concatenate( (
+                #                       jnp.minimum( qp[:(nr*nc)], jnp.log(5/phi_0.reshape(-1)) ),
+                #                       jnp.minimum( qp[(nr*nc):], jnp.log(C_MAX/(C_0.reshape(-1)+1e-5)) )
+                #                      )
+                #                    )
+                qp = jnp.concatenate( (
+                                       jnp.minimum( qp[:(nr*nc)], 2 ),
+                                       jnp.minimum( qp[(nr*nc):], 3.5 )
+                                      )
+                                    )
+                
+                #plt.imshow( phi_0*jnp.exp( qp[:(nr*nc)].reshape((nr, nc)) ) , vmin=0, vmax=4, cmap="RdYlBu")
+                #plt.colorbar()
+                #plt.show()
+                #
+                #plt.imshow( C_0*jnp.exp( qp[(nr*nc):].reshape((nr, nc)) ) , vmin=0, vmax=C_MAX, cmap="Spectral")
+                #plt.colorbar()
+                #plt.show()
 
                 #alpha = 1.0
                 #for ls_iteration in range(1):
@@ -1099,7 +1136,7 @@ def solve_ip_second_order():
     show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=800)
 
 
-    plt.imshow((u_out**2 + v_out**2)**(0.5)-uo, vmin=-100, vmax=100, cmap="RdBu_r")
+    plt.imshow(((u_out**2 + v_out**2)**(0.5)-uo) * uc, vmin=-100, vmax=100, cmap="RdBu_r")
     plt.colorbar()
     plt.show()
 
