@@ -28,6 +28,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import jax.scipy.linalg as lalg
 
+from scipy.sparse.linalg import cg, LinearOperator
 from scipy.optimize import minimize as scinimize
 from scipy.ndimage import gaussian_filter
 import xarray as xr
@@ -120,6 +121,39 @@ def open_shapefile_as_mask(in_shp, aoi, res):
     return data_
 
 
+def open_vector_features_as_masks(in_vec, layer_name, field_name, aoi, res):
+    masks = []
+    
+    src = gdal.OpenEx(in_vec) 
+    layer = src.GetLayerByName(layer_name)
+
+
+    for i in range(1, layer.GetFeatureCount()+1):
+        feature = layer.GetFeature(i)
+
+        fid = feature.GetFID()
+        print(f"FID: {fid}, Name: {feature.GetField(field_name)}")
+
+        options = (
+            f"-burn 1.0 -tr {res} {res} -init 0.0 "
+            f"-a_nodata 0.0 "
+            f"-te {aoi[0]} {aoi[3]} {aoi[2]} {aoi[1]} "
+            f"-tap -l {layer_name} "
+            f"-where \"FID = {fid}\""
+        )
+
+        data_ = gdal.Rasterize(
+            '/vsimem/temp.tif',
+            src,
+            options=options
+        ).ReadAsArray()
+
+        masks.append(data_)
+
+        gdal.Unlink('/vsimem/temp.tif')
+    return masks
+
+
 #def open_mask(path, tl, br, resolution):
 
 
@@ -189,8 +223,37 @@ def load_geotiff_resampled(fp, target_grid, method="bilinear"):
     return da.rio.reproject_match(target_grid, resampling=method)
 
 
+def open_mega_annual_data(resolution, tlxy, brxy):
 
-def setup_measures_ip_data(resolution, tlx, tly):
+    
+    x0, y1 = tlxy
+    x1, y0 = brxy
+    assert (x1 - x0) % resolution == 0, "x-extent is not divisible by resolution"
+    assert (y1 - y0) % resolution == 0, "y-extent is not divisible by resolution"
+
+
+    vel_fp = "/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/cook_study/velocity_data/cook_iv_annual_means.nc"
+
+    xs = np.arange(x0, x1, resolution)
+    ys = np.arange(y1, y0, -resolution)
+
+    target_grid = xr.Dataset(
+        coords=dict(x=("x", xs),
+                    y=("y", ys))
+    )
+
+    vel_nc  = xr.open_dataset(vel_fp)
+    vels = vel_nc["speed_myr"]
+    
+
+    vel_r  = vel_nc.interp_like(target_grid, method="linear")
+    vels = vel_r["speed_myr"]
+
+
+    return vels
+
+
+def open_measures_ip_data(resolution, tlx, tly):
     x0, y1 = tlxy
     x1, y0 = brxy
 
@@ -223,6 +286,173 @@ def setup_measures_ip_data(resolution, tlx, tly):
     raise
 
     return jnp.array(vel_data), uc
+
+def open_measures_iv(resolution, tlx, tly):
+    x0, y1 = tlxy
+    x1, y0 = brxy
+
+    xs = np.arange(x0, x1, resolution)
+    ys = np.arange(y1, y0, -resolution)
+
+    target_grid = xr.Dataset(
+        coords=dict(
+            x=("x", xs),
+            y=("y", ys)
+        )
+    )
+    target_grid = target_grid.rio.write_crs("EPSG:3031")
+
+    vel_fp = r"/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/Quantarctica3/Glaciology/MEaSUREs Ice Flow Velocity/MEaSUREs_IceFlowSpeed_450m.tif"
+
+    vel_data = load_geotiff_resampled(vel_fp, target_grid).values
+
+    vel_data = jnp.maximum(0, vel_data)
+
+    return vel_data
+
+
+
+year_date_dict = {
+    "2016": "2016/08/08 00:00:00",
+    "2017": "2017/06/28 00:00:00",
+    "2018": "2018/06/29 00:00:00",
+    "2019": "2019/07/18 00:00:00",
+    "2020": "2020/06/30 00:00:00",
+    "2021": "2021/06/19 00:00:00",
+    "2022": "2022/06/14 00:00:00",
+    "2023": "2023/06/09 00:00:00",
+    "2024": "2024/06/15 00:00:00",
+    "2025": "2025/07/16 00:00:00",
+    "2026": "2026/05/19 00:00:00"
+        }
+
+
+def extrapolate_thickness(thickness, pixels=10, mask=None):
+    """
+    Extrapolate non-zero values outward by ~n_iter pixels.
+
+    Parameters:
+        thickness (2D np.array): thickness field (zeros = no data)
+        pixels (int): number of pixels to extrapolate outward
+        mask: mask over thickness to extrapolate out from
+
+    Returns:
+        np.array: extrapolated thickness field
+    """
+
+    out = thickness.copy().astype(float)
+    if mask==None:
+        mask = out > 0
+
+    for _ in range(pixels):
+        # grow mask by 1 pixel
+        new_mask = binary_dilation(mask) & (~mask)
+
+        if not np.any(new_mask):
+            break
+
+        # for each new pixel, average neighbouring known pixels
+        inds = np.argwhere(new_mask)
+
+        for i, j in inds:
+            neighbours = []
+            for di in [-1, 0, 1]:
+                for dj in [-1, 0, 1]:
+                    ni, nj = i + di, j + dj
+                    if (0 <= ni < out.shape[0] and
+                        0 <= nj < out.shape[1] and
+                        mask[ni, nj]):
+                        neighbours.append(out[ni, nj])
+
+            if neighbours:
+                out[i, j] = np.mean(neighbours)
+
+        mask = mask | new_mask
+
+    return out
+
+
+
+def setup_annual_data(resolution, tlxy, brxy, sink_pinning_points=True):
+
+    
+    x0, y1 = tlxy
+    x1, y0 = brxy
+    assert (x1 - x0) % resolution == 0, "x-extent is not divisible by resolution"
+    assert (y1 - y0) % resolution == 0, "y-extent is not divisible by resolution"
+
+
+    bedmachine_fp = "/Users/eartsu/Documents/BedMachine/Antarctica/v4/NSIDC-0756_BedMachineAntarctica_19700101-20191001_V04.1.nc"
+    #temp_fp = "/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/misc_data/ase_temp_8km_24_fromCTLW_upsidedownlayers.nc"
+    #temp_fp = "/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/misc_data/ase_temp_8km_24_fromCTLW.nc"
+    
+    xs = np.arange(x0, x1, resolution)
+    ys = np.arange(y1, y0, -resolution)
+
+    target_grid = xr.Dataset(
+        coords=dict(x=("x", xs),
+                    y=("y", ys))
+    )
+    target_grid = target_grid.rio.write_crs("EPSG:3031")
+
+    # load raw
+    bed_nc  = xr.open_dataset(bedmachine_fp)
+    #temp_nc = xr.open_dataset(temp_fp)
+
+    # reproject / reindex both onto same grid
+    bed_r  = bed_nc.interp_like(target_grid, method="linear")
+    #temp_r = temp_nc.interp_like(target_grid, method="linear")
+
+    
+    #NOTE: no point getting surface out, as it disagrees with hydrostatic surface.
+    topg, thk = (bed_r[var_].values for var_ in ["bed",
+                                              "thickness"])
+
+    #TODO: If you _do_ use the hydrostatic assumption, then there are all sorts of
+    #weird floating scraggly bits near the grounding line, so this is a major fudge.
+    thk = thk*1.01
+   
+    srf = jnp.maximum(topg+thk, thk*(1-c.RHO_I/c.RHO_W))
+
+    
+    grounded = jnp.where((topg+thk)>(thk*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+    cf_masks = open_vector_features_as_masks(
+                "/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/cook_study/geometry_data/cook_fronts_polys/front_shapes.gpkg",
+                "front_shapes",
+                "date",
+                (*tlxy, *brxy),
+                resolution
+            )
+
+    ice_free_and_ocean = jnp.where((topg+thk+0.1)>((thk+0.1)*(1-c.RHO_I/c.RHO_W)), 0, 1) *\
+                         jnp.where(thk==0, 1, 0)
+
+    
+    extrapolated_thk = extrapolate_thickness(thk, 
+                                             pixels=int(20*(1000/resolution)), 
+                                             mask=(1-ice_free_and_ocean))
+
+    #plt.imshow(extrapolated_thk)
+    #plt.colorbar()
+    #plt.show()
+
+    #plt.imshow(extrapolated_thk-thk)
+    #plt.colorbar()
+    #plt.show()
+
+
+    years = [str(yr) for yr in range(2016, 2027)]
+
+    i = 0
+    for year in years:
+        cf_mask = cf_masks[i]
+
+        thickness = jnp.maximum(thk, extrapolated_thk*cf_mask)
+
+        i+=1
+
+    raise
 
 
 def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
@@ -274,6 +504,7 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
     grounded_clean_eroded = binary_erosion(binary_erosion(
                                 jnp.pad(grounded_clean, ((2,2),(2,2)), constant_values=1)
                                                          ))[2:-2, 2:-2]
+    grounding_zone = (grounded_clean_eroded==0) & (grounded_clean==1)
 
     #plt.imshow(grounded_clean_eroded)
     #plt.show()
@@ -281,7 +512,7 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
 
     basin_mask_fp = "/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/cook_study/geometry_data/rough_basin/basin.shp"
     basin_mask = open_shapefile_as_mask(basin_mask_fp, (*tlxy, *brxy), res).astype(bool)
-    #Remove floating ice outside the basin
+    #Remo800floating ice outside the basin
     thk = jnp.where((~grounded_clean_eroded) & (~basin_mask), 0, thk)
 
     ice_mask = np.where(thk>0.01, 1, 0)
@@ -304,8 +535,18 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
     #Set C to C_MAX outside basin
     C = jnp.where(basin_mask, C, C_MAX)
     #Set C to zero on floating ice, 1 where there's no ice, and cap it at C_MAX 
-    C = jnp.minimum(C_MAX, jnp.where(ice_mask==1, jnp.where(grounded_clean_eroded==1, C, 0), 1))*grounded_clean_eroded
+    C = jnp.minimum(C_MAX, 
+                    jnp.where(ice_mask==1, jnp.where(grounded_clean_eroded==1, C, 0), 1)
+        )
 
+    #plt.imshow(grounding_zone)
+    #plt.show()
+    
+    C = jnp.where(grounding_zone==1, 10, C)
+
+    plt.imshow(C)
+    plt.colorbar()
+    plt.show()
 
     C = C.at[:3,  :].set(C_MAX)
     C = C.at[-3:, :].set(C_MAX)
@@ -319,6 +560,24 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
     #raise
 
     phi = jnp.ones_like(thk)
+
+
+
+
+
+    uo = open_measures_iv(resolution, tlxy, brxy)
+
+    uc = jnp.where((jnp.isfinite(uo)) & (basin_mask==1) & (ice_mask==1), 1, 0)
+    uc = binary_erosion(binary_erosion(uc))
+    uc = uc.at[:4,  :].set(0)
+    uc = uc.at[-4:, :].set(0)
+    uc = uc.at[:,  :4].set(0)
+    uc = uc.at[:, -4:].set(0)
+
+
+    #plt.imshow(uo, vmin=0, vmax=1000, cmap="RdYlBu_r")
+    #plt.colorbar()
+    #plt.show()
 
 
 #    temp_nc = xr_load_crop_and_resample(temp_fp,
@@ -338,67 +597,32 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
 
     temp = None
     
-    return phi, C, topg, thk, ice_mask, temp
+    return phi, C, topg, thk, ice_mask, temp, uo, uc
 
 
 
-def open_iv_data(resolution, tlxy, brxy):
-
-    
-    x0, y1 = tlxy
-    x1, y0 = brxy
-    assert (x1 - x0) % resolution == 0, "x-extent is not divisible by resolution"
-    assert (y1 - y0) % resolution == 0, "y-extent is not divisible by resolution"
-
-
-    vel_fp = "/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/cook_study/velocity_data/cook_iv_annual_means.nc"
-
-    xs = np.arange(x0, x1, resolution)
-    ys = np.arange(y1, y0, -resolution)
-
-    target_grid = xr.Dataset(
-        coords=dict(x=("x", xs),
-                    y=("y", ys))
-    )
-
-    vel_nc  = xr.open_dataset(vel_fp)
-    vels = vel_nc["speed_myr"]
-    
-
-    #vel_r  = vel_nc.interp_like(target_grid, method="linear")
-    #vels = vel_r["speed_myr"]
-
-
-    return vels
 
 
 
-res = 500
-tlxy = (964_000,   -1_950_000)
-brxy = (1_180_000, -2_136_000)
+res = 1000
+#tlxy = (964_000,   -1_950_000)
+#brxy = (1_180_000, -2_136_000)
+tlxy = (1_000_000,   -2_000_000)
+brxy = (1_154_000, -2_148_000)
 
-phi, C, topg, thk, ice_mask, temp = setup_domain(res, tlxy, brxy)
+phi, C, topg, thk, ice_mask, temp, uo, uc = setup_domain(res, tlxy, brxy)
+#phi, C, topg, thk, ice_mask, temp, uo, uc = setup_annual_data(res, tlxy, brxy)
 nr, nc = phi.shape
 print(nr, nc)
-#vels = open_iv_data(res, tlxy, brxy)
-#
-#plt.imshow(vels.sel(year=2014))
-#plt.colorbar()
-#plt.show()
-#
-#raise
 
-
-setup_measures_ip_data(res, tlxy, brxy)
-raise
-
+#vels = open_mega_annual_data(res, tlxy, brxy)
 
 def run_fwd():
 
     u_init = jnp.zeros((nr,nc))
     v_init = u_init.copy()
     
-    n_pic_iterations = 9
+    n_pic_iterations = 12
     n_newt_iterations = 8
    
     #solver = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
@@ -412,91 +636,12 @@ def run_fwd():
                                                              temperature_field=temp)
     
     u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-
-    #n_iterations = 50
-
-    #solver = make_pic_velocity_solver_function_gpusafe(nr, nc, res, res,
-    #                                                   topg, ice_mask, n_iterations,
-    #                                                   phi, C, sliding="basic_weertman",
-    #                                                   temperature_field=temp)
-    #
-    #u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
     
     show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=800)
     
-    raise
-
-    
-    #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/PIGGING_TEA_BREAK/u_double_visc.npy", u_out)
-    #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/PIGGING_TEA_BREAK/v_double_visc.npy", v_out)
-    
-    
-    show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=4500)
-
 
 #run_fwd()
 
-
-
-
-
-
-
-#lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q = tiny_ice_shelf()
-#ice_mask = jnp.where(thk>0,1,0)
-#
-#u_init = jnp.zeros((nr,nc))
-#v_init = u_init.copy()
-#
-#n_pic_iterations = 100
-#n_newt_iterations = 0
-#
-##plt.imshow(ice_mask & ~binary_erosion(ice_mask))
-##plt.show()
-##raise
-#
-##solver = make_pic_velocity_solver_function_densetest(nr, nc,
-#solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
-#                                                         delta_x, delta_y,
-#                                                         b, ice_mask,
-#                                                         n_pic_iterations,
-#                                                         n_newt_iterations,
-#                                                         mucoef_0, C,
-#                                                         #sliding="basic_weertman")
-#                                                         sliding="linear")
-#
-#u_out, v_out = solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk)
-#show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0)
-#
-#
-#raise
-
-
-
-
-
-#PIG WHOLE
-tlxy = (-1_700_000, -50_000)
-brxy = (-1_500_000, -370_000)
-
-
-##PIG ICE SHELF
-#tlxy = (-1_654_000, -190_000)
-#brxy = (-1_550_000, -346_000)
-
-res = 2000
-
-phi, C, topg, thk, ice_mask, temp = setup_domain(res, tlxy, brxy)
-
-
-
-#phi = jnp.rot90(phi)
-#C = jnp.rot90(C)
-#topg = jnp.rot90(topg)
-#thk = jnp.rot90(thk)
-#ice_mask = jnp.rot90(ice_mask)
-
-nr, nc = phi.shape
 
 
 #grounded = jnp.where((topg+thk)>(thk*(1-c.RHO_I/c.RHO_W)), 1, 0)
@@ -507,18 +652,21 @@ nr, nc = phi.shape
 #mucoef_0 = phi.copy()
 
 
-
-
-
-
-
-
-
-
-
-
 ######INVERSE PROBLEM GUBBINS:
 
+
+def border_cells():
+    border_cells = jnp.zeros((nr, nc))
+    border_cells = border_cells.at[:5,:].set(1)
+    border_cells = border_cells.at[-5:,:].set(1)
+    border_cells = border_cells.at[:,:5].set(1)
+    border_cells = border_cells.at[:,-5:].set(1)
+    #plt.imshow(border_cells)
+    #plt.show()
+    border_cells_reduced_flat = border_cells[1:-1,1:-1].astype(int).reshape(-1)
+    border_cells_flat = border_cells.astype(int).reshape(-1)
+
+    return border_cells_flat
 
 
 def left_top_centred_gradient_function(field):
@@ -529,6 +677,457 @@ def left_top_centred_gradient_function(field):
     dy = dy.at[:-1, :].set(field[:-1,:]-field[1: ,:])/res
 
     return dx, dy
+
+def solve_ip():
+
+    phi_0 = phi.copy()
+    C_0 = C.copy()
+   
+    border_cells_flat = border_cells()
+    border_cells_double_flat = jnp.concatenate((border_cells_flat, border_cells_flat))
+    
+    u_init = jnp.zeros((nr,nc))
+    v_init = u_init.copy()
+
+
+    def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
+        speed_mod = jnp.sqrt(u_mod**2 + v_mod**2 + 1e-10)
+        
+        misfit_term = jnp.sum(mask.reshape(-1) * \
+                              (speed_mod.reshape(-1) - speed_obs.reshape(-1))**2
+                             )/(nr*nc)
+    
+        #Assume that things are, on average, wrong by 100ma^-1. So, divide by 10_000:
+        misfit_term = misfit_term/10_000
+    
+    
+        phi = phi_0*jnp.exp(q.reshape((nr, nc)))
+        dphi_dx, dphi_dy = left_top_centred_gradient_function(phi)
+    
+    
+        #The coefficients are at least an order of magnitude smaller than Steph's choices of:
+        #alpha_phi = 1e11 (for me, that would be 1e11/10_000 ~ 1e7)
+        #alpha_C   = 1e3  (for me, that would be 1e3 /10_000 ~ 1e-1)
+    
+        #maybe 1e4 a good shout?
+        phi_regn_term = 8e6 * jnp.sum( mask.reshape(-1) *\
+                                    (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2) *\
+                                    (1-border_cells_flat)
+                                  )/(nr*nc)
+        
+    
+    
+        C = C_0*jnp.exp(p.reshape((nr, nc)))
+        dC_dx, dC_dy = left_top_centred_gradient_function(C)
+    
+        C_regn_term = 5e-1 * jnp.sum( mask.reshape(-1) *\
+                                    (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2) *\
+                                    (1-border_cells_flat)
+                                  )/(nr*nc)
+    
+    
+        jax.debug.print("misfit_term: {x}", x=misfit_term)
+        jax.debug.print("phi_regn_term: {x}", x=phi_regn_term)
+        jax.debug.print("C_regn_term: {x}", x=C_regn_term)
+    
+        #return misfit_term, regn_term, misfit_term + regn_term
+        return misfit_term + phi_regn_term + C_regn_term
+    
+    
+    def lbfgsb_function(misfit_functional, solver, misfit_fctl_args=(), iterations=50):
+        def reduced_functional(qp):
+            q = qp[:(nr*nc)]
+            p = qp[(nr*nc):]
+            u_out, v_out = solver(q.reshape(nr, nc), p.reshape(nr, nc), u_init, v_init, thk)
+            return misfit_functional(u_out, v_out, q, p, *misfit_fctl_args)
+    
+        get_grad_basic = jax.grad(reduced_functional)
+        def get_grad(x):
+            grad = get_grad_basic(x)
+            return grad*(1-border_cells_double_flat)
+        #get_grad = jax.grad(reduced_functional)
+    
+        def lbfgsb(initial_guess):
+            print("starting opt")
+    
+            #need the callback to give intermediate vals etc. will sort later.
+            result = scinimize(reduced_functional, 
+                               initial_guess, 
+                               jac = get_grad, 
+                               method="L-BFGS-B", 
+                               bounds= [(-2, 0.5)] * int(initial_guess.size/2) + \
+                                       [(-4, 4)] * int(initial_guess.size/2), 
+                               #options={"maxiter": iterations, "maxls": 10} #Note: disp is depricated
+                               options={"maxiter": iterations}
+                              )
+    
+            return result.x
+        return lbfgsb
+
+    n_pic_iterations = 12
+    n_newt_iterations = 8
+    
+    solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+                                                             res, res,
+                                                             topg, ice_mask,
+                                                             n_pic_iterations,
+                                                             n_newt_iterations,
+                                                             phi, C,
+                                                             sliding="linear",
+                                                             temperature_field=temp)
+    
+    
+    q_initial_guess = jnp.zeros_like(thk).reshape(-1)
+    p_initial_guess = jnp.zeros_like(thk).reshape(-1)
+    
+    qp_initial_guess = jnp.zeros((2*nr*nc,))
+    
+    #lbfgsb_iterator = lbfgsb_function(regularised_misfit, solver, (uo, uc), iterations=40)
+    #qp_out = lbfgsb_iterator(qp_initial_guess)
+
+    #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/qp_out_1km_40its20ls_8e6_5em1.npy", qp_out)
+    qp_out = jnp.load("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/qp_out_1km_40its20ls_8e6_5em1.npy")
+
+    q_out = qp_out[:(nr*nc)].reshape((nr, nc))
+    p_out = qp_out[(nr*nc):].reshape((nr, nc))
+    
+    plt.imshow(uo, vmin=0, vmax=800, cmap="RdYlBu_r")
+    plt.colorbar()
+    plt.show()
+    
+    #plt.imshow(q_out)
+    #plt.colorbar()
+    #plt.show()
+
+    plt.imshow(p_out)
+    plt.colorbar()
+    plt.show()
+
+    plt.imshow(phi_0*jnp.exp(q_out), vmin=0, vmax=2, cmap="RdBu")
+    plt.colorbar()
+    plt.show()
+    
+    C_out = C_0*jnp.exp(p_out)
+    plt.imshow(jnp.log(C_out), cmap="magma", vmin=0, vmax=8)
+    plt.colorbar()
+    plt.show()
+
+    u_out, v_out = solver(q_out, p_out, u_init, v_init, thk)
+
+    show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=800)
+
+
+    plt.imshow((u_out**2 + v_out**2)**(0.5)-uo, vmin=-100, vmax=100, cmap="RdBu_r")
+    plt.colorbar()
+    plt.show()
+
+
+def solve_ip_second_order():
+
+    phi_0 = phi.copy()
+    C_0 = C.copy()
+   
+    border_cells_flat = border_cells()
+    border_cells_double_flat = jnp.concatenate((border_cells_flat, border_cells_flat))
+    
+    u_init = jnp.zeros((nr,nc))
+    v_init = u_init.copy()
+
+
+    def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
+        speed_mod = jnp.sqrt(u_mod**2 + v_mod**2 + 1e-10)
+        
+        misfit_term = jnp.sum(mask.reshape(-1) * \
+                              (speed_mod.reshape(-1) - speed_obs.reshape(-1))**2 *\
+                                    (1-border_cells_flat)
+                             )/(nr*nc)
+    
+        #Assume that things are, on average, wrong by 100ma^-1. So, divide by 10_000:
+        misfit_term = misfit_term/10_000
+    
+    
+        phi = phi_0*jnp.exp(q.reshape((nr, nc)))
+        dphi_dx, dphi_dy = left_top_centred_gradient_function(phi)
+    
+    
+        #The coefficients are at least an order of magnitude smaller than Steph's choices of:
+        #alpha_phi = 1e11 (for me, that would be 1e11/10_000 ~ 1e7)
+        #alpha_C   = 1e3  (for me, that would be 1e3 /10_000 ~ 1e-1)
+    
+        #maybe 1e4 a good shout? #5e6 is ok!
+        phi_regn_term = 1e4 * jnp.sum( mask.reshape(-1) *\
+                                    (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2) *\
+                                    (1-border_cells_flat)
+                                  )/(nr*nc)
+        
+    
+    
+        C = C_0*jnp.exp(p.reshape((nr, nc)))
+        dC_dx, dC_dy = left_top_centred_gradient_function(C)
+    
+        C_regn_term = 5e-2 * jnp.sum( mask.reshape(-1) *\
+                                    (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2) *\
+                                    (1-border_cells_flat)
+                                  )/(nr*nc)
+    
+
+        phi_box_constraint = 1e1 * jnp.sum(
+            jax.nn.softplus(5*(phi - 4))**2 +
+            jax.nn.softplus(10*(0.1 - phi))**2
+        ) / (nr*nc)
+
+        #phi_box_constraint = jnp.sum( jnp.log(1+jnp.exp(5*(phi-4))) + jnp.log(1+jnp.exp(10*(0.1-phi))) )/(nr*nc)
+
+        #box_terms = ( 1e-4 * jnp.sum((phi-phi_0)**2) + 1e-10 * jnp.sum((C-C_0)**2) ) /(nr*nc)
+
+
+        jax.debug.print("misfit_term: {x}", x=misfit_term)
+        jax.debug.print("phi_regn_term: {x}", x=phi_regn_term)
+        jax.debug.print("C_regn_term: {x}", x=C_regn_term)
+        jax.debug.print("phi_box_constraint: {x}", x=phi_box_constraint)
+        jax.debug.print("Total cost: {x}", x=misfit_term + phi_regn_term + C_regn_term + phi_box_constraint)
+   
+
+        #return misfit_term, regn_term, misfit_term + regn_term
+        return misfit_term + phi_regn_term + C_regn_term + phi_box_constraint
+    
+   
+    def newton_function(misfit_functional, solver,  misfit_fctl_args=(), iterations=50):
+
+        def reduced_functional(qp):
+            q = qp[:(nr*nc)]
+            p = qp[(nr*nc):]
+            u_out, v_out = solver(q.reshape(nr, nc), p.reshape(nr, nc), u_init, v_init, thk)
+            return misfit_functional(u_out, v_out, q, p, *misfit_fctl_args)
+    
+        #get_grad_basic = jax.grad(reduced_functional)
+        #def get_grad(x):
+        #    grad = get_grad_basic(x)
+        #    return grad#*(1-border_cells_double_flat)
+
+        #_, vjp_grad = jax.vjp(get_grad, jnp.zeros((nr*nc*2,)))
+        #def hessian_vector_product_function(qp):
+        #    _, hvp_function = jax.vjp(get_grad, qp)
+        #    return hvp_function
+
+
+        def newton(initial_guess):
+
+            qp = initial_guess
+            
+            #damping = 0*1e-4
+
+            cost = jnp.inf
+
+            for itn in range(iterations):
+
+                #seems pretty good having damping be at 1e-3 for the first 20 iterations, 
+                #then drop to 1e-4, then just stay there 
+                #damping = 1e-3 * (1 - 9*itn)/190 #Decreases by a factor of 10 every 20 iterations
+                #damping = 1e-3 if (itn<20) else 1e-4
+                damping = 0
+
+                get_grad = jax.grad(reduced_functional)
+                g = get_grad(qp)
+                _, vjp_grad = jax.vjp(get_grad, qp)
+
+                g_np = np.array(g)
+            
+                print(f"iter {itn}, ||g|| = {np.linalg.norm(g_np)}")
+            
+                def matvec(v_np):
+                    v = jnp.array(v_np, dtype=qp.dtype)
+            
+                    (Hv,) = vjp_grad(v)
+            
+                    return np.array(Hv + damping * v)
+            
+                A = LinearOperator((qp.size, qp.size), matvec=matvec)
+            
+                dqp_np, _ = cg(A, -g_np, maxiter=20)
+              
+
+                dqp = jnp.array(dqp_np)
+                
+
+                #plt.imshow(dqp[:(nr*nc)].reshape((nr, nc)))
+                #plt.colorbar()
+                #plt.show()
+
+                qp = qp + dqp
+
+
+                #alpha = 1.0
+                #for ls_iteration in range(1):
+                #    print(f"LINE_SEARCH_ITERATION: {ls_iteration}")
+
+                #    qp_trial = qp + alpha * dqp
+                #    #cost_new = reduced_functional(qp_trial)
+                #
+                #    #if cost_new < 1e100:#cost:
+                #    #    cost = cost_new.copy()
+                #    #    print("LINE SEARCH TERMINATED")
+                #    #    break
+                #    #alpha *= 0.5
+                #
+                #qp = qp_trial
+                
+                ##damping update
+                #if alpha == 1.0:
+                #    damping *= 0.75
+                #else:
+                #    damping *= 5.0
+                #damping = np.clip(damping, 1e-6, 1)
+            
+            return qp
+
+
+#            for itn in range(iterations):
+#
+#                gradient = np.array(get_grad(qp))
+#                
+#                grad_norm = np.linalg.norm(gradient)
+#                print(f"iter {itn}, ||g|| = {grad_norm}")
+#
+#                def hvp_function(pert_numpy):
+#                    pert_jax = jnp.array(pert_numpy, dtype=qp_new.dtype)
+#                    hvp = jax.vjp(get_grad, (qp,), (pert_jax,))[1]
+#                    return np.array(hvp)
+#
+#
+#                A = LinearOperator((nr*nc*2, nr*nc*2), matvec=hvp_function)
+#
+#                dqp, _ = cg(hvp_function, -gradient, maxiter=200)
+#
+#                qp = qp + dqp
+#
+#            return jnp.array(qp)
+
+        return newton
+
+
+    def lbfgsb_function(misfit_functional, solver, misfit_fctl_args=(), iterations=50):
+        def reduced_functional(qp):
+            q = qp[:(nr*nc)]
+            p = qp[(nr*nc):]
+            u_out, v_out = solver(q.reshape(nr, nc), p.reshape(nr, nc), u_init, v_init, thk)
+            return misfit_functional(u_out, v_out, q, p, *misfit_fctl_args)
+    
+        get_grad_basic = jax.grad(reduced_functional)
+        def get_grad(x):
+            grad = get_grad_basic(x)
+            return grad*(1-border_cells_double_flat)
+        #get_grad = jax.grad(reduced_functional)
+    
+        def lbfgsb(initial_guess):
+            print("starting opt")
+    
+            #need the callback to give intermediate vals etc. will sort later.
+            result = scinimize(reduced_functional, 
+                               initial_guess, 
+                               jac = get_grad, 
+                               method="L-BFGS-B", 
+                               bounds= [(-2, 0.5)] * int(initial_guess.size/2) + \
+                                       [(-4, 4)] * int(initial_guess.size/2), 
+                               #options={"maxiter": iterations, "maxls": 10} #Note: disp is depricated
+                               options={"maxiter": iterations}
+                              )
+    
+            return result.x
+        return lbfgsb
+
+    n_pic_iterations = 12
+    n_newt_iterations = 8
+    
+    solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+                                                             res, res,
+                                                             topg, ice_mask,
+                                                             n_pic_iterations,
+                                                             n_newt_iterations,
+                                                             phi, C,
+                                                             sliding="linear",
+                                                             temperature_field=temp)
+    
+    
+    q_initial_guess = jnp.zeros_like(thk).reshape(-1)
+    p_initial_guess = jnp.zeros_like(thk).reshape(-1)
+   
+    #qp_initial_guess = jnp.load(
+    ##"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_6its_8e6_5em1.npy"
+    #"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_newt_1e4_5em1.npy"
+    #        )
+    qp_initial_guess = jnp.zeros((2*nr*nc,))
+    
+    #lbfgsb_iterator = lbfgsb_function(regularised_misfit, solver, (uo, uc), iterations=40)
+    #qp_out = lbfgsb_iterator(qp_initial_guess)
+    
+    newton_iterator = newton_function(regularised_misfit, solver, (uo, uc), iterations=12)
+    qp_out = newton_iterator(qp_initial_guess)
+
+    #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_6its_8e6_5em1.npy", qp_out)
+    #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_newt_1e4_5em1.npy", qp_out)
+    #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_newt_1e4_5em1i_round3.npy", qp_out)
+    #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_500m_newt_10its_1e4_5em1_softBox_lambdaZERO.npy", qp_out)
+    jnp.save(f"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_{res}m_newt_10its_1e4_5em1_softBox_lambdaZERO.npy", qp_out)
+    
+    q_out = qp_out[:(nr*nc)].reshape((nr, nc))
+    p_out = qp_out[(nr*nc):].reshape((nr, nc))
+    
+    plt.imshow(uo, vmin=0, vmax=800, cmap="RdYlBu_r")
+    plt.colorbar()
+    plt.show()
+    
+    plt.imshow(q_out)
+    plt.colorbar()
+    plt.show()
+
+    plt.imshow(p_out)
+    plt.colorbar()
+    plt.show()
+
+    plt.imshow(phi_0*jnp.exp(q_out), vmin=0, vmax=2, cmap="RdBu")
+    plt.colorbar()
+    plt.show()
+    
+    C_out = C_0*jnp.exp(p_out)
+    plt.imshow(jnp.log(C_out), cmap="magma", vmin=0, vmax=8)
+    plt.colorbar()
+    plt.show()
+
+    u_out, v_out = solver(q_out, p_out, u_init, v_init, thk)
+
+    show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=800)
+
+
+    plt.imshow((u_out**2 + v_out**2)**(0.5)-uo, vmin=-100, vmax=100, cmap="RdBu_r")
+    plt.colorbar()
+    plt.show()
+
+
+solve_ip_second_order()
+
+
+
+
+
+
+
+
+
+raise
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def smooth_gaussian(array, sigma=1.5):
     return ndi.gaussian_filter(array, sigma=sigma)
@@ -546,155 +1145,6 @@ def get_main_gl(thk, topg):
 
 
 gl_main, grounded = get_main_gl(thk, topg)
-
-
-cf_cells = (thk>0) & ~binary_erosion(thk>0)
-
-border_cells = jnp.zeros_like(thk)
-border_cells = border_cells.at[:5,:].set(1)
-border_cells = border_cells.at[-5:,:].set(1)
-border_cells = border_cells.at[:,:5].set(1)
-border_cells = border_cells.at[:,-5:].set(1)
-#plt.imshow(border_cells)
-#plt.show()
-border_cells_reduced_flat = border_cells[1:-1,1:-1].astype(int).reshape(-1)
-border_cells_flat = border_cells.astype(int).reshape(-1)
-border_cells_double_flat = jnp.concatenate((border_cells_flat, border_cells_flat))
-
-def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
-    speed_mod = jnp.sqrt(u_mod**2 + v_mod**2 + 1e-10)
-    
-    misfit_term = jnp.sum(mask.reshape(-1) * \
-                          (speed_mod.reshape(-1) - speed_obs.reshape(-1))**2
-                         )/(nr*nc)
-
-    #Assume that things are, on average, wrong by 100ma^-1. So, divide by 10_000:
-    misfit_term = misfit_term/10_000
-
-
-    phi = mucoef_0*jnp.exp(q.reshape((nr, nc)))
-    dphi_dx, dphi_dy = left_top_centred_gradient_function(phi)
-
-
-    #The coefficients are at least an order of magnitude smaller than Steph's choices of:
-    #alpha_phi = 1e11 (for me, that would be 1e11/10_000 ~ 1e7)
-    #alpha_C   = 1e3  (for me, that would be 1e3 /10_000 ~ 1e-1)
-
-    #maybe 1e4 a good shout?
-    phi_regn_term = 8e6 * jnp.sum( mask.reshape(-1) *\
-                                (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2) *\
-                                (1-border_cells_flat)
-                              )/(nr*nc)
-    
-
-
-    C = C_0*jnp.exp(p.reshape((nr, nc)))
-    dC_dx, dC_dy = left_top_centred_gradient_function(C)
-
-    C_regn_term = 2e-1 * jnp.sum( mask.reshape(-1) *\
-                                (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2) *\
-                                (1-border_cells_flat)
-                              )/(nr*nc)
-
-
-    jax.debug.print("misfit_term: {x}", x=misfit_term)
-    jax.debug.print("phi_regn_term: {x}", x=phi_regn_term)
-    jax.debug.print("C_regn_term: {x}", x=C_regn_term)
-
-    #return misfit_term, regn_term, misfit_term + regn_term
-    return misfit_term + phi_regn_term + C_regn_term
-
-
-def lbfgsb_function(misfit_functional, misfit_fctl_args=(), iterations=50):
-    def reduced_functional(qp):
-        q = qp[:(nr*nc)]
-        p = qp[(nr*nc):]
-        u_out, v_out = solver(q.reshape(nr, nc), p.reshape(nr, nc), u_init, v_init, thk)
-        return misfit_functional(u_out, v_out, q, p, *misfit_fctl_args)
-
-    get_grad_basic = jax.grad(reduced_functional)
-    def get_grad(x):
-        grad = get_grad_basic(x)
-        return grad#*(1-border_cells_double_flat)
-    #get_grad = jax.grad(reduced_functional)
-
-    def lbfgsb(initial_guess):
-        print("starting opt")
-
-        #need the callback to give intermediate vals etc. will sort later.
-        result = scinimize(reduced_functional, 
-                           initial_guess, 
-                           jac = get_grad, 
-                           method="L-BFGS-B", 
-                           bounds= [(-2, 0.5)] * int(initial_guess.size/2) + \
-                                   [(-4, 4)] * int(initial_guess.size/2), 
-                           #options={"maxiter": iterations, "maxls": 10} #Note: disp is depricated
-                           options={"maxiter": iterations}
-                          )
-
-        return result.x
-    return lbfgsb
-
-
-
-
-def solve_ip():
-
-    uo, uc = setup_measures_ip_data(res, tlxy, brxy)
-    
-    phi_0 = jnp.ones_like(phi)
-    
-    C_0 = C.copy()
-    
-    
-    u_init = jnp.zeros((nr,nc))
-    v_init = u_init.copy()
-    
-    n_pic_iterations = 9
-    n_newt_iterations = 5
-    
-    solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
-                                                             res, res,
-                                                             topg, ice_mask,
-                                                             n_pic_iterations,
-                                                             n_newt_iterations,
-                                                             phi_0, C_0,
-                                                             sliding="linear",
-                                                             temperature_field=temp)
-    
-    
-    q_initial_guess = jnp.zeros_like(thk).reshape(-1)
-    p_initial_guess = jnp.zeros_like(thk).reshape(-1)
-    
-    qp_initial_guess = jnp.zeros((2*nr*nc,))
-    
-    lbfgsb_iterator = lbfgsb_function(regularised_misfit, (uo, uc), iterations=40)
-    qp_out = lbfgsb_iterator(qp_initial_guess)
-
-    jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/qp_out_1km_40its20ls_uniformIG_8e6_2e0.npy", qp_out)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
