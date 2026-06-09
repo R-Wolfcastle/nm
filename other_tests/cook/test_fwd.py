@@ -21,6 +21,8 @@ from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,
                               make_pic_velocity_solver_function_gpusafe,\
                               make_pic_velocity_solver_function_expl_advection_gpusafe,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap
+from linear_solvers import create_petsc_operator_solver
+
 #3rd party
 import jax
 import jax.numpy as jnp
@@ -28,7 +30,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import jax.scipy.linalg as lalg
 
-from scipy.sparse.linalg import cg, LinearOperator
+from scipy.sparse.linalg import cg, LinearOperator, eigsh, minres, gmres
 from scipy.optimize import minimize as scinimize
 from scipy.ndimage import gaussian_filter
 import xarray as xr
@@ -540,8 +542,11 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
     #plt.imshow(grounding_zone)
     #plt.show()
 
-    C = jnp.where(grounded_clean_eroded==1, C, 0)
-    C = jnp.where(grounding_zone==1, 10, C)
+    #NOTE: This is where we decide what to do at the grounding line...
+    #C = jnp.where(grounding_zone==1, jnp.minimum(C, 100), C)
+    #C = jnp.where(grounded_clean==1, C, 0)
+    #NOTE: NOT CHANGING PRIOR AT GL AT ALL
+    C = jnp.where(grounded_clean==1, C, 0)
 
     C = C.at[:3,  :].set(C_MAX)
     C = C.at[-3:, :].set(C_MAX)
@@ -568,15 +573,15 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
 
     uc = jnp.where((jnp.isfinite(uo)) & (basin_mask==1) & (ice_mask==1), 1, 0)
     uc = binary_erosion(binary_erosion(uc))
-    uc = uc.at[:4,  :].set(0)
-    uc = uc.at[-4:, :].set(0)
-    uc = uc.at[:,  :4].set(0)
-    uc = uc.at[:, -4:].set(0)
+    uc = uc.at[:5,  :].set(0)
+    uc = uc.at[-5:, :].set(0)
+    uc = uc.at[:,  :5].set(0)
+    uc = uc.at[:, -5:].set(0)
 
 
-    #plt.imshow(uo, vmin=0, vmax=1000, cmap="RdYlBu_r")
-    #plt.colorbar()
-    #plt.show()
+    plt.imshow(uo, vmin=0, vmax=1000, cmap="RdYlBu_r")
+    plt.colorbar()
+    plt.show()
 
 
 #    temp_nc = xr_load_crop_and_resample(temp_fp,
@@ -598,15 +603,23 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
     
     return phi, C, topg, thk, ice_mask, temp, uo, uc, C_MAX
 
-
-
+#gradients = np.array([8.451827167442678e-05, 0.0001420950469844517, 0.00021662014326661133,\
+#                      0.00018216718582513477, 0.00020918385491679802, 0.0008558366456195366,\
+#                      0.00022765815574714144, 0.0019849956275157276, 0.000901744602211164,\
+#                      0.004946184474424708, 0.005171408843955474, 0.009807579297774016, \
+#                      0.021759756518195623, 0.07886554292046398, 0.04192539689823826 ])[::-1]
+#
+#plt.scatter(range(len(gradients)), np.log10(gradients))
+#plt.show()
+#raise
 
 
 
 res = 1000
+
 #tlxy = (964_000,   -1_950_000)
 #brxy = (1_180_000, -2_136_000)
-tlxy = (1_000_000,   -2_000_000)
+tlxy = (1_020_000,   -2_020_000)
 brxy = (1_154_000, -2_148_000)
 
 phi, C, topg, thk, ice_mask, temp, uo, uc, C_MAX = setup_domain(res, tlxy, brxy)
@@ -854,7 +867,7 @@ def solve_ip_second_order():
         #alpha_C   = 1e3  (for me, that would be 1e3 /10_000 ~ 1e-1)
     
         #maybe 1e4 a good shout? #5e6 is ok!
-        phi_regn_term = 1e4 * jnp.sum( mask.reshape(-1) *\
+        phi_regn_term = 1e6 * jnp.sum( mask.reshape(-1) *\
                                     (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2) *\
                                     (1-border_cells_flat)
                                   )/(nr*nc)
@@ -864,16 +877,25 @@ def solve_ip_second_order():
         C = C_0*jnp.exp(p.reshape((nr, nc)))
         dC_dx, dC_dy = left_top_centred_gradient_function(C)
     
-        C_regn_term = 5e-1 * jnp.sum( mask.reshape(-1) *\
+        C_regn_term = 8e-3 * jnp.sum( mask.reshape(-1) *\
                                     (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2) *\
                                     (1-border_cells_flat)
                                   )/(nr*nc)
     
 
-        phi_box_constraint = 1e0 * jnp.sum(
-            jax.nn.softplus(5*(phi - 4))**2 +
-            jax.nn.softplus(10*(0.1 - phi))**2
-        ) / (nr*nc)
+        #phi_box_constraint = 1e0 * jnp.sum(
+        #    jax.nn.softplus(5*(phi - 4))**2 +
+        #    jax.nn.softplus(10*(0.1 - phi))**2
+        #) / (nr*nc)
+        phi_box_constraint = 5e-1 * jnp.sum(
+            (phi - phi_0)**2 +
+            ((C - C_0)/1000)**2
+        ) / (nr*nc) #+\
+        #1e-2 * jnp.sum(
+        #    jax.nn.softplus(5*(phi - 4))**2 +
+        #    jax.nn.softplus(10*(0.1 - phi))**2
+        #) / (nr*nc)
+
 
         #phi_box_constraint = jnp.sum( jnp.log(1+jnp.exp(5*(phi-4))) + jnp.log(1+jnp.exp(10*(0.1-phi))) )/(nr*nc)
 
@@ -914,7 +936,7 @@ def solve_ip_second_order():
 
             qp = initial_guess
             
-            damping = 1e-2
+            damping = 0*1e-3
 
             cost = jnp.inf
 
@@ -922,6 +944,8 @@ def solve_ip_second_order():
             g_old = jnp.inf
 
             qp_old = qp.copy()
+
+            itns_since_damping_reduced = 0
 
             for itn in range(iterations):
 
@@ -945,9 +969,13 @@ def solve_ip_second_order():
                 #damping = 1e-3 * (1 - 9*itn)/190 #Decreases by a factor of 10 every 20 iterations
                 #damping = 1e-3 if (itn<20) else 1e-4
                 #damping = 0
-                if (gnorm/first_gnorm < 0.05):
-                    damping *= 0.1
-                    first_gnorm = gnorm.copy()
+                
+                #if ((gnorm/first_gnorm < 0.1) or (itns_since_damping_reduced>0 and itns_since_damping_reduced%10==0)) and (damping>1e-5):
+                #    print(f"REDUCING DAMPING TO {damping*0.1}")
+                #    damping *= 0.1
+                #    first_gnorm = gnorm.copy()
+                #    itns_since_damping_reduced = 0
+                
                 #else:
                 #    damping = 1e-2
                 #NOTE: I want to add something that goes back a step and increases damping if
@@ -960,10 +988,50 @@ def solve_ip_second_order():
             
                     return np.array(Hv + damping * v)
             
-                A = LinearOperator((qp.size, qp.size), matvec=matvec)
-            
-                dqp_np, _ = cg(A, -g_np, maxiter=20)
-              
+
+                ########## SCIPY VERSION #################
+                #A = LinearOperator((qp.size, qp.size), matvec=matvec)
+
+                ##w, v = eigsh(A, 1)
+                ##plt.imshow(v[:(nr*nc), 0].reshape((nr, nc)))
+                ##plt.colorbar()
+                ##plt.show()
+                ##plt.imshow(v[(nr*nc):, 0].reshape((nr, nc)))
+                ##plt.colorbar()
+                ##plt.show()
+
+
+                #
+                ##v1 = np.random.randn(qp.size)
+                ##v2 = np.random.randn(qp.size)
+                ##
+                ##Av1 = matvec(v1)
+                ##Av2 = matvec(v2)
+                #
+                ##print(f"SYMMETRY CHECK: {np.dot(v1, Av2) - np.dot(v2, Av1)}")
+
+
+
+                ##dqp_np, info = cg(A, -g_np, maxiter=20)
+                ##dqp_np, info = gmres(A, -g_np, maxiter=20)
+                #dqp_np, info = minres(A, -g_np, maxiter=60)
+                #print(info)
+                ########## END SCIPY VERSION #############
+
+
+
+                ########## PETSc VERSION #################
+                petsc_solver = create_petsc_operator_solver(matvec,
+                                                            size=qp.size,
+                                                            ksp_type="gmres",
+                                                            preconditioner=None,
+                                                            ksp_max_iter=40,
+                                                            monitor_ksp=True)
+                dqp_np = petsc_solver(-g_np)
+                ########## END PETSc VERSION #############
+
+
+
                 g_old = g.copy()
 
                 dqp = jnp.array(dqp_np)
@@ -981,7 +1049,7 @@ def solve_ip_second_order():
                 #                      )
                 #                    )
                 qp = jnp.concatenate( (
-                                       jnp.minimum( qp[:(nr*nc)], 2 ),
+                                       jnp.minimum( qp[:(nr*nc)], 1 ),
                                        jnp.minimum( qp[(nr*nc):], 3.5 )
                                       )
                                     )
@@ -990,9 +1058,13 @@ def solve_ip_second_order():
                 #plt.colorbar()
                 #plt.show()
                 #
-                #plt.imshow( C_0*jnp.exp( qp[(nr*nc):].reshape((nr, nc)) ) , vmin=0, vmax=C_MAX, cmap="Spectral")
+                #plt.imshow( jnp.log10(C_0*jnp.exp( qp[(nr*nc):].reshape((nr, nc)) )) , vmin=0, vmax=jnp.log10(C_MAX), cmap="Spectral")
                 #plt.colorbar()
                 #plt.show()
+
+
+                
+
 
                 #alpha = 1.0
                 #for ls_iteration in range(1):
@@ -1015,7 +1087,36 @@ def solve_ip_second_order():
                 #else:
                 #    damping *= 5.0
                 #damping = np.clip(damping, 1e-6, 1)
-            
+
+
+                itns_since_damping_reduced += 1
+
+            #damping = 0
+            #A = LinearOperator((qp.size, qp.size), matvec=matvec)
+
+
+            #v1 = np.random.randn(qp.size)
+            #v2 = np.random.randn(qp.size)
+            #
+            #Av1 = matvec(v1)
+            #Av2 = matvec(v2)
+            #
+            #print(np.dot(v1, Av2) - np.dot(v2, Av1))
+
+
+
+            #uncertainty_np, info = cg(A, g_np, maxiter=60)
+
+            #plt.imshow(uncertainty_np[:(nr*nc)].reshape((nr, nc)))
+            #plt.colorbar()
+            #plt.show()
+            #
+            #plt.imshow(uncertainty_np[(nr*nc):].reshape((nr, nc)))
+            #plt.colorbar()
+            #plt.show()
+
+            #print(f"PARAMETRIC UNCERTAINTY: {np.dot(g_np, uncertainty_np)}")
+
             return qp
 
 
@@ -1089,28 +1190,32 @@ def solve_ip_second_order():
     q_initial_guess = jnp.zeros_like(thk).reshape(-1)
     p_initial_guess = jnp.zeros_like(thk).reshape(-1)
    
-    #qp_initial_guess = jnp.load(
-    ##"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_6its_8e6_5em1.npy"
-    #"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_newt_1e4_5em1.npy"
-    #        )
+#    qp_initial_guess = jnp.load(
+#    ##"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_6its_8e6_5em1.npy"
+#    #"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_newt_1e4_5em1.npy"
+#            f"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_{res}m_newt_10its_1e4_5em1_softBox_lambdaZERO.npy"
+#            )
     qp_initial_guess = jnp.zeros((2*nr*nc,))
     
     #lbfgsb_iterator = lbfgsb_function(regularised_misfit, solver, (uo, uc), iterations=40)
     #qp_out = lbfgsb_iterator(qp_initial_guess)
-    
-    newton_iterator = newton_function(regularised_misfit, solver, (uo, uc), iterations=12)
+   
+    ip_iterations = 15
+    newton_iterator = newton_function(regularised_misfit, solver, (uo, uc), iterations=ip_iterations)
     qp_out = newton_iterator(qp_initial_guess)
 
     #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_6its_8e6_5em1.npy", qp_out)
     #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_newt_1e4_5em1.npy", qp_out)
     #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_1km_newt_1e4_5em1i_round3.npy", qp_out)
     #jnp.save("/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_500m_newt_10its_1e4_5em1_softBox_lambdaZERO.npy", qp_out)
-    jnp.save(f"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_{res}m_newt_10its_1e4_5em1_softBox_lambdaZERO.npy", qp_out)
+    #jnp.save(f"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_{res}m_newt_10its_1e4_5em1_softBox_lambdaZERO.npy", qp_out)
+    #jnp.save(f"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_{res}m_newt_12to20its_1e4_5em1_softBox_lambda1em4.npy", qp_out)
+    jnp.save(f"/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/newton_tests/qp_out_{res}m_newt_{ip_iterations}its_1e6_8em3_softBoxQuadradic_lambdaZERO.npy", qp_out)
     
     q_out = qp_out[:(nr*nc)].reshape((nr, nc))
     p_out = qp_out[(nr*nc):].reshape((nr, nc))
     
-    plt.imshow(uo, vmin=0, vmax=800, cmap="RdYlBu_r")
+    plt.imshow(uo, vmin=0, vmax=1000, cmap="RdYlBu_r")
     plt.colorbar()
     plt.show()
     
@@ -1133,13 +1238,16 @@ def solve_ip_second_order():
 
     u_out, v_out = solver(q_out, p_out, u_init, v_init, thk)
 
-    show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=800)
+    show_vel_field(u_out, v_out, cmap="RdYlBu_r", vmin=0, vmax=1000)
 
 
     plt.imshow(((u_out**2 + v_out**2)**(0.5)-uo) * uc, vmin=-100, vmax=100, cmap="RdBu_r")
     plt.colorbar()
     plt.show()
 
+    plt.imshow(((u_out**2 + v_out**2)**(0.5)-uo) * uc/(uo+1e-10), vmin=-1, vmax=1, cmap="RdBu_r")
+    plt.colorbar()
+    plt.show()
 
 solve_ip_second_order()
 

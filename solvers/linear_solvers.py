@@ -300,6 +300,108 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
 
 
 
+
+def create_petsc_operator_solver(linear_operator,
+                                 size,
+                                 ksp_type="gmres",
+                                 preconditioner="hypre",
+                                 monitor_ksp=False,
+                                 ksp_max_iter=50,
+                                 rtol=1e-8):
+
+    #NOTE: This function was basically written by MS Copilot!
+
+    """
+    Wrap a matrix-free linear operator A(v) with PETSc KSP.
+
+    Parameters
+    ----------
+    linear_operator : callable
+        Function:
+            y = linear_operator(x_np)
+
+        Must accept and return NumPy arrays.
+
+    size : int
+        Dimension of operator.
+
+    Returns
+    -------
+    petsc_solve(rhs)
+        Solves:
+            A x = rhs
+
+    """
+
+    comm = PETSc.COMM_WORLD
+
+    A = PETSc.Mat().createPython(
+        [size, size],
+        comm=comm
+    )
+
+    class MatShell:
+        def mult(self, mat, x, y):
+
+            x_np = x.getArray(readonly=True)
+
+            Ax_np = linear_operator(x_np)
+
+            y.setArray(np.asarray(Ax_np))
+
+    ctx = MatShell()
+
+    A.setPythonContext(ctx)
+    A.setUp()
+
+
+
+
+    ksp = PETSc.KSP().create(comm=comm)
+
+    ksp.setOperators(A)
+    ksp.setType(ksp_type)
+
+    ksp.setTolerances(
+        rtol=rtol,
+        max_it=ksp_max_iter
+    )
+
+    pc = ksp.getPC()
+
+    if preconditioner is not None:
+        pc.setType(preconditioner)
+
+        if preconditioner == "hypre":
+            pc.setHYPREType("boomeramg")
+
+    if monitor_ksp:
+        opts = PETSc.Options()
+        opts["ksp_monitor"] = None
+        opts["ksp_converged_reason"] = None
+        ksp.setFromOptions()
+
+    def petsc_solve(rhs_np):
+
+        b = PETSc.Vec().createWithArray(
+            np.asarray(rhs_np),
+            comm=comm
+        )
+
+        x = b.duplicate()
+
+        ksp.solve(b, x)
+
+        return np.array(x.getArray())
+
+    return petsc_solve
+
+
+
+
+
+
+
 def basic_sparse_linear_solve(values, coordinates, jac_shape, b, x0, mode="jax-native"):
 
     match mode:
