@@ -603,7 +603,7 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
 
 
 
-res = 1000
+res = 500
 #tlxy = (964_000,   -1_950_000)
 #brxy = (1_180_000, -2_136_000)
 tlxy = (1_000_000,   -2_000_000)
