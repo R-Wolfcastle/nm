@@ -761,6 +761,15 @@ def mean_linear_extrapolate_over_cf_function(thk):
 
 
 
+def face_free_cells(thk):
+    """
+    Identfiy cells which have no ice-filled cell bordering any face
+    """
+
+    has_1_facing = stack_safe_shifted_single_facing(thk>0.01)
+    return ((jnp.sum(has_1_facing, axis=0)==0) & (thk>0.01))
+
+
 
 def linear_extrapolate_over_cf_function_cornersafe(thk):
     """
@@ -1225,7 +1234,9 @@ def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
                                extrp_over_cf, add_uv_ghost_cells,
                                add_s_ghost_cells,
                                cc_gradient, mucoef_0,
-                               temp_cc):
+                               temp_cc=None):
+    if temp_cc==None:
+        temp_cc = jnp.zeros((ny,nx))+263.15
 
     B_cc = B_from_T(temp_cc)
 

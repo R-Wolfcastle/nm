@@ -3995,7 +3995,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
             if i==0:
                 initial_residual = jnp.max(rhs)
             #    print(f"INIT RES: {initial_residual}")
-            #print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
+            print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
             
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
@@ -4034,7 +4034,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
             #plt.colorbar()
             #plt.show()
             
-            #print(f"nonlinear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
+            print(f"nonlinear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
 
         final_residual = res_fct(rhs_new)
 
