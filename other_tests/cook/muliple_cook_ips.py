@@ -592,13 +592,13 @@ def create_measures_nc_file(resolution, tlxy, brxy):
     p_ig = jnp.zeros_like(phi_0)
 
 
-    ##plt.imshow(phi_0)
-    ##plt.colorbar()
-    ##plt.show()
-    ##plt.imshow(q_ig)
-    ##plt.colorbar()
-    ##plt.show()
-    #plt.imshow(C_0)
+    ###plt.imshow(phi_0)
+    ###plt.colorbar()
+    ###plt.show()
+    ###plt.imshow(q_ig)
+    ###plt.colorbar()
+    ###plt.show()
+    #plt.imshow(np.log10(C_0))
     #plt.colorbar()
     #plt.show()
     #plt.imshow(grounded)
@@ -668,7 +668,7 @@ def create_nc_files(resolution, tlxy, brxy):
     #plt.show()
     
     #weird floating scraggly bits near the grounding line, so this is a major fudge.
-    thick = thick*1.005
+    thick = thick*1.01
 
 
     #Just in case there are any interpolation smudges
@@ -677,8 +677,6 @@ def create_nc_files(resolution, tlxy, brxy):
     #                                         )
     #                          )
     #thick = np.array(thick*misc_mask[2:-2, 2:-2])
-
-
 
     cf_masks = open_vector_features_as_masks(
                 "/Users/eartsu/Library/CloudStorage/OneDrive-UniversityofLeeds/Documents/cook_study/geometry_data/cook_fronts_polys/front_shapes.gpkg",
@@ -733,7 +731,7 @@ def create_nc_files(resolution, tlxy, brxy):
         cf_mask = cf_masks[i]
 
         thk = jnp.maximum(thick, extrapolated_thick*cf_mask)
-        
+       
         thk = smooth_gaussian_nan(jnp.where(thk>0, thk, jnp.nan), sigma=1.5*1000/res)
         
 
@@ -741,7 +739,7 @@ def create_nc_files(resolution, tlxy, brxy):
         #plt.show()
 
         thk = jnp.where(jnp.isfinite(thk), thk, 0)
-        #thk = jnp.where(grounded_original, thick, thk*1.01)
+        thk = jnp.where(grounded_original, thick, thk*1.01)
         
 
         
@@ -778,7 +776,9 @@ def create_nc_files(resolution, tlxy, brxy):
 
         #Final removal of icebergs and islands
         thk = clean_mask_scipy(thk>0.01)*thk
-        
+    
+
+        #Add in the pinning point
         topg = np.where(pp_mask==1,
                        -thk*c.RHO_I/c.RHO_W + 0.1,
                        topg)
@@ -789,7 +789,6 @@ def create_nc_files(resolution, tlxy, brxy):
         #plt.imshow(grounded)
         #plt.imshow(gl_mask, cmap="Grays_r", alpha=0.25)
         #plt.show()
-
 
         ice_mask = np.where(thk>0.01, 1, 0)
 
@@ -832,22 +831,22 @@ def create_nc_files(resolution, tlxy, brxy):
         ####plt.colorbar()
         ####plt.title(year)
         ####plt.show()
-        plt.imshow(C_0)
-        plt.colorbar()
-        plt.title(year)
-        plt.show()
+        #plt.imshow(np.log10(C_0))
+        #plt.colorbar()
+        #plt.title(year)
+        #plt.show()
         ####plt.imshow(p_ig)
         ####plt.colorbar()
         ####plt.title(year)
         ####plt.show()
-        plt.imshow(topg)
-        plt.colorbar()
-        plt.title(year)
-        plt.show()
-        plt.imshow(thk)
-        plt.colorbar()
-        plt.title(year)
-        plt.show()
+        #plt.imshow(topg)
+        #plt.colorbar()
+        #plt.title(year)
+        #plt.show()
+        #plt.imshow(thk)
+        #plt.colorbar()
+        #plt.title(year)
+        #plt.show()
         #plt.imshow(thk>0.1)
         #plt.colorbar()
         #plt.title(year)
@@ -1356,15 +1355,15 @@ def run_ip_for_year(year, res, newton_iterations):
 
 
 
-res = 500
+res = 250
 
-tlxy = (1_020_000,  -2_020_000)
+tlxy = (1_020_000,  -2_035_000)
 brxy = (1_154_000, -2_148_000)
 
-create_nc_files(res, tlxy, brxy)
-##create_monthly_speed_file(res, tlxy, brxy)
 #create_measures_nc_file(res, tlxy, brxy)
-raise
+#create_nc_files(res, tlxy, brxy)
+##create_monthly_speed_file(res, tlxy, brxy)
+#raise
 
 
 
@@ -1805,7 +1804,10 @@ def analyse_year(year, mother_dir):
 
 #out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ips_out_new/30000.0_0.2_0.002_0.0001_lambda0.001_40its_measuresCprior/500m_res/"
 #out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ips_out_new/30000.0_0.2_0.002_0.0001_lambda0.001_40its_measuresCprior/250m_res/"
-out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ips_out_new/30000.0_0.2_0.002_0.0001_lambda0.0002_40its_measuresCprior/250m_res/"
+#out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ips_out_new/30000.0_0.2_0.002_0.0001_lambda0.0002_40its_measuresCprior/250m_res/"
+
+#out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
+out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0002_50its_measuresCprior/250m_res/250m_res/"
 
 ####years = [str(y) for y in list(np.arange(2016, 2027))]
 ####years = ["2018", "2025"]
