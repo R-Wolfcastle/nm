@@ -7,7 +7,6 @@ import gc
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false"
 
-
 #local apps
 nm_home = os.environ['NM_HOME']
 sys.path.insert(1, os.path.join(nm_home, 'utils'))

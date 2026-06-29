@@ -695,6 +695,12 @@ def linear_extrapolate_over_cf_dynamic_thickness(cc_field, thk):
     return jnp.where(cf_adjacent_zero_ice_cells, u_extrap, cc_field)
 
 
+def bulk_ice(ice_mask):
+    has_ice_1, _ = stack_safe_shifted(ice_mask)  # shape (8, ny, nx)
+    # any of the 8 directions has ice inside
+    all_neighbours_ice = (jnp.sum(has_ice_1, axis=0)==8)
+    # CF-adjacent ocean = ocean & at least one neighbour is ice
+    return (ice_mask) & all_neighbours_ice
 
 def cf_adjacent_cells_8_connected(ice_mask):
     has_ice_1, _ = stack_safe_shifted(ice_mask)  # shape (8, ny, nx)
@@ -1284,6 +1290,55 @@ def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
 
 
     return jax.jit(randd_stress)
+
+
+def principal_resistive_stress_function(ny, nx, dy, dx,
+                               #extrp_over_cf,
+                               add_uv_ghost_cells,
+                               add_s_ghost_cells,
+                               cc_gradient, mucoef_0,
+                               temp_cc=None):
+    if temp_cc==None:
+        temp_cc = jnp.zeros((ny,nx))+263.15
+
+    B_cc = B_from_T(temp_cc)
+
+    def prs_fct(q, u, v, h):
+        mucoef = mucoef_0*jnp.exp(q)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
+
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
+
+        dudx, dudy = cc_gradient(u)
+        dvdx, dvdy = cc_gradient(v)
+
+        #calculate face-centred viscosity:
+        mu = B_cc * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
+                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        tau_xx = 2 * mu * dudx
+        tau_yy = 2 * mu * dvdy
+        tau_xy = mu * (dudy + dvdx)
+
+        visc_xx = (2*tau_xx + tau_yy)
+        visc_yy = (2*tau_yy + tau_xx)
+        visc_xy = tau_xy.copy()
+
+
+        return 0.5 * (visc_xx + visc_yy + jnp.sqrt(
+                                  (visc_xx + visc_yy)**2 -\
+                                  4*(visc_xx*visc_yy - visc_xy**2)
+                                       )
+                     )
+        #return visc_xx
+
+    return jax.jit(prs_fct)
 
 
 def cc_viscosity_function(ny, nx, dy, dx, 
