@@ -4,6 +4,8 @@ import sys
 import time
 import os
 import gc
+import re
+    
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false"
@@ -26,7 +28,8 @@ from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,
                               make_pic_velocity_solver_function_gpusafe,\
                               make_pic_velocity_solver_function_expl_advection_gpusafe,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
-                              make_picnewton_vel_expl_dam_solver_function
+                              make_picnewton_vel_expl_dam_solver_function,\
+                              make_picnewton_vel_expl_dam_solver_function_noextrap
 
 from linear_solvers import create_petsc_operator_solver
 
@@ -213,7 +216,18 @@ print(f"DOFS: {jnp.log2(nr*nc)}")
 
 u_init = jnp.zeros_like(b)
 v_init = jnp.zeros_like(b)
-D_init = 1 - mucoef_0*jnp.exp(q)
+
+D_init = 1 -  mucoef_0*jnp.exp(q)
+D_init = jnp.maximum(D_init, 0.01)
+#D_init = jnp.zeros_like(q)
+#mucoef_0 = mucoef_0*jnp.exp(q)
+
+
+##There's some shit we have to deal with, in preventing negative damage
+#mucoef =  mucoef_0*jnp.exp(q)
+#
+#mucoef_stiff = jnp.where(mucoef>1, mucoef, 1)
+
 
 delta_y, delta_x = res, res
 
@@ -235,18 +249,52 @@ delta_y, delta_x = res, res
 
 n_timesteps = 100
 
-prognostic_solver = make_picnewton_vel_expl_dam_solver_function(nr, nc,
+prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      delta_y, delta_x,
                                                      b, ice_mask,
                                                      10, 6, n_timesteps,
                                                      mucoef_0, C,
-                                                     sliding="basic_weertman")
+                                                     sliding="linear")
 
 u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
 
 
+from pathlib import Path
+from PIL import Image
 
 
+def make_speed_gif():
+    dir_ = f"{nm_home}/bits_of_data/damage_gub_2"
+
+    img_dir = Path(dir_)
+
+    #pngs = sorted(img_dir.glob("*.png"))
+    
+    pngs = sorted(
+        (
+            f for f in img_dir.glob("*.png")
+            if re.match(r"^\d+", f.stem)
+        ),
+        key=lambda f: int(re.match(r"^\d+", f.stem).group())
+    )
+
+
+
+    frames = [Image.open(f) for f in pngs]
+
+    out_file = f"{dir_}/damgif.gif"
+
+    frames[0].save(
+        out_file,
+        save_all=True,
+        append_images=frames[1:],
+        duration=150,
+        loop=0,
+    )
+
+    print(f"Saved GIF to {out_file}")
+
+make_speed_gif()
 
 
 
