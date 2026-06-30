@@ -208,7 +208,7 @@ brxy = (1_154_000, -2_148_000)
 
 lx, ly, nr, nc,\
 thk, b, C, mucoef_0,\
-q, p, ice_mask = define_cook_problem("2024")
+q, p, ice_mask = define_cook_problem("2025")
 
 
 
@@ -221,7 +221,7 @@ D_init = 1 -  mucoef_0*jnp.exp(q)
 D_init = jnp.maximum(D_init, 0.01)
 #D_init = jnp.zeros_like(q)
 #mucoef_0 = mucoef_0*jnp.exp(q)
-
+#q = jnp.zeros_like(q)
 
 ##There's some shit we have to deal with, in preventing negative damage
 #mucoef =  mucoef_0*jnp.exp(q)
@@ -247,7 +247,7 @@ delta_y, delta_x = res, res
 #raise
 
 
-n_timesteps = 100
+n_timesteps = 200
 
 prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      delta_y, delta_x,

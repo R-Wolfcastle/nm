@@ -2746,8 +2746,8 @@ def make_advsrc_effective_damthk_stepper_threshold_ppmish(
         h = h_1d.reshape((ny, nx))
         D = D_1d.reshape((ny, nx))
 
-        #q = jnp.log((1 - D)/(mucoef_0 + 1e-10))
-        q = jnp.log((1)/(mucoef_0 + 1e-10))
+        q = jnp.log((1 - D)/(mucoef_0 + 1e-10))
+        #q = jnp.log((1)/(mucoef_0 + 1e-10))
 
         u_full, v_full = add_uv_ghost_cells(u, v)
         h_full = add_s_ghost_cells(h)
@@ -2838,7 +2838,7 @@ def make_advsrc_effective_damthk_stepper_threshold_ppmish(
         # parameters to tune
         Nc = 150_000 * (h + 1e-10)
         K  = 10     # a^-1
-        m  = 3.0
+        m  = 4.0
 
         excess = jnp.maximum(N_eff / Nc - 1.0, 0.0)
 
@@ -4011,15 +4011,15 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
         D = D_init
 
         delta_t = 0
-        t_cum = 2023
+        t_cum = 2025
 
-        os.system(f"rm -f {nm_home}/bits_of_data/damage_gub_2/*.png")
+        os.system(f"rm -f {nm_home}/bits_of_data/damage_gub_5/*.png")
 
         for ts in range(n_timesteps):
             plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_2/{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/{ts}.png", dpi=150)
             plt.close()
 
 
@@ -4033,19 +4033,11 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
                        vmin=0, vmax=5000, cmap="RdYlBu_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_2/speed_{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/speed_{ts}.png", dpi=150)
             plt.close()
 
-            #plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
-            #           vmin=0, vmax=10_000, cmap="RdYlBu_r")
-            #plt.colorbar()
-            #plt.savefig(f"{nm_home}/bits_of_data/damage_gub/speed_{ts}.png", dpi=150)
-            #plt.close()
+            delta_t = 0.5*(dx/jnp.max(jnp.sqrt(u**2+v**2)))
 
-            delta_t = jnp.minimum(
-                                  (0.5*(dx/jnp.max(jnp.abs(u)))),
-                                  (0.5*(dy/jnp.max(jnp.abs(v))))
-                                 )
             t_cum += delta_t
 
             #delta_t = 0.01
@@ -4056,10 +4048,12 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
 
             D = dam_adv_src_step(u, v, h.reshape(-1), D.reshape(-1),
                                  delta_t, ts, floating)
-            D = jnp.clip(D, 0, 0.9)
+            D = jnp.clip(D, 0, 0.99)
             
-
-            h = jnp.where(jnp.sqrt(u**2 + v**2)<10_000, h, 0)
+            
+            h = jnp.where(D>0.95, 0, h)
+            #h = jnp.where(jnp.sqrt(u**2 + v**2)<20_000, h, 0)
+            
             bulk_ = bulk_ice(h>0)
 
             D = jnp.where(bulk_, D, 0)
@@ -4324,7 +4318,7 @@ def make_picnewton_vel_expl_dam_solver_function(ny, nx, dy, dx,
         for ts in range(n_timesteps):
             plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
             plt.colorbar()
-            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_2/{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/{ts}.png", dpi=150)
             plt.close()
 
 
@@ -4337,7 +4331,7 @@ def make_picnewton_vel_expl_dam_solver_function(ny, nx, dy, dx,
             plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
                        vmin=0, cmap="RdYlBu_r")
             plt.colorbar()
-            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_2/speed_{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/speed_{ts}.png", dpi=150)
             plt.close()
 
             #plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
