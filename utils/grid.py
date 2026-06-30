@@ -1225,7 +1225,9 @@ def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
                                extrp_over_cf, add_uv_ghost_cells,
                                add_s_ghost_cells,
                                cc_gradient, mucoef_0,
-                               temp_cc):
+                               temp_cc=None):
+    if temp_cc==None:
+        temp_cc = jnp.zeros((ny,nx))+263.15
 
     B_cc = B_from_T(temp_cc)
 

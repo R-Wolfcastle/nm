@@ -724,13 +724,8 @@ def setup_domain(resolution, tlxy, brxy, sink_pinning_points=True):
 #raise
 
 
-
-<<<<<<< HEAD
-res = 500
-=======
 res = 1000
 
->>>>>>> f3955b23e94eea0564c20a096a50841e089bfbf3
 #tlxy = (964_000,   -1_950_000)
 #brxy = (1_180_000, -2_136_000)
 tlxy = (1_020_000,   -2_020_000)

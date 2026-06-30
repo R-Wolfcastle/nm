@@ -605,8 +605,19 @@ def run_ip_for_year(year, res, newton_iterations):
 
     #raise
 
+    print("defining hyperparameters")
+
+    reg_phi_grad = 2e6
+    reg_c_grad   = 1e-2
+    reg_phi_mag  = 1e0
+    reg_c_mag    = 5e-7
+    lamda_       = 1e-3
+    ip_iterations = 35
+
 
     print("defining misfit")
+
+
     
     def regularised_misfit(u_mod, v_mod, q, p, speed_obs, mask):
         speed_mod = jnp.sqrt(u_mod**2 + v_mod**2 + 1e-10)
@@ -629,7 +640,7 @@ def run_ip_for_year(year, res, newton_iterations):
         #alpha_C   = 1e3  (for me, that would be 1e3 /10_000 ~ 1e-1)
     
         #maybe 1e4 a good shout? #5e6 is ok!
-        phi_regn_term = 5e6 * jnp.sum( mask.reshape(-1) *\
+        phi_regn_term = reg_phi_grad * jnp.sum( mask.reshape(-1) *\
                                     (dphi_dx.reshape(-1)**2 + dphi_dy.reshape(-1)**2) *\
                                     (1-border_cells_flat)
                                   )/(nr*nc)
@@ -639,7 +650,7 @@ def run_ip_for_year(year, res, newton_iterations):
         C = C_0*jnp.exp(p.reshape((nr, nc)))
         dC_dx, dC_dy = left_top_centred_gradient_function(C)
     
-        C_regn_term = 1e-2 * jnp.sum( mask.reshape(-1) *\
+        C_regn_term = reg_c_grad * jnp.sum( mask.reshape(-1) *\
                                     (dC_dx.reshape(-1)**2 + dC_dy.reshape(-1)**2) *\
                                     (1-border_cells_flat)
                                   )/(nr*nc)
@@ -649,10 +660,12 @@ def run_ip_for_year(year, res, newton_iterations):
         #    jax.nn.softplus(5*(phi - 4))**2 +
         #    jax.nn.softplus(10*(0.1 - phi))**2
         #) / (nr*nc)
-        phi_box_constraint = 5e-1 * jnp.sum(
-            (phi - phi_0)**2 +
-            ((C - C_0)/1000)**2
-        ) / (nr*nc) #+\
+        phi_box_constraint = reg_phi_mag * jnp.sum(
+            (phi - phi_0)**2
+        ) / (nr*nc)
+        c_box_constraint = reg_c_mag * jnp.sum(
+            (C - C_0)**2
+        ) / (nr*nc)
         #1e-2 * jnp.sum(
         #    jax.nn.softplus(5*(phi - 4))**2 +
         #    jax.nn.softplus(10*(0.1 - phi))**2
@@ -668,11 +681,12 @@ def run_ip_for_year(year, res, newton_iterations):
         jax.debug.print("phi_regn_term: {x}", x=phi_regn_term)
         jax.debug.print("C_regn_term: {x}", x=C_regn_term)
         jax.debug.print("phi_box_constraint: {x}", x=phi_box_constraint)
-        jax.debug.print("Total cost: {x}", x=misfit_term + phi_regn_term + C_regn_term + phi_box_constraint)
+        jax.debug.print("c_box_constraint: {x}", x=c_box_constraint)
+        jax.debug.print("Total cost: {x}", x=misfit_term + phi_regn_term + C_regn_term + phi_box_constraint + c_box_constraint)
    
 
         #return misfit_term, regn_term, misfit_term + regn_term
-        return misfit_term + phi_regn_term + C_regn_term + phi_box_constraint
+        return misfit_term + phi_regn_term + C_regn_term + phi_box_constraint + c_box_constraint
     
 
     print("defining newton optimiser")
@@ -699,7 +713,7 @@ def run_ip_for_year(year, res, newton_iterations):
 
             qp = initial_guess
             
-            damping = 1e-3
+            damping = lambda_
 
             cost = jnp.inf
 
@@ -898,7 +912,6 @@ def run_ip_for_year(year, res, newton_iterations):
     
     qp_initial_guess = jnp.concatenate((q_ig.reshape(-1), p_ig.reshape(-1)))
     
-    ip_iterations = 35
     newton_iterator = newton_function(regularised_misfit, solver, (speed_obs, uc), iterations=ip_iterations)
     
     print("solving optimisation problem")
