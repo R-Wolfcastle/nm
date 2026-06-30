@@ -196,8 +196,14 @@ def define_cook_problem(year):
 
 
 
-in_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_data_wpp/500m_res"
-out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
+#in_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_data_wpp/500m_res"
+#out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
+
+
+in_dir = "/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_data_wpp/500m_res/"
+out_dir = "/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
+
+
 
 res = 500
 

@@ -4013,6 +4013,7 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
         delta_t = 0
         t_cum = 2025
 
+        os.system(f"mkdir -p {nm_home}/bits_of_data/damage_gub_5/")
         os.system(f"rm -f {nm_home}/bits_of_data/damage_gub_5/*.png")
 
         for ts in range(n_timesteps):
