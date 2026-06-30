@@ -28,8 +28,8 @@ from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,
                               make_pic_velocity_solver_function_gpusafe,\
                               make_pic_velocity_solver_function_expl_advection_gpusafe,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
-                              make_picnewton_vel_expl_dam_solver_function,\
-                              make_picnewton_vel_expl_dam_solver_function_noextrap
+                              make_picnewton_vel_expl_dam_solver_function_noextrap#,\
+                              #make_picnewton_vel_expl_dam_solver_function
 
 from linear_solvers import create_petsc_operator_solver
 
@@ -247,7 +247,7 @@ delta_y, delta_x = res, res
 #raise
 
 
-n_timesteps = 200
+n_timesteps = 50
 
 prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      delta_y, delta_x,
@@ -264,7 +264,7 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/damage_gub_2"
+    dir_ = f"{nm_home}/bits_of_data/damage_gub_5"
 
     img_dir = Path(dir_)
 

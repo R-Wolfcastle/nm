@@ -775,6 +775,12 @@ def face_free_cells(thk):
     has_1_facing = stack_safe_shifted_single_facing(thk>0.01)
     return ((jnp.sum(has_1_facing, axis=0)==0) & (thk>0.01))
 
+def dangling_cells(thk):
+    """
+    Identify cells which have fewer than 2 face-bordering ice-filled cells
+    """
+    has_1_facing = stack_safe_shifted_single_facing(thk>0.01)
+    return ((thk>0.01) & (jnp.sum(has_1_facing, axis=0)<2))
 
 
 def linear_extrapolate_over_cf_function_cornersafe(thk):
