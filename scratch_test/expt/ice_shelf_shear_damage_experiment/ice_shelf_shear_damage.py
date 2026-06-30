@@ -3,9 +3,15 @@ from pathlib import Path
 import sys
 import time
 
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false"
+
 
 #local apps
-sys.path.insert(1, "../../../utils/")
+nm_home = os.environ['NM_HOME']
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
+
+#local apps
 from sparsity_utils import scipy_coo_to_csr,\
                            basis_vectors_and_coords_2d_square_stencil,\
                            make_sparse_jacrev_fct_new,\

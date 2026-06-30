@@ -95,7 +95,6 @@ def create_sparse_petsc_la_solver_with_custom_vjp(coordinates, jac_shape,\
     
         A, b = construct_ab(values, b, transpose)
         x = b.duplicate()
-        #x.set(0)
 
         ksp, pc = create_solver_object(A)
 
@@ -238,7 +237,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
 
 
     @partial(jax.custom_vjp, nondiff_argnums=(2,))
-    def petsc_sparse_la_solver(values, b, transpose=False):
+    def petsc_sparse_la_solver(values, b, transpose=False, x_ig=None):
 
         #_,_, vals = jax_coo_to_csr(values, coordinates, jac_shape)
         values = values[order]
@@ -257,7 +256,11 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
             ksp.setOperators(AT_virtual)
       
 
-        x = b.duplicate()
+        if x_ig is not None:
+            x = PETSc.Vec().createWithArray(x_ig, comm=comm)
+        else:
+            x = b.duplicate()
+            x.set(0)
 
 
         ksp.solve(b, x)
@@ -273,8 +276,8 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
         return x_jnp
 
     
-    def la_solver_fwd(values, b, transpose=False):
-        solution = petsc_sparse_la_solver(values, b, transpose=transpose)
+    def la_solver_fwd(values, b, transpose=False, x_ig=None):
+        solution = petsc_sparse_la_solver(values, b, transpose=transpose, x_ig=x_ig)
         return solution, (values, b, solution)
 
 
