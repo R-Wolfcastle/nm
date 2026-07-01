@@ -163,11 +163,12 @@ def define_cook_problem(year):
     #plt.colorbar()
     #plt.show()
 
+    grounded = jnp.where((thk+topg)>(thk*c.RHO_I/c.RHO_W))
 
     return nr*res, nc*res, nr, nc,\
            thk, topg, C_out, phi_0,\
            q_out, jnp.zeros_like(q_out),\
-           ice_mask
+           ice_mask, grounded
 
 
 
@@ -214,7 +215,7 @@ brxy = (1_154_000, -2_148_000)
 
 lx, ly, nr, nc,\
 thk, b, C, mucoef_0,\
-q, p, ice_mask = define_cook_problem("2025")
+q, p, ice_mask, grounded = define_cook_problem("2025")
 
 
 
@@ -223,11 +224,17 @@ print(f"DOFS: {jnp.log2(nr*nc)}")
 u_init = jnp.zeros_like(b)
 v_init = jnp.zeros_like(b)
 
-D_init = 1 -  mucoef_0*jnp.exp(q)
-D_init = jnp.maximum(D_init, 0.01)
-#D_init = jnp.zeros_like(q)
-#mucoef_0 = mucoef_0*jnp.exp(q)
-#q = jnp.zeros_like(q)
+#D_init = 1 -  mucoef_0*jnp.exp(q)
+#D_init = jnp.maximum(D_init, 0.01)
+##D_init = jnp.zeros_like(q)
+##mucoef_0 = mucoef_0*jnp.exp(q)
+##q = jnp.zeros_like(q)
+
+D_init = jnp.zeros_like(b)
+mucoef_0 = jnp.where(grounded==1, mucoef_0, 1)
+
+
+
 
 ##There's some shit we have to deal with, in preventing negative damage
 #mucoef =  mucoef_0*jnp.exp(q)
@@ -236,8 +243,6 @@ D_init = jnp.maximum(D_init, 0.01)
 
 
 delta_y, delta_x = res, res
-
-
 
 
 
@@ -253,12 +258,12 @@ delta_y, delta_x = res, res
 #raise
 
 
-n_timesteps = 50
+n_timesteps = 250
 
 prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      delta_y, delta_x,
                                                      b, ice_mask,
-                                                     10, 6, n_timesteps,
+                                                     2, 6, n_timesteps,
                                                      mucoef_0, C,
                                                      sliding="linear")
 
@@ -270,7 +275,7 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/damage_gub_5"
+    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/3/"
 
     img_dir = Path(dir_)
 
