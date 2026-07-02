@@ -2,3 +2,4 @@ bits_of_data
 *.log
 *.pyc
 *.swp
+*.out

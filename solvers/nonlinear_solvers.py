@@ -2615,25 +2615,190 @@ def make_advsrc_damage_stepper(nx, ny, dx, dy, interp_cc_to_fc,
 
 
 
-def ppm_reconstruct_1d(q, dx):
 
-    n = q.shape[0]
+
+
+
+
+
+##########FIRST PPM ATTEMPT!
+
+#def ppm_reconstruct_1d(q, dx):
+#
+#    n = q.shape[0]
+#
+#    dq_cd  = jnp.zeros_like(q)
+#    dq_lsd = jnp.zeros_like(q)
+#    dq_rsd = jnp.zeros_like(q)
+#
+#    dq_cd  = dq_cd.at[1:-1].set((q[2:] - q[:-2])/(2*dx))
+#    dq_lsd = dq_lsd.at[1:].set((q[1:] - q[:-1])/dx)
+#    dq_rsd = dq_rsd.at[:-1].set((q[1:] - q[:-1])/dx)
+#    
+#
+#
+#
+#    same_sign = dq_lsd * dq_rsd > 0
+#    
+#    dq_lim = jnp.sign(dq_cd) * jnp.minimum(
+#        jnp.abs(dq_cd),
+#        jnp.minimum(
+#            jnp.abs(dq_lsd),
+#            jnp.abs(dq_rsd)
+#        )
+#    )
+#    
+#    dq = jnp.where(same_sign, dq_lim, 0.0)
+#
+#    ##find the smalest!
+#    #dq = jnp.sign(dq_cd) * jnp.minimum(
+#    #    jnp.abs(dq_cd),
+#    #    jnp.minimum(jnp.abs(dq_lsd), jnp.abs(dq_rsd))
+#    #)
+#
+#
+#    qL = jnp.zeros_like(q)
+#    qL = qL.at[1:].set(
+#        0.5*(q[:-1] + q[1:])
+#        - (1.0/6.0)*(dq[1:] - dq[:-1])*dx
+#    )
+#
+#    qR = jnp.zeros_like(q)
+#    qR = qR.at[:-1].set(qL[1:])
+#
+#    qL = qL.at[0].set(q[0])
+#    qR = qR.at[-1].set(q[-1])
+#
+#    # monotonicity constraint
+#
+#    q6 = 6*(q - 0.5*(qL + qR))
+#    dqlr = qR - qL
+#
+#    cond1 = ((qR-q)*(q-qL)) <= 0
+#    cond2 = dqlr**2 < dqlr*q6
+#    cond3 = -dqlr**2 > dqlr*q6
+#
+#    qL = jnp.where(cond1, q, qL)
+#    qR = jnp.where(cond1, q, qR)
+#
+#    qL = jnp.where(cond2, 3*q - 2*qR, qL)
+#    qR = jnp.where(cond3, 3*q - 2*qL, qR)
+#
+#
+#
+#
+#
+#    return qL, qR
+#
+#def ppm_flux_x(phi, u, dx, dt):
+#
+#    ny, nx = phi.shape
+#    
+#    reconstruct_phix = jax.vmap(ppm_reconstruct_1d,
+#                                in_axes=(0, None),
+#                                out_axes=(0, 0)
+#                               )
+#    phiL, phiR = reconstruct_phix(phi, dx)
+#
+#    #phiL = jnp.zeros_like(phi)
+#    #phiR = jnp.zeros_like(phi)
+#    #for j in range(ny):
+#    #    qL, qR = ppm_reconstruct_1d(phi[j], dx)
+#    #    phiL = phiL.at[j].set(qL)
+#    #    phiR = phiR.at[j].set(qR)
+#
+#
+#    u_face = 0.5*(u[:, :-1] + u[:, 1:])
+#
+#    left_state  = phiR[:, :-1]
+#    right_state = phiL[:, 1:]
+#
+#    phi_face = jnp.where(
+#        u_face > 0,
+#        left_state,
+#        right_state
+#    )
+#
+#    flux = u_face * phi_face
+#
+#    return flux
+#
+#def ppm_flux_y(phi, v, dy, dt):
+#
+#    ny, nx = phi.shape
+#
+#    reconstruct_phiy = jax.vmap(ppm_reconstruct_1d,
+#                                in_axes=(1, None),
+#                                out_axes=(1, 1)
+#                               )
+#    phiL, phiR = reconstruct_phiy(phi, dy)
+#
+#    #phiL = jnp.zeros_like(phi)
+#    #phiR = jnp.zeros_like(phi)
+#    #for i in range(nx):
+#    #    qL, qR = ppm_reconstruct_1d(phi[:, i], dy)
+#    #    phiL = phiL.at[:, i].set(qL)
+#    #    phiR = phiR.at[:, i].set(qR)
+#
+#    v_face = 0.5*(v[:-1, :] + v[1:, :])
+#
+#    left_state  = phiR[:-1, :]
+#    right_state = phiL[1:, :]
+#
+#    phi_face = jnp.where(
+#        v_face > 0,
+#        right_state,
+#        left_state
+#    )
+#
+#    flux = v_face * phi_face
+#
+#    return flux
+
+
+
+
+###########SECOND PPM ATTEMPT
+
+def ppm_reconstruct_1d(q, dx):
 
     dq_cd  = jnp.zeros_like(q)
     dq_lsd = jnp.zeros_like(q)
     dq_rsd = jnp.zeros_like(q)
 
-    dq_cd  = dq_cd.at[1:-1].set((q[2:] - q[:-2])/(2*dx))
-    dq_lsd = dq_lsd.at[1:].set((q[1:] - q[:-1])/dx)
-    dq_rsd = dq_rsd.at[:-1].set((q[1:] - q[:-1])/dx)
-
-    #find the smalest!
-    dq = jnp.sign(dq_cd) * jnp.minimum(
-        jnp.abs(dq_cd),
-        jnp.minimum(jnp.abs(dq_lsd), jnp.abs(dq_rsd))
+    dq_cd  = dq_cd.at[1:-1].set(
+        (q[2:] - q[:-2])/(2*dx)
     )
 
+    dq_lsd = dq_lsd.at[1:].set(
+        (q[1:] - q[:-1])/dx
+    )
+
+    dq_rsd = dq_rsd.at[:-1].set(
+        (q[1:] - q[:-1])/dx
+    )
+
+    # monotonic linear slopes
+
+    same_sign = dq_lsd * dq_rsd > 0
+
+    dq_lim = (
+        jnp.sign(dq_cd)
+        * jnp.minimum(
+            jnp.abs(dq_cd),
+            jnp.minimum(
+                jnp.abs(dq_lsd),
+                jnp.abs(dq_rsd)
+            )
+        )
+    )
+
+    dq = jnp.where(same_sign, dq_lim, 0.0)
+
+    # fourth-order interface values
+
     qL = jnp.zeros_like(q)
+
     qL = qL.at[1:].set(
         0.5*(q[:-1] + q[1:])
         - (1.0/6.0)*(dq[1:] - dq[:-1])*dx
@@ -2645,87 +2810,104 @@ def ppm_reconstruct_1d(q, dx):
     qL = qL.at[0].set(q[0])
     qR = qR.at[-1].set(q[-1])
 
-    # monotonicity constraint
+    # Colella-Woodward monotonicity constraints
 
-    q6 = 6*(q - 0.5*(qL + qR))
+    q6   = 6.0*(q - 0.5*(qL + qR))
     dqlr = qR - qL
 
-    cond1 = ((qR-q)*(q-qL)) <= 0
-    cond2 = dqlr**2 < dqlr*q6
-    cond3 = -dqlr**2 > dqlr*q6
+    cond1 = ((qR-q)*(q-qL)) <= 0.0
+    cond2 = dqlr*dqlr < dqlr*q6
+    cond3 = -dqlr*dqlr > dqlr*q6
 
     qL = jnp.where(cond1, q, qL)
     qR = jnp.where(cond1, q, qR)
 
-    qL = jnp.where(cond2, 3*q - 2*qR, qL)
-    qR = jnp.where(cond3, 3*q - 2*qL, qR)
+    qL = jnp.where(cond2, 3.0*q - 2.0*qR, qL)
+    qR = jnp.where(cond3, 3.0*q - 2.0*qL, qR)
 
     return qL, qR
 
 def ppm_flux_x(phi, u, dx, dt):
 
-    ny, nx = phi.shape
-    
-    reconstruct_phix = jax.vmap(ppm_reconstruct_1d,
-                                in_axes=(0, None),
-                                out_axes=(0, 0)
-                               )
-    phiL, phiR = reconstruct_phix(phi, dx)
+    phiL, phiR = jax.vmap(
+        ppm_reconstruct_1d,
+        in_axes=(0, None),
+        out_axes=(0, 0)
+    )(phi, dx)
 
-    #phiL = jnp.zeros_like(phi)
-    #phiR = jnp.zeros_like(phi)
-    #for j in range(ny):
-    #    qL, qR = ppm_reconstruct_1d(phi[j], dx)
-    #    phiL = phiL.at[j].set(qL)
-    #    phiR = phiR.at[j].set(qR)
-
+    dq = phiR - phiL
+    q6 = 6.0*phi - 3.0*(phiL + phiR)
 
     u_face = 0.5*(u[:, :-1] + u[:, 1:])
 
-    left_state  = phiR[:, :-1]
-    right_state = phiL[:, 1:]
+    sigma = jnp.abs(u_face) * dt / dx
+    sigma = jnp.clip(sigma, 0.0, 1.0)
+
+    left_state = (
+        phiR[:, :-1]
+        - 0.5*sigma*(
+            dq[:, :-1]
+            - (1.0 - 2.0*sigma/3.0)*q6[:, :-1]
+        )
+    )
+
+    right_state = (
+        phiL[:, 1:]
+        + 0.5*sigma*(
+            dq[:, 1:]
+            + (1.0 - 2.0*sigma/3.0)*q6[:, 1:]
+        )
+    )
 
     phi_face = jnp.where(
-        u_face > 0,
+        u_face > 0.0,
         left_state,
         right_state
     )
 
-    flux = u_face * phi_face
-
-    return flux
+    return u_face * phi_face
 
 def ppm_flux_y(phi, v, dy, dt):
 
-    ny, nx = phi.shape
+    phiL, phiR = jax.vmap(
+        ppm_reconstruct_1d,
+        in_axes=(1, None),
+        out_axes=(1, 1)
+    )(phi, dy)
 
-    reconstruct_phiy = jax.vmap(ppm_reconstruct_1d,
-                                in_axes=(1, None),
-                                out_axes=(1, 1)
-                               )
-    phiL, phiR = reconstruct_phiy(phi, dy)
-
-    #phiL = jnp.zeros_like(phi)
-    #phiR = jnp.zeros_like(phi)
-    #for i in range(nx):
-    #    qL, qR = ppm_reconstruct_1d(phi[:, i], dy)
-    #    phiL = phiL.at[:, i].set(qL)
-    #    phiR = phiR.at[:, i].set(qR)
+    dq = phiR - phiL
+    q6 = 6.0*phi - 3.0*(phiL + phiR)
 
     v_face = 0.5*(v[:-1, :] + v[1:, :])
 
-    left_state  = phiR[:-1, :]
-    right_state = phiL[1:, :]
+    sigma = jnp.abs(v_face) * dt / dy
+    sigma = jnp.clip(sigma, 0.0, 1.0)
 
-    phi_face = jnp.where(
-        v_face > 0,
-        right_state,
-        left_state
+    # top cell contributes when v<0
+    top_state = (
+        phiR[:-1, :]
+        - 0.5*sigma*(
+            dq[:-1, :]
+            - (1.0 - 2.0*sigma/3.0)*q6[:-1, :]
+        )
     )
 
-    flux = v_face * phi_face
+    # bottom cell contributes when v>0
+    bottom_state = (
+        phiL[1:, :]
+        + 0.5*sigma*(
+            dq[1:, :]
+            + (1.0 - 2.0*sigma/3.0)*q6[1:, :]
+        )
+    )
 
-    return flux
+    phi_face = jnp.where(
+        v_face > 0.0,
+        bottom_state,
+        top_state
+    )
+
+    return v_face * phi_face
 
 
 def make_advsrc_effective_damthk_stepper_threshold_ppmish(
@@ -2843,10 +3025,10 @@ def make_advsrc_effective_damthk_stepper_threshold_ppmish(
         N_close = c.RHO_I * c.g * D * h
 
         # stress amplification from remaining ligament
-        N_eff = (N_open - N_close) / (1.0 - D + 1e-6)**0.5
+        N_eff = (N_open - N_close) / (1.0 - D + 1e-6)
 
         # parameters to tune
-        Nc = 150_000 * (h + 1e-10)
+        Nc = 200_000 * (h + 1e-10)
         K  = 10     # a^-1
         m  = 4.0
 
@@ -2872,6 +3054,266 @@ def make_advsrc_effective_damthk_stepper_threshold_ppmish(
 
     return advection_step
 
+def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
+                               nx, ny, dx, dy,
+                               interp_cc_to_fc,
+                               add_uv_ghost_cells,
+                               add_s_ghost_cells,
+                               mucoef_0,
+                               rst_dst_fct,
+                               advtype="PPM",
+                               conservative=False,
+                               upwind_source=False,
+                               limit_shear_rate=True):
+
+    def advection_step(u_1d, v_1d, h_1d, D_1d,
+                       delta_t=0.08,
+                       ts=1, source_mask=None):
+        
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+        D = D_1d.reshape((ny, nx))
+
+        q = jnp.log((1 - D)/(mucoef_0 + 1e-10))
+        #q = jnp.log((1)/(mucoef_0 + 1e-10))
+
+        u_full, v_full = add_uv_ghost_cells(u, v)
+        h_full = add_s_ghost_cells(h)
+        D_full = add_s_ghost_cells(D)
+
+        u_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            u_full, h_full)
+        v_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            v_full, h_full)
+        h_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            h_full, h_full)
+        D_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            D_full, h_full)
+
+        Dh_full = D_full * h_full
+
+        #####################################################
+        # Advection of Dh
+        #####################################################
+       
+
+        if advtype=="FOU":
+        
+            u_fc_ew, _ = interp_cc_to_fc(u_full)
+            _, v_fc_ns = interp_cc_to_fc(v_full)
+
+            Dh_fc_fou_ew = jnp.where(
+                u_fc_ew > 0,
+                Dh_full[1:-1, :-1],
+                Dh_full[1:-1, 1:]
+            )
+
+            Dh_fc_fou_ns = jnp.where(
+                v_fc_ns > 0,
+                Dh_full[1:, 1:-1],
+                Dh_full[:-1, 1:-1]
+            )
+
+            flux_term = (
+                (u_fc_ew[:,:-1] * Dh_fc_fou_ew[:,:-1]
+                 - u_fc_ew[:,1:] * Dh_fc_fou_ew[:,1:])
+                * dy * delta_t
+                +
+                (v_fc_ns[1:,:] * Dh_fc_fou_ns[1:,:]
+                 - v_fc_ns[:-1,:] * Dh_fc_fou_ns[:-1,:])
+                * dx * delta_t
+            )
+
+            flux_term = jnp.where(h > 1e-2, flux_term, 0)
+
+        elif advtype=="PPM":
+            ###PPM!!! GIVES SOME STRANGE LOOKING RESULTS...
+
+            flux_x = ppm_flux_x(Dh_full[1:-1,:], u_full[1:-1,:], dx, delta_t)
+            flux_y = ppm_flux_y(Dh_full[:,1:-1], v_full[:,1:-1], dy, delta_t)
+    
+            #plt.imshow(flux_x[:,:1] - flux_x[:,-1:])
+            #plt.colorbar()
+            #plt.show()
+
+            #plt.imshow(flux_y[1:,:] - flux_y[:-1,:])
+            #plt.colorbar()
+            #plt.show()
+
+            #raise
+
+            #print(flux_x.shape)
+            #print(flux_y.shape)
+
+            #print(D.shape)
+
+            flux_term = (
+                (flux_x[:,:-1] - flux_x[:,1:])
+                * dy * delta_t
+                +
+                (flux_y[1:,:] - flux_y[:-1,:])
+                * dx * delta_t
+            )
+            flux_term = jnp.where(h > 1e-2, flux_term, 0)
+
+        #####################################################
+        # Source
+        #####################################################
+
+        #NON-TRUE VALUES, TO FIT WITH WM CRITERION
+        _, dst = rst_dst_fct(q*jnp.zeros_like(q), u, v, h)
+        #THESE ARE TRUE VALUES
+        rst, _ = rst_dst_fct(q, u, v, h)
+
+
+        #Threshold criterion from:
+        #   Fracture criteria and tensile strength for natural glacier ice calibrated 
+        #   from remote sensing observations of Antarctic ice shelves
+        #   2024, by wells-moran etc.
+        sig_vm = jnp.sqrt(dst[:,:,0,0]**2 +
+                          dst[:,:,1,1]**2 -
+                          dst[:,:,0,0]*dst[:,:,1,1] +
+                          3*dst[:,:,1,0]**2 +
+                          1e-10)
+        sig_vm *= jnp.sqrt(3)
+
+
+        critical_vm = 260_000 #Pa
+        #active_crevassing = jnp.where(sig_vm>critical_vm, 1, 0)
+        width = 10_000
+        active_crevassing = jax.nn.sigmoid(
+            (sig_vm - critical_vm) / width
+        )
+
+        #Might quite like to smooth this! ^^
+        
+
+        ###Von-Mises type thing with resistive stress tensor
+        ##rst_vm = jnp.sqrt(rst[0,0,:,:]**2 +
+        ##                  rst[1,1,:,:]**2 -
+        ##                  rst[0,0,:,:]*rst[1,1,:,:] +
+        ##                  3*rst[1,0,:,:]**2 +
+        ##                  1e-10)
+
+
+        
+        pricipal_rs = 0.5 * (rst[:,:,0,0] + rst[:,:,1,1] + 
+                             jnp.sqrt(
+                                (rst[:,:,0,0] + rst[:,:,1,1])**2 -\
+                                4*(rst[:,:,0,0]*rst[:,:,1,1] -
+                                   rst[:,:,1,0]**2)
+                             )
+                            )
+        #return visc_xx
+
+
+        pricipal_rs = pricipal_rs * (h > 0).astype(float)
+
+        #membrane opening force
+        N_open = h * jnp.maximum(pricipal_rs, 0)
+
+        #overburden closure force
+        N_close = c.RHO_I * c.g * D * h
+
+
+        if upwind_source:
+            u_fc_ew, _ = interp_cc_to_fc(u_full)
+            _, v_fc_ns = interp_cc_to_fc(v_full)
+            
+            D_source_x = jnp.where(
+                u_fc_ew > 0,
+                D_full[1:-1, :-1],
+                D_full[1:-1, 1:]
+            )
+
+            D_source_y = jnp.where(
+                v_fc_ns > 0,
+                D_full[1:, 1:-1],
+                D_full[:-1, 1:-1]
+            )
+
+            D_source = 0.5 * (D_source_x + D_source_y)
+        else:
+            D_source = D.copy()
+
+
+
+        #stress diff to overburden plus amplification from remaining ligament
+        N_eff = (N_open - N_close) / (1.0 - D_source + 1e-6)
+        sgn_factor = jnp.where(N_eff>0, 1, -0.1)
+        #N_eff = jnp.maximum(N_eff, 0)
+
+        # parameters to tune
+        m  = 4
+        sigma_scale = 220_000
+        gamma = ( 0.8 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
+
+        #effective power:
+        P_eff = c.A_COLD * (N_eff**m)
+
+        #plt.imshow(excess)
+        #plt.colorbar()
+        #plt.show()
+
+        source = active_crevassing * gamma * P_eff * sgn_factor
+
+
+        if limit_shear_rate:
+            #Reduce rate in shear zones by a factor of 4
+
+            #extension_metric = jnp.abs(
+            #                     jnp.clip(
+            #                        (R1+R2)/(R1-R2+1e-10),
+            #                        -1, 1
+            #                     )
+            #                   )
+ 
+            extension_metric = jnp.abs(
+                                 jnp.clip(
+                                    (rst[:,:,0,0] + rst[:,:,1,1])/\
+                                     (jnp.sqrt((rst[:,:,0,0] - rst[:,:,1,1])**2 +\
+                                      4*rst[:,:,1,0]**2 +1e-10)),
+                                    -1, 1
+                                 )
+                               )
+
+            source *= (0.2 + 0.8*extension_metric)
+
+
+
+        #source = gamma * P_eff
+
+        if not conservative:
+            dudx = (
+                u_full[1:-1, 2:] -
+                u_full[1:-1, :-2]
+                   ) / (2*dx)
+            
+            dvdy = (
+                v_full[2:, 1:-1] -
+                v_full[:-2, 1:-1]
+                   ) / (2*dy)
+            
+            divu = dudx + dvdy
+
+            source += D * h * divu
+
+
+        source_term = source * delta_t
+
+        if source_mask is not None:
+            source_term = source_term*source_mask
+            flux_term   = flux_term*source_mask
+
+        return (
+            D
+            + (source_term + flux_term/(dy*dx))
+            / (h + 1e-10)
+            * (h > 0).astype(float)
+        )
+
+    return jax.jit(advection_step)
 
 
 #def make_advsrc_effective_damthk_stepper_threshold(
@@ -3885,13 +4327,13 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
     
     omega=1
 
-    prs_fct                                    = principal_resistive_stress_function(
-                                                    ny, nx, dy, dx,
-                                                    #extrp_over_cf,
-                                                    add_uv_ghost_cells,
-                                                    add_scalar_ghost_cells,
-                                                    cc_gradient, mucoef_0,
-                                                    temperature_field)
+    #prs_fct                                    = principal_resistive_stress_function(
+    #                                                ny, nx, dy, dx,
+    #                                                #extrp_over_cf,
+    #                                                add_uv_ghost_cells,
+    #                                                add_scalar_ghost_cells,
+    #                                                cc_gradient, mucoef_0,
+    #                                                temperature_field)
     
     rst_dst_fct                                = cc_resistive_and_deviatoric_stress_tensors(
                                                     ny, nx, dy, dx,
@@ -3906,18 +4348,18 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
     print(process.memory_info().rss / 1024**3, "GB")
 
     #dam_adv_src_step = make_advsrc_damage_stepper(nx, ny, dx, dy,
-    dam_adv_src_step = make_advsrc_effective_damthk_stepper_threshold_ppmish(nx, ny, dx, dy,
-                                                  interp_cc_to_fc, 
-                                                  add_uv_ghost_cells,
-                                                  add_scalar_ghost_cells,
-                                                  mucoef_0,
-                                                  prs_fct)
-    #dam_adv_src_step = make_advsrc_effective_damthk_stepper_vmthres_ppm(nx, ny, dx, dy,
+    #dam_adv_src_step = make_advsrc_effective_damthk_stepper_threshold_ppmish(nx, ny, dx, dy,
     #                                              interp_cc_to_fc, 
     #                                              add_uv_ghost_cells,
     #                                              add_scalar_ghost_cells,
     #                                              mucoef_0,
-    #                                              rst_dst_fct)
+    #                                              prs_fct)
+    dam_adv_src_step = make_advsrc_effective_damthk_stepper_vmthres_ppmish(nx, ny, dx, dy,
+                                                  interp_cc_to_fc, 
+                                                  add_uv_ghost_cells,
+                                                  add_scalar_ghost_cells,
+                                                  mucoef_0,
+                                                  rst_dst_fct)
     
     process = psutil.Process(os.getpid())
     print(process.memory_info().rss / 1024**3, "GB")
@@ -4038,30 +4480,32 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
         delta_t = 0
         t_cum = 2025
 
-        os.system(f"rm -f {nm_home}/bits_of_data/damage_gub_5/*.png")
+        #os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/11/")
+        #os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/11/*")
 
         for ts in range(n_timesteps):
             plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/{ts}.png", dpi=150)
             plt.close()
 
 
             q = jnp.log((1-D)/(mucoef_0+1e-10))
             
             u, v = momentum_solver(q, p, u, v, h)    
-            #if ts==0
+            #if ts==0:
             #    u, v = momentum_solver(jnp.zeros_like(q), p, u, v, h)
             
             plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
-                       vmin=0, vmax=5000, cmap="RdYlBu_r")
+                       vmin=0, vmax=1200, cmap="RdYlBu_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/speed_{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/speed_{ts}.png", dpi=150)
             plt.close()
 
-            delta_t = 0.5*(dx/jnp.max(jnp.sqrt(u**2+v**2)))
+            delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u**2+v**2)))
+            delta_t = jnp.maximum(delta_t, 0.06)
 
             t_cum += delta_t
 
@@ -4079,8 +4523,8 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
             #h = jnp.where(D>0.95, 0, h)
             
             ##NEED EVERYTHING TO HAVE A DYNAMIC ICE MASK!!!!!!!
-            h = jnp.where(jnp.sqrt(u**2 + v**2)<10_000, h, 0)
-            h = jnp.where(dangling_cells(h), 0, h)
+            #h = jnp.where(jnp.sqrt(u**2 + v**2)<10_000, h, 0)
+            #h = jnp.where(dangling_cells(h), 0, h)
             
             bulk_ = bulk_ice(h>0)
 
@@ -4346,7 +4790,7 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
 #        for ts in range(n_timesteps):
 #            plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
 #            plt.colorbar()
-#            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/{ts}.png", dpi=150)
+#            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/1/{ts}.png", dpi=150)
 #            plt.close()
 #
 #
@@ -4359,7 +4803,7 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
 #            plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
 #                       vmin=0, cmap="RdYlBu_r")
 #            plt.colorbar()
-#            plt.savefig(f"{nm_home}/bits_of_data/damage_gub_5/speed_{ts}.png", dpi=150)
+#            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/1/speed_{ts}.png", dpi=150)
 #            plt.close()
 #
 #            #plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
