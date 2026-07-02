@@ -166,7 +166,7 @@ def define_cook_problem(year):
     grounded = jnp.where((thk+topg)>(thk*c.RHO_I/c.RHO_W))
 
     return nr*res, nc*res, nr, nc,\
-           thk, topg, C_out, phi_0,\
+           thk, topg, C_out, phi_out,\
            q_out, jnp.zeros_like(q_out),\
            ice_mask, grounded
 
@@ -215,7 +215,7 @@ brxy = (1_154_000, -2_148_000)
 
 lx, ly, nr, nc,\
 thk, b, C, mucoef_0,\
-q, p, ice_mask, grounded = define_cook_problem("2023")
+q, p, ice_mask, grounded = define_cook_problem("2024")
 
 
 
@@ -224,14 +224,15 @@ print(f"DOFS: {jnp.log2(nr*nc)}")
 u_init = jnp.zeros_like(b)
 v_init = jnp.zeros_like(b)
 
-D_init = 1 -  mucoef_0*jnp.exp(q)
+#D_init = 1 -  mucoef_0*jnp.exp(q)
 #D_init = jnp.maximum(D_init, 0.01)
 ##D_init = jnp.zeros_like(q)
-##mucoef_0 = mucoef_0*jnp.exp(q)
-##q = jnp.zeros_like(q)
 
-#D_init = jnp.zeros_like(b)
-#mucoef_0 = jnp.where(grounded==1, mucoef_0, 1)
+#mucoef_0 = mucoef_0*jnp.exp(q)
+#q = jnp.zeros_like(q)
+
+D_init = jnp.zeros_like(b)
+mucoef_0 = jnp.where(grounded==1, mucoef_0, 1)
 
 
 
@@ -267,7 +268,13 @@ prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      mucoef_0, C,
                                                      sliding="linear")
 
+os.system(f"mkdir -p {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/11/")
+os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/11/")
+
 u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
+
+
+jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/11/D.npy", D)
 
 
 from pathlib import Path
@@ -275,7 +282,7 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/9/"
+    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/11/"
 
     img_dir = Path(dir_)
 

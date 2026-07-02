@@ -3063,7 +3063,8 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
                                rst_dst_fct,
                                advtype="PPM",
                                conservative=False,
-                               upwind_source=False):
+                               upwind_source=False,
+                               limit_shear_rate=True):
 
     def advection_step(u_1d, v_1d, h_1d, D_1d,
                        delta_t=0.08,
@@ -3246,7 +3247,7 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
         # parameters to tune
         m  = 4
         sigma_scale = 220_000
-        gamma = ( 0.5 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
+        gamma = ( 0.8 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
 
         #effective power:
         P_eff = c.A_COLD * (N_eff**m)
@@ -3256,6 +3257,31 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
         #plt.show()
 
         source = active_crevassing * gamma * P_eff * sgn_factor
+
+
+        if limit_shear_rate:
+            #Reduce rate in shear zones by a factor of 4
+
+            #extension_metric = jnp.abs(
+            #                     jnp.clip(
+            #                        (R1+R2)/(R1-R2+1e-10),
+            #                        -1, 1
+            #                     )
+            #                   )
+ 
+            extension_metric = jnp.abs(
+                                 jnp.clip(
+                                    (rst[:,:,0,0] + rst[:,:,1,1])/\
+                                     (jnp.sqrt((rst[:,:,0,0] - rst[:,:,1,1])**2 +\
+                                      4*rst[:,:,1,0]**2 +1e-10)),
+                                    -1, 1
+                                 )
+                               )
+
+            source *= (0.2 + 0.8*extension_metric)
+
+
+
         #source = gamma * P_eff
 
         if not conservative:
@@ -4454,14 +4480,14 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
         delta_t = 0
         t_cum = 2025
 
-        os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/9/")
-        os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/9/*")
+        #os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/11/")
+        #os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/11/*")
 
         for ts in range(n_timesteps):
             plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/9/{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/{ts}.png", dpi=150)
             plt.close()
 
 
@@ -4472,14 +4498,14 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
             #    u, v = momentum_solver(jnp.zeros_like(q), p, u, v, h)
             
             plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
-                       vmin=0, vmax=5000, cmap="RdYlBu_r")
+                       vmin=0, vmax=1200, cmap="RdYlBu_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/9/speed_{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/speed_{ts}.png", dpi=150)
             plt.close()
 
             delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u**2+v**2)))
-            delta_t = jnp.maximum(delta_t, 0.03)
+            delta_t = jnp.maximum(delta_t, 0.06)
 
             t_cum += delta_t
 
