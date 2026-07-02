@@ -125,6 +125,12 @@ def define_cook_problem(year):
                                                                                   "uo",
                                                                                   "uc"
                                                                                  ])
+    plt.figure(figsize=(10,10))
+    plt.imshow(speed_obs*((thk>0).astype(int)),
+               vmin=0, vmax=1200, cmap="RdYlBu_r")
+    plt.colorbar()
+    plt.show()
+    raise
 
     nr, nc = topg.shape
     
@@ -208,7 +214,7 @@ brxy = (1_154_000, -2_148_000)
 
 lx, ly, nr, nc,\
 thk, b, C, mucoef_0,\
-q, p, ice_mask = define_cook_problem("2025")
+q, p, ice_mask = define_cook_problem("2022")
 
 
 
