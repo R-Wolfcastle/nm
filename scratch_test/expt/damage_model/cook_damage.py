@@ -268,13 +268,13 @@ prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      mucoef_0, C,
                                                      sliding="linear")
 
-os.system(f"mkdir -p {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/11/")
-os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/11/")
+os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/12/")
+os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/12/")
 
 u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
 
 
-jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/11/D.npy", D)
+jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/12/D.npy", D)
 
 
 from pathlib import Path
@@ -282,7 +282,7 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/11/"
+    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/12/"
 
     img_dir = Path(dir_)
 

@@ -3246,8 +3246,8 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
 
         # parameters to tune
         m  = 4
-        sigma_scale = 220_000
-        gamma = ( 0.8 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
+        sigma_scale = 260_000
+        gamma = ( 1 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
 
         #effective power:
         P_eff = c.A_COLD * (N_eff**m)
@@ -3278,8 +3278,8 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
                                  )
                                )
 
-            source *= (0.2 + 0.8*extension_metric)
-
+            #source *= (0.1 + 0.9*(extension_metric**2))
+            source *= jnp.maximum(extension_metric, 0.1)
 
 
         #source = gamma * P_eff
@@ -4481,13 +4481,13 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
         t_cum = 2025
 
         #os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/11/")
-        #os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/11/*")
+        os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/12/*.png")
 
         for ts in range(n_timesteps):
             plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/12/{ts}.png", dpi=150)
             plt.close()
 
 
@@ -4501,7 +4501,7 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
                        vmin=0, vmax=1200, cmap="RdYlBu_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/speed_{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/12/speed_{ts}.png", dpi=150)
             plt.close()
 
             delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u**2+v**2)))
