@@ -215,7 +215,7 @@ brxy = (1_154_000, -2_148_000)
 
 lx, ly, nr, nc,\
 thk, b, C, mucoef_0,\
-q, p, ice_mask, grounded = define_cook_problem("2025")
+q, p, ice_mask, grounded = define_cook_problem("2023")
 
 
 
@@ -224,14 +224,14 @@ print(f"DOFS: {jnp.log2(nr*nc)}")
 u_init = jnp.zeros_like(b)
 v_init = jnp.zeros_like(b)
 
-#D_init = 1 -  mucoef_0*jnp.exp(q)
+D_init = 1 -  mucoef_0*jnp.exp(q)
 #D_init = jnp.maximum(D_init, 0.01)
 ##D_init = jnp.zeros_like(q)
 ##mucoef_0 = mucoef_0*jnp.exp(q)
 ##q = jnp.zeros_like(q)
 
-D_init = jnp.zeros_like(b)
-mucoef_0 = jnp.where(grounded==1, mucoef_0, 1)
+#D_init = jnp.zeros_like(b)
+#mucoef_0 = jnp.where(grounded==1, mucoef_0, 1)
 
 
 
@@ -258,12 +258,12 @@ delta_y, delta_x = res, res
 #raise
 
 
-n_timesteps = 250
+n_timesteps = 400
 
 prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      delta_y, delta_x,
                                                      b, ice_mask,
-                                                     2, 6, n_timesteps,
+                                                     2, 5, n_timesteps,
                                                      mucoef_0, C,
                                                      sliding="linear")
 
@@ -275,7 +275,7 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/3/"
+    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/9/"
 
     img_dir = Path(dir_)
 

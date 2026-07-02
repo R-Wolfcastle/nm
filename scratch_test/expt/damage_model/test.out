@@ -1,0 +1,28 @@
+nohup: ignoring input
+Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax/_src/xla_bridge.py", line 487, in discover_pjrt_plugins
+    plugin_module.initialize()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax_plugins/xla_cuda12/__init__.py", line 370, in initialize
+    _check_cuda_versions(raise_on_first_error = True)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/jax_plugins/xla_cuda12/__init__.py", line 274, in _check_cuda_versions
+    for d in range(cuda_versions.cuda_device_count())
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:134: operation cuInit(0) failed: Unknown CUDA error 303; cuGetErrorName failed. This probably means that JAX was unable to load the CUDA libraries.
+Traceback (most recent call last):
+  File "/uolstore/home/staff_lnxhome02/eartsu/Documents/nm/scratch_test/expt/damage_model/cook_damage.py", line 26, in <module>
+    from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+                                  make_picnewton_vel_expl_dam_solver_function_noextrap#,\
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/uolstore/home/users/eartsu/Documents/nm/solvers/nonlinear_solvers.py", line 35, in <module>
+    import residuals as rdl
+  File "/uolstore/home/users/eartsu/Documents/nm/solvers/residuals.py", line 25, in <module>
+    from petsc4py import PETSc
+  File "/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/petsc4py/PETSc.py", line 5, in <module>
+    PETSc._initialize()
+    ~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
