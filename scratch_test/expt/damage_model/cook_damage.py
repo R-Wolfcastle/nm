@@ -100,10 +100,10 @@ def little_ice_shelf():
 
 def long_ice_shelf():
 
-    Lx = 250_000
-    Ly = 50_000
+    Lx = 200_000
+    Ly = 150_000
 
-    resoulution = 1000
+    resolution = 1000
 
     x = jnp.arange(0, Lx, resolution)
     y = jnp.arange(0, Ly, resolution)
@@ -111,7 +111,7 @@ def long_ice_shelf():
     nx = int(Lx/resolution)
     ny = int(Ly/resolution)
 
-     b = jnp.zeros((ny,nx))-1000
+    b = jnp.zeros((ny,nx))-1000
 
     thk_profile = 1000*(1-(500/1000)*x/Lx)
     thk = jnp.zeros((ny, nx))+thk_profile[None,:]
@@ -123,7 +123,7 @@ def long_ice_shelf():
 
     C = jnp.zeros_like(thk)+3.16e6
     C = C.at[5:-5, 1:].set(0)
-    C = C.at[:, 5:].set(0)
+    C = C.at[:, :5].set(0)
 
     mucoef_0 = jnp.ones_like(C)
     q = jnp.zeros_like(mucoef_0)
@@ -234,24 +234,45 @@ def define_cook_problem(year):
 
 
 
-#lx, ly, nr,\
-#nc, x, y,\
-#delta_x, delta_y,\
-#thk, b, C, mucoef_0,\
-#q, ice_mask,\
-#surface, grounded = \
-#            little_ice_shelf()
-#            #wonky_stream(resolution=2000)
-#            #wonky_stream_rotated(resolution=2000)
-#
-#
-#
-#print(f"DOFS: {jnp.log2(nr*nc)}")
-#
-#u_init = jnp.zeros_like(b) + 100
-#v_init = jnp.zeros_like(b)
-#D_init = v_init.copy()
-#D_init = D_init.at[10:35, -40:-38].set(0.9)
+
+def adv_test():
+    lx, ly, nr,\
+    nc, x, y,\
+    delta_x, delta_y,\
+    thk, b, C, mucoef_0,\
+    q, ice_mask,\
+    surface, grounded = \
+                long_ice_shelf()
+                #little_ice_shelf()
+                #wonky_stream(resolution=2000)
+                #wonky_stream_rotated(resolution=2000)
+    
+    
+    print(f"DOFS: {jnp.log2(nr*nc)}")
+    
+    u_init = jnp.zeros_like(b) + 100
+    v_init = jnp.zeros_like(b)
+    D_init = v_init.copy()
+    D_init = D_init.at[:, 50:54].set(0.9)
+    
+    
+    n_timesteps = 400
+    
+    prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
+                                                         delta_y, delta_x,
+                                                         b, ice_mask,
+                                                         4, 6, n_timesteps,
+                                                         mucoef_0, C,
+                                                         sliding="linear")
+    
+    os.system(f"mkdir -p {nm_home}/bits_of_data/adv_tests/2/")
+    os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/adv_tests/2/")
+    
+    u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
+
+adv_test()
+
+raise
 
 
 
@@ -330,14 +351,14 @@ prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      mucoef_0, C,
                                                      sliding="linear")
 
-os.system(f"mkdir -p {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/11/")
-os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/11/")
+os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/12/")
+os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/12/")
 
 u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
 
 raise
 
-jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/11/D.npy", D)
+jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/12/D.npy", D)
 
 
 from pathlib import Path
@@ -345,7 +366,7 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/11/"
+    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/12/"
 
     img_dir = Path(dir_)
 

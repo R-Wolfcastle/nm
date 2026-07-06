@@ -3246,8 +3246,8 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
 
         # parameters to tune
         m  = 4
-        sigma_scale = 220_000
-        gamma = ( 0.8 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
+        sigma_scale = 260_000
+        gamma = ( 1 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
 
         #effective power:
         P_eff = c.A_COLD * (N_eff**m)
@@ -3256,7 +3256,7 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
         #plt.colorbar()
         #plt.show()
 
-        source = active_crevassing * gamma * P_eff * sgn_factor
+        source = active_crevassing * gamma * P_eff * sgn_factor * 0
 
 
         if limit_shear_rate:
@@ -3284,9 +3284,8 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
             #plt.colorbar()
             #plt.show()
 
-
-            source *= (0.2 + 0.8*extension_metric)
-
+            #source *= (0.1 + 0.9*(extension_metric**2))
+            source *= jnp.maximum(extension_metric, 0.1)
 
 
         #source = gamma * P_eff
@@ -4489,28 +4488,29 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
         t_cum = 2025
 
         #os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/11/")
-        #os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/11/*")
+        #os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/12/*.png")
 
         for ts in range(n_timesteps):
             plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/{ts}.png", dpi=150)
+            plt.savefig(f"{nm_home}/bits_of_data/adv_tests/2/{ts}.png", dpi=150)
             plt.close()
 
 
-            q = jnp.log((1-D)/(mucoef_0+1e-10))
+            #q = jnp.log((1-D)/(mucoef_0+1e-10))
+            q = jnp.zeros_like(D)
             
-            u, v = momentum_solver(q, p, u, v, h)    
-            #if ts==0:
-            #    u, v = momentum_solver(jnp.zeros_like(q), p, u, v, h)
+            #u, v = momentum_solver(q, p, u, v, h)    
+            if ts==0:
+                u, v = momentum_solver(jnp.zeros_like(q), p, u, v, h)
             
-            plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
-                       vmin=0, vmax=1200, cmap="RdYlBu_r")
-            plt.colorbar()
-            plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/11/speed_{ts}.png", dpi=150)
-            plt.close()
+                plt.imshow(jnp.sqrt(u**2 + v**2).reshape((ny,nx)),
+                           vmin=0, vmax=800, cmap="RdYlBu_r")
+                plt.colorbar()
+                plt.title(f"year: {t_cum+delta_t:.4f}")
+                plt.savefig(f"{nm_home}/bits_of_data/adv_tests/2/speed_{ts}.png", dpi=150)
+                plt.close()
 
             delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u**2+v**2)))
             delta_t = jnp.maximum(delta_t, 0.06)
@@ -4522,9 +4522,11 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
 
             floating = jnp.where((h + b) >= (h*(1-c.RHO_I/c.RHO_W)),
                                  0, 1)
+            #damage_mask = floating
+            damage_mask = jnp.ones_like(floating)
 
             D = dam_adv_src_step(u, v, h.reshape(-1), D.reshape(-1),
-                                 delta_t, ts, floating)
+                                 delta_t, ts, damage_mask)
             D = jnp.clip(D, 0, 0.9)
             
             
