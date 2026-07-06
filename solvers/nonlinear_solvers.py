@@ -3278,6 +3278,13 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
                                  )
                                )
 
+            #plt.imshow((u**2+v**2), cmap="RdYlBu_r")
+            ##plt.imshow(0.2 + 0.8*extension_metric, alpha=0.5)
+            #plt.imshow(extension_metric, alpha=0.5)
+            #plt.colorbar()
+            #plt.show()
+
+
             source *= (0.2 + 0.8*extension_metric)
 
 
@@ -3313,8 +3320,9 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
             * (h > 0).astype(float)
         )
 
-    return jax.jit(advection_step)
 
+    #return jax.jit(advection_step)
+    return advection_step
 
 #def make_advsrc_effective_damthk_stepper_threshold(
 #                               nx, ny, dx, dy,

@@ -98,6 +98,47 @@ def little_ice_shelf():
 
 
 
+def long_ice_shelf():
+
+    Lx = 250_000
+    Ly = 50_000
+
+    resoulution = 1000
+
+    x = jnp.arange(0, Lx, resolution)
+    y = jnp.arange(0, Ly, resolution)
+
+    nx = int(Lx/resolution)
+    ny = int(Ly/resolution)
+
+     b = jnp.zeros((ny,nx))-1000
+
+    thk_profile = 1000*(1-(500/1000)*x/Lx)
+    thk = jnp.zeros((ny, nx))+thk_profile[None,:]
+    thk = thk.at[:, -1].set(0)
+
+    b = b.at[:5, :].set(-thk[:5, :]*c.RHO_I/c.RHO_W + 0.1)
+    b = b.at[-5:,:].set(-thk[-5:,:]*c.RHO_I/c.RHO_W + 0.1)
+    b = b.at[:, :5].set(-thk[:, :5]*c.RHO_I/c.RHO_W + 0.1)
+
+    C = jnp.zeros_like(thk)+3.16e6
+    C = C.at[5:-5, 1:].set(0)
+    C = C.at[:, 5:].set(0)
+
+    mucoef_0 = jnp.ones_like(C)
+    q = jnp.zeros_like(mucoef_0)
+    ice_mask = jnp.where(thk>0, 1, 0)
+
+    surface = jnp.maximum(b+thk, thk*(1-c.RHO_I/c.RHO_W))
+
+    grounded = jnp.where(b+thk > thk*(1-c.RHO_I/c.RHO_W), 1, 0)
+
+    return ny*resolution, nx*resolution, ny, nx,\
+           x, y, resolution, resolution, thk, b, C, mucoef_0,\
+           q, ice_mask, surface, grounded
+
+
+
 #bedmachine_fp = "/Users/eartsu/Documents/BedMachine/Antarctica/v4/NSIDC-0756_BedMachineAntarctica_19700101-20191001_V04.1.nc"
 
 def open_shapefile_as_mask(in_shp, aoi, res):
@@ -125,13 +166,8 @@ def define_cook_problem(year):
                                                                                   "uo",
                                                                                   "uc"
                                                                                  ])
-    plt.figure(figsize=(10,10))
-    plt.imshow(speed_obs*((thk>0).astype(int)),
-               vmin=0, vmax=1200, cmap="RdYlBu_r")
-    plt.colorbar()
-    plt.show()
-    raise
 
+    
     nr, nc = topg.shape
     
     u_init = jnp.zeros((nr,nc))
@@ -163,6 +199,26 @@ def define_cook_problem(year):
     #plt.colorbar()
     #plt.show()
     
+    
+
+
+
+    #D = 1 - phi_out
+    #plt.figure(figsize=(10,10))
+    #plt.imshow(D,
+    #           vmin=0, vmax=1, cmap="cubehelix_r")
+    #plt.colorbar()
+    #plt.show()
+
+    ##plt.figure(figsize=(10,10))
+    ##plt.imshow(speed_obs*((thk>0).astype(int)),
+    ##           vmin=0, vmax=800, cmap="RdYlBu_r")
+    ##plt.colorbar()
+    ##plt.show()
+    #raise
+
+
+
 
     C_out = C_0*jnp.exp(p_out)
     #plt.imshow(jnp.log(C_out), cmap="magma", vmin=0, vmax=8)
@@ -203,12 +259,12 @@ def define_cook_problem(year):
 
 
 
-#in_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_data_wpp/500m_res"
-#out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
+in_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_data_wpp/500m_res"
+out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
 
 
-in_dir = "/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_data_wpp/500m_res/"
-out_dir = "/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
+#in_dir = "/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_data_wpp/500m_res/"
+#out_dir = "/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
 
 
 
@@ -221,7 +277,7 @@ brxy = (1_154_000, -2_148_000)
 
 lx, ly, nr, nc,\
 thk, b, C, mucoef_0,\
-q, p, ice_mask, grounded = define_cook_problem("2024")
+q, p, ice_mask, grounded = define_cook_problem("2025")
 
 
 
@@ -279,6 +335,7 @@ os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_
 
 u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
 
+raise
 
 jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/11/D.npy", D)
 
