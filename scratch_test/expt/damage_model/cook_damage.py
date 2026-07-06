@@ -215,7 +215,7 @@ brxy = (1_154_000, -2_148_000)
 
 lx, ly, nr, nc,\
 thk, b, C, mucoef_0,\
-q, p, ice_mask, grounded = define_cook_problem("2024")
+q, p, ice_mask, grounded = define_cook_problem("2025")
 
 
 
@@ -224,12 +224,8 @@ print(f"DOFS: {jnp.log2(nr*nc)}")
 u_init = jnp.zeros_like(b)
 v_init = jnp.zeros_like(b)
 
-#D_init = 1 -  mucoef_0*jnp.exp(q)
-#D_init = jnp.maximum(D_init, 0.01)
-##D_init = jnp.zeros_like(q)
-
-#mucoef_0 = mucoef_0*jnp.exp(q)
-#q = jnp.zeros_like(q)
+#D_init = 1 -  mucoef_0
+#mucoef_0 = jnp.ones_like(D_init)
 
 D_init = jnp.zeros_like(b)
 mucoef_0 = jnp.where(grounded==1, mucoef_0, 1)
@@ -259,22 +255,26 @@ delta_y, delta_x = res, res
 #raise
 
 
-n_timesteps = 400
+n_timesteps = 500
+
+dir_ = f"{nm_home}/bits_of_data/damage_model/with_closure/2/"
 
 prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      delta_y, delta_x,
                                                      b, ice_mask,
                                                      2, 5, n_timesteps,
                                                      mucoef_0, C,
-                                                     sliding="linear")
+                                                     sliding="linear",
+                                                     plt_dir=dir_)
 
-os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/12/")
-os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/12/")
+
+os.system(f"mkdir -p {dir_}")
+os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {dir_}")
 
 u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
 
 
-jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/12/D.npy", D)
+jnp.save(f"{dir_}/D.npy", D)
 
 
 from pathlib import Path
@@ -282,8 +282,6 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/12/"
-
     img_dir = Path(dir_)
 
     #pngs = sorted(img_dir.glob("*.png"))

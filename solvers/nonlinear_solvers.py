@@ -3054,6 +3054,248 @@ def make_advsrc_effective_damthk_stepper_threshold_ppmish(
 
     return advection_step
 
+
+def make_advsrc_effective_damthk_stepper_vmthres_ppmish_DNOTDH(
+                               nx, ny, dx, dy,
+                               interp_cc_to_fc,
+                               add_uv_ghost_cells,
+                               add_s_ghost_cells,
+                               mucoef_0,
+                               rst_dst_fct,
+                               advtype="PPM",
+                               vm_failure_criterion=True,
+                               conservative=False,
+                               upwind_source=False,
+                               limit_shear_rate=False,
+                               plt_dir=None):
+
+    def advection_step(u_1d, v_1d, h_1d, D_1d,
+                       delta_t=0.08,
+                       ts=1, source_mask=None):
+        
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+        D = D_1d.reshape((ny, nx))
+
+        q = jnp.log((1 - D)/(mucoef_0 + 1e-10))
+        #q = jnp.log((1)/(mucoef_0 + 1e-10))
+
+        u_full, v_full = add_uv_ghost_cells(u, v)
+        h_full = add_s_ghost_cells(h)
+        D_full = add_s_ghost_cells(D)
+
+        u_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            u_full, h_full)
+        v_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            v_full, h_full)
+        h_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            h_full, h_full)
+        D_full = linear_extrapolate_over_cf_dynamic_thickness(
+                            D_full, h_full)
+
+        #####################################################
+        # Advection of Dh
+        #####################################################
+       
+
+        flux_x = ppm_flux_x(D_full[1:-1,:], u_full[1:-1,:], dx, delta_t)
+        flux_y = ppm_flux_y(D_full[:,1:-1], v_full[:,1:-1], dy, delta_t)
+    
+        #plt.imshow(flux_x[:,:1] - flux_x[:,-1:])
+        #plt.colorbar()
+        #plt.show()
+
+        #plt.imshow(flux_y[1:,:] - flux_y[:-1,:])
+        #plt.colorbar()
+        #plt.show()
+
+        #raise
+
+        #print(flux_x.shape)
+        #print(flux_y.shape)
+
+        #print(D.shape)
+
+        flux_term = (
+            (flux_x[:,:-1] - flux_x[:,1:])
+            * dy * delta_t
+            +
+            (flux_y[1:,:] - flux_y[:-1,:])
+            * dx * delta_t
+        )
+        flux_term = jnp.where(h > 1e-2, flux_term, 0)
+
+        #####################################################
+        # Source
+        #####################################################
+
+        #THESE ARE TRUE VALUES
+        rst, _ = rst_dst_fct(q, u, v, h)
+
+        if vm_failure_criterion: 
+            #NON-TRUE VALUES, TO FIT WITH WM CRITERION
+            #_, dst = rst_dst_fct(-jnp.log(1-D), u, v, h)
+            #If mucoef_0 is 1, then use:
+            _, dst = rst_dst_fct(jnp.zeros_like(D), u, v, h)
+    
+            #Threshold criterion from:
+            #   Fracture criteria and tensile strength for natural glacier ice calibrated 
+            #   from remote sensing observations of Antarctic ice shelves
+            #   2024, by wells-moran etc.
+            sig_vm = jnp.sqrt(dst[:,:,0,0]**2 +
+                              dst[:,:,1,1]**2 -
+                              dst[:,:,0,0]*dst[:,:,1,1] +
+                              3*dst[:,:,1,0]**2 +
+                              1e-10)
+            sig_vm *= jnp.sqrt(3)
+    
+    
+            critical_vm = 280_000 #Pa
+            #active_crevassing = jnp.where(sig_vm>critical_vm, 1, 0)
+            width = 10_000
+            active_crevassing = jax.nn.sigmoid(
+                (sig_vm - critical_vm) / width
+            )
+    
+            #Might quite like to smooth this! ^^
+            
+    
+            #plt.imshow(sig_vm, cmap="Spectral_r", vmax=250_000)
+            #plt.colorbar()
+            #plt.savefig(f"{plt_dir}/sig_vm_{ts}.png", dpi=150)
+            #plt.close()
+    
+            #raise
+    
+            plt.imshow(active_crevassing, vmin=0, vmax=1)
+            plt.colorbar()
+            plt.savefig(f"{plt_dir}/active_crevassing_{ts}.png", dpi=150)
+            plt.close()
+
+        else:
+            active_crevassing = jnp.ones_like(D)
+        
+
+        ###Von-Mises type thing with resistive stress tensor
+        ##rst_vm = jnp.sqrt(rst[0,0,:,:]**2 +
+        ##                  rst[1,1,:,:]**2 -
+        ##                  rst[0,0,:,:]*rst[1,1,:,:] +
+        ##                  3*rst[1,0,:,:]**2 +
+        ##                  1e-10)
+
+
+        
+        pricipal_rs = 0.5 * (rst[:,:,0,0] + rst[:,:,1,1] + 
+                             jnp.sqrt(
+                                (rst[:,:,0,0] + rst[:,:,1,1])**2 -\
+                                4*(rst[:,:,0,0]*rst[:,:,1,1] -
+                                   rst[:,:,1,0]**2)
+                             )
+                            )
+        #return visc_xx
+
+        pricipal_rs = pricipal_rs * (h > 0).astype(float)
+
+        #membrane opening force
+        N_open = jnp.maximum(pricipal_rs, 0)
+
+        #overburden closure force
+        N_close = c.RHO_I * (1 - c.RHO_I/c.RHO_W) * c.g * D * h# * (1-D)
+
+
+        if upwind_source:
+            u_fc_ew, _ = interp_cc_to_fc(u_full)
+            _, v_fc_ns = interp_cc_to_fc(v_full)
+            
+            D_source_x = jnp.where(
+                u_fc_ew > 0,
+                D_full[1:-1, :-1],
+                D_full[1:-1, 1:]
+            )
+
+            D_source_y = jnp.where(
+                v_fc_ns > 0,
+                D_full[1:, 1:-1],
+                D_full[:-1, 1:-1]
+            )
+
+            D_source = 0.5 * (D_source_x + D_source_y)
+        else:
+            D_source = D.copy()
+
+
+
+        #stress diff to overburden plus amplification from remaining ligament
+        N_eff = (N_open - N_close) / (1.0 - D_source + 1e-6)
+        sgn_factor = jnp.where((N_open - N_close)>0, 1, -0.1)
+        #N_eff = jnp.maximum(N_eff, 0)
+
+        # parameters to tune
+        m  = 4
+        sigma_scale = 260_000
+        gamma = ( 0.05 /( c.A_COLD * (sigma_scale + 1e-10)**m ) ) * (h > 0).astype(float)
+
+        #effective power:
+        P_eff = c.A_COLD * (N_eff**m)
+
+        
+        source = active_crevassing * gamma * P_eff * sgn_factor
+
+        plt.imshow(source, vmin=-1, vmax=1, cmap="RdBu_r")
+        plt.colorbar()
+        plt.savefig(f"{plt_dir}/source_{ts}.png", dpi=150)
+        plt.close()
+
+        #raise
+
+        if limit_shear_rate:
+            #Reduce rate in shear zones by a factor of 4
+
+            #extension_metric = jnp.abs(
+            #                     jnp.clip(
+            #                        (R1+R2)/(R1-R2+1e-10),
+            #                        -1, 1
+            #                     )
+            #                   )
+ 
+            extension_metric = jnp.abs(
+                                 jnp.clip(
+                                    (rst[:,:,0,0] + rst[:,:,1,1])/\
+                                     (jnp.sqrt((rst[:,:,0,0] - rst[:,:,1,1])**2 +\
+                                      4*rst[:,:,1,0]**2 +1e-10)),
+                                    -1, 1
+                                 )
+                               )
+
+            #source *= (0.1 + 0.9*(extension_metric**2))
+            source *= jnp.maximum(extension_metric, 0.1)
+
+            plt.imshow(jnp.maximum(extension_metric, 0.1), vmin=0, vmax=1)
+            plt.colorbar()
+            plt.savefig(f"{plt_dir}/extmetric_{ts}.png", dpi=150)
+            plt.close()
+
+        #source = gamma * P_eff
+
+        source_term = source * delta_t
+
+        if source_mask is not None:
+            source_term = source_term*source_mask
+            flux_term   = flux_term*source_mask
+
+        return (
+            D
+            + (source_term + flux_term/(dy*dx))
+            * (h > 0).astype(float)
+        )
+
+
+    #return jax.jit(advection_step)
+    return advection_step
+
+
+
 def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
                                nx, ny, dx, dy,
                                interp_cc_to_fc,
@@ -3062,9 +3304,11 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
                                mucoef_0,
                                rst_dst_fct,
                                advtype="PPM",
+                               vm_failure_criterion=True,
                                conservative=False,
                                upwind_source=False,
-                               limit_shear_rate=True):
+                               limit_shear_rate=False,
+                               plt_dir=None):
 
     def advection_step(u_1d, v_1d, h_1d, D_1d,
                        delta_t=0.08,
@@ -3128,7 +3372,6 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
             flux_term = jnp.where(h > 1e-2, flux_term, 0)
 
         elif advtype=="PPM":
-            ###PPM!!! GIVES SOME STRANGE LOOKING RESULTS...
 
             flux_x = ppm_flux_x(Dh_full[1:-1,:], u_full[1:-1,:], dx, delta_t)
             flux_y = ppm_flux_y(Dh_full[:,1:-1], v_full[:,1:-1], dy, delta_t)
@@ -3161,32 +3404,51 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
         # Source
         #####################################################
 
-        #NON-TRUE VALUES, TO FIT WITH WM CRITERION
-        _, dst = rst_dst_fct(q*jnp.zeros_like(q), u, v, h)
         #THESE ARE TRUE VALUES
         rst, _ = rst_dst_fct(q, u, v, h)
 
+        if vm_failure_criterion: 
+            #NON-TRUE VALUES, TO FIT WITH WM CRITERION
+            #_, dst = rst_dst_fct(-jnp.log(1-D), u, v, h)
+            #If mucoef_0 is 1, then use:
+            _, dst = rst_dst_fct(jnp.zeros_like(D), u, v, h)
+    
+            #Threshold criterion from:
+            #   Fracture criteria and tensile strength for natural glacier ice calibrated 
+            #   from remote sensing observations of Antarctic ice shelves
+            #   2024, by wells-moran etc.
+            sig_vm = jnp.sqrt(dst[:,:,0,0]**2 +
+                              dst[:,:,1,1]**2 -
+                              dst[:,:,0,0]*dst[:,:,1,1] +
+                              3*dst[:,:,1,0]**2 +
+                              1e-10)
+            sig_vm *= jnp.sqrt(3)
+    
+    
+            critical_vm = 280_000 #Pa
+            #active_crevassing = jnp.where(sig_vm>critical_vm, 1, 0)
+            width = 10_000
+            active_crevassing = jax.nn.sigmoid(
+                (sig_vm - critical_vm) / width
+            )
+    
+            #Might quite like to smooth this! ^^
+            
+    
+            #plt.imshow(sig_vm, cmap="Spectral_r", vmax=250_000)
+            #plt.colorbar()
+            #plt.savefig(f"{plt_dir}/sig_vm_{ts}.png", dpi=150)
+            #plt.close()
+    
+            #raise
+    
+            plt.imshow(active_crevassing, vmin=0, vmax=1)
+            plt.colorbar()
+            plt.savefig(f"{plt_dir}/active_crevassing_{ts}.png", dpi=150)
+            plt.close()
 
-        #Threshold criterion from:
-        #   Fracture criteria and tensile strength for natural glacier ice calibrated 
-        #   from remote sensing observations of Antarctic ice shelves
-        #   2024, by wells-moran etc.
-        sig_vm = jnp.sqrt(dst[:,:,0,0]**2 +
-                          dst[:,:,1,1]**2 -
-                          dst[:,:,0,0]*dst[:,:,1,1] +
-                          3*dst[:,:,1,0]**2 +
-                          1e-10)
-        sig_vm *= jnp.sqrt(3)
-
-
-        critical_vm = 260_000 #Pa
-        #active_crevassing = jnp.where(sig_vm>critical_vm, 1, 0)
-        width = 10_000
-        active_crevassing = jax.nn.sigmoid(
-            (sig_vm - critical_vm) / width
-        )
-
-        #Might quite like to smooth this! ^^
+        else:
+            active_crevassing = jnp.ones_like(D)
         
 
         ###Von-Mises type thing with resistive stress tensor
@@ -3207,14 +3469,13 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
                             )
         #return visc_xx
 
-
         pricipal_rs = pricipal_rs * (h > 0).astype(float)
 
         #membrane opening force
         N_open = h * jnp.maximum(pricipal_rs, 0)
 
         #overburden closure force
-        N_close = c.RHO_I * c.g * D * h
+        N_close = c.RHO_I * c.g * D * (1-D) * h
 
 
         if upwind_source:
@@ -3241,12 +3502,12 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
 
         #stress diff to overburden plus amplification from remaining ligament
         N_eff = (N_open - N_close) / (1.0 - D_source + 1e-6)
-        sgn_factor = jnp.where(N_eff>0, 1, -0.1)
+        sgn_factor = jnp.where((N_open - N_close)>0, 1, -0.1)
         #N_eff = jnp.maximum(N_eff, 0)
 
         # parameters to tune
         m  = 4
-        sigma_scale = 260_000
+        sigma_scale = 250_000
         gamma = ( 1 /( c.A_COLD * (sigma_scale * (h + 1e-10))**m ) ) * (h > 0).astype(float)
 
         #effective power:
@@ -3281,6 +3542,10 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
             #source *= (0.1 + 0.9*(extension_metric**2))
             source *= jnp.maximum(extension_metric, 0.1)
 
+            plt.imshow(jnp.maximum(extension_metric, 0.1), vmin=0, vmax=1)
+            plt.colorbar()
+            plt.savefig(f"{plt_dir}/extmetric_{ts}.png", dpi=150)
+            plt.close()
 
         #source = gamma * P_eff
 
@@ -3299,7 +3564,6 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
 
             source += D * h * divu
 
-
         source_term = source * delta_t
 
         if source_mask is not None:
@@ -3313,8 +3577,9 @@ def make_advsrc_effective_damthk_stepper_vmthres_ppmish(
             * (h > 0).astype(float)
         )
 
-    return jax.jit(advection_step)
 
+    #return jax.jit(advection_step)
+    return advection_step
 
 #def make_advsrc_effective_damthk_stepper_threshold(
 #                               nx, ny, dx, dy,
@@ -4235,7 +4500,8 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
                                                 n_pic_iterations, n_newt_iterations, n_timesteps,
                                                 mucoef_0, C_0, sliding="linear",
                                                 periodic=False, B_field=None,
-                                                temperature_field=None):
+                                                temperature_field=None,
+                                                plt_dir=None):
 
     if temperature_field is None:
     
@@ -4354,12 +4620,13 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
     #                                              add_scalar_ghost_cells,
     #                                              mucoef_0,
     #                                              prs_fct)
-    dam_adv_src_step = make_advsrc_effective_damthk_stepper_vmthres_ppmish(nx, ny, dx, dy,
+    dam_adv_src_step = make_advsrc_effective_damthk_stepper_vmthres_ppmish_DNOTDH(nx, ny, dx, dy,
                                                   interp_cc_to_fc, 
                                                   add_uv_ghost_cells,
                                                   add_scalar_ghost_cells,
                                                   mucoef_0,
-                                                  rst_dst_fct)
+                                                  rst_dst_fct,
+                                                  plt_dir=plt_dir)
     
     process = psutil.Process(os.getpid())
     print(process.memory_info().rss / 1024**3, "GB")
@@ -4478,16 +4745,13 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
         D = D_init
 
         delta_t = 0
-        t_cum = 2025
-
-        #os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/11/")
-        os.system(f"rm -f {nm_home}/bits_of_data/ss_damage_cook/12/*.png")
+        t_cum = 2024
 
         for ts in range(n_timesteps):
             plt.imshow(D, vmin=0, vmax=1, cmap="cubehelix_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/12/{ts}.png", dpi=150)
+            plt.savefig(f"{plt_dir}/damage_{ts}.png", dpi=150)
             plt.close()
 
 
@@ -4501,7 +4765,7 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
                        vmin=0, vmax=1200, cmap="RdYlBu_r")
             plt.colorbar()
             plt.title(f"year: {t_cum+delta_t:.4f}")
-            plt.savefig(f"{nm_home}/bits_of_data/ss_damage_cook/12/speed_{ts}.png", dpi=150)
+            plt.savefig(f"{plt_dir}/speed_{ts}.png", dpi=150)
             plt.close()
 
             delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u**2+v**2)))
@@ -4515,7 +4779,8 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
             floating = jnp.where((h + b) >= (h*(1-c.RHO_I/c.RHO_W)),
                                  0, 1)
 
-            D = dam_adv_src_step(u, v, h.reshape(-1), D.reshape(-1),
+            D = dam_adv_src_step(u, v, h.reshape(-1),
+                                 D.reshape(-1),
                                  delta_t, ts, floating)
             D = jnp.clip(D, 0, 0.9)
             
@@ -4523,8 +4788,8 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
             #h = jnp.where(D>0.95, 0, h)
             
             ##NEED EVERYTHING TO HAVE A DYNAMIC ICE MASK!!!!!!!
-            #h = jnp.where(jnp.sqrt(u**2 + v**2)<10_000, h, 0)
-            #h = jnp.where(dangling_cells(h), 0, h)
+            h = jnp.where(jnp.sqrt(u**2 + v**2)<10_000, h, 0)
+            h = jnp.where(dangling_cells(h), 0, h)
             
             bulk_ = bulk_ice(h>0)
 
