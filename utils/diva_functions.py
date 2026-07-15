@@ -12,7 +12,7 @@ nm_home = os.environ['NM_HOME']
 sys.path.insert(1, os.path.join(nm_home, 'utils'))
 import constants_years as c
 from vertical_grid import vertically_integrate, vertically_average
-
+from thermo import B_from_T
 
 """
 Mostly from: A comparison of the stability and performance of depth-integrated
@@ -48,7 +48,7 @@ def diva_cc_viscosity_function(dy, dx, cc_vel_gradient, mucoef_0, temp_cc):
                    + 0.25*(dudy + dvdx)**2 \
                    + 0.25*dudz**2 + 0.25*dvdz**2
 
-        mu_vv = B_cc * mucoef[..., None] * \
+        mu_vv = (B_cc * mucoef)[..., None] * \
                 (eps_e_sq + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
         mu_va = vertically_average(mu_vv, zs)
@@ -83,6 +83,10 @@ def diva_beta_eff_function(beta_fct):
     def beta_eff(C, u_base, v_base, h, f2):
         beta = beta_fct(C, u_base, v_base, h)
         beta_eff_val = beta / (1 + beta * f2)
+        
+        beta_eff_val = jnp.where(h>0, beta_eff_val, 1)
+        beta = jnp.where(h>0, beta, 1)
+
         return beta, beta_eff_val
 
     return jax.jit(beta_eff)
@@ -113,7 +117,7 @@ def diva_reconstruct_3d_velocity_function():
     """
     Reconstructs the full 3D velocity field (Eq. 16/18) once the outer
     Picard loop on (u_va, v_va) has converged.
-    Momentum solver doesn't actually need it, but it's nice to see.
+    Kind of need it to define u_base
     """
     def reconstruct(u_va, v_va, dudz, dvdz, beta, f2, zs):
         u_base = u_va / (1 + beta * f2)

@@ -30,6 +30,7 @@ from sparsity_utils import scipy_coo_to_csr,\
                            assemble_sparse_2x2_block_jacobian_function_general
 import constants_years as c
 from grid import *
+from vertical_grid import define_z_coordinates
 from diva_functions import *
 
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
@@ -1033,6 +1034,7 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
     cc_gradient                                = cc_gradient_function(dy, dx)
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
+    cc_vel_gradient                            = cc_vel_gradient_function(dy, dx, add_uv_ghost_cells)
    
 
     #DIVA-specific functions from grid:
@@ -1087,17 +1089,19 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                        ])
 
    
-    la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coords, (ny*nx*2, ny*nx*2),
                                                               indirect=False,
                                                               ksp_type="gmres",
                                                               preconditioner="hypre",
-                                                              precondition_only=False,
                                                               ksp_max_iter=60,
                                                               monitor_ksp=False)
 
     def solver(q, C, u_trial, v_trial, h):
         u_trial = jnp.where(h > 1e-10, u_trial, 0)
         v_trial = jnp.where(h > 1e-10, v_trial, 0)
+
+        u_vv = jnp.zeros((ny, nx, n_levels)) + u_trial[..., None] 
+        v_vv = jnp.zeros((ny, nx, n_levels)) + v_trial[..., None] 
 
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
@@ -1116,11 +1120,9 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
             #   vertically average it
             mu_vv, mu_va = diva_viscosity(q, u_va, v_va, dudz, dvdz, zs)
 
-
             #2. Arthern F2 integral, then beta_eff
             f2 = arthern_function(mu_vv, zs, m=2)
             beta, beta_eff = beta_eff_fct(C, u_vv[..., 0], v_vv[..., 0], h, f2)
-
 
             #3. interpolate the vertically-averaged viscosity to faces
             mu_va_gc = add_scalar_ghost_cells(mu_va)
@@ -1157,18 +1159,16 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
             u_va = u_1d.reshape((ny, nx))
             v_va = v_1d.reshape((ny, nx))
             dudz, dvdz = new_shear(mu_vv, u_va, v_va, beta_eff, zs)
+            
+            #6. reconstruct the full 3D velocity field
+            u_vv, v_vv = reconstruct_3d(u_va, v_va, dudz, dvdz, beta, f2, zs)
+
 
         final_residual = jnp.max(jnp.abs(rhs_new))
         print("----------")
         print("Final residual: {}".format(final_residual))
         print("Total residual reduction factor: {}".format(initial_residual/final_residual))
         print("----------")
-
-        u_va = u_1d.reshape((ny, nx))
-        v_va = v_1d.reshape((ny, nx))
-
-        #reconstruct the full 3D velocity field for diagnostics
-        u_vv, v_vv = reconstruct_3d(u_va, v_va, dudz, dvdz, beta, f2, zs)
 
         return u_va, v_va, u_vv, v_vv, zs
 

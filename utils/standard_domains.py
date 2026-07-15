@@ -228,6 +228,8 @@ def wonky_stream(resolution=500):
     thk = thk.at[:,-2:].set(0)
     b = jnp.zeros((nr, nc)) - 256 - 256*x/lx
 
+    thk *= 4
+    b *= 4
    
     C = stickiness(xx, yy, resolution)
     
