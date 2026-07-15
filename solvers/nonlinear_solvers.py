@@ -30,6 +30,7 @@ from sparsity_utils import scipy_coo_to_csr,\
                            assemble_sparse_2x2_block_jacobian_function_general
 import constants_years as c
 from grid import *
+from diva_functions import *
 
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 import residuals as rdl
@@ -1017,30 +1018,30 @@ def make_coupled_quasi_newton_solver_function_cvjp(ny, nx, dy, dx,
 
     return solver
 
-def make_diva_velocity_solver_function(ny, nx, dy, dx,
-                                       b, ice_mask, n_iterations,
-                                       mucoef_0, sliding="linear",
-                                       periodic=False):
+def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
+                                         b, ice_mask, n_iterations,
+                                         mucoef_0, sliding="linear",
+                                         periodic=False,
+                                         temperature_field=None):
 
+    if temperature_field is None:
+        temperature_field = (jnp.zeros((ny,nx))+258.15)
 
     #functions for various things:
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
     cc_gradient                                = cc_gradient_function(dy, dx)
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
-    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
-    
+   
 
-    viscosity_fct = fc_viscosity_function_new(ny, nx, dy, dx, 
-                                                   extrapolate_over_cf,
-                                                   add_uv_ghost_cells,
-                                                   add_scalar_ghost_cells,
-                                                   interp_cc_to_fc,
-                                                   ew_gradient, ns_gradient,
-                                                   ice_mask, mucoef_0)
-    beta_fct = beta_function(b, sliding)
+    #DIVA-specific functions from grid:
+    diva_viscosity = diva_cc_viscosity_function(dy, dx, cc_vel_gradient, mucoef_0, temperature_field)
+    beta_raw_fct   = beta_function(b, sliding)
+    beta_eff_fct   = diva_beta_eff_function(beta_raw_fct)
+    new_shear      = diva_vertical_shear_function()
+    reconstruct_3d = diva_reconstruct_3d_velocity_function()
+
 
     get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,
                                                        interp_cc_to_fc,
@@ -1049,19 +1050,6 @@ def make_diva_velocity_solver_function(ny, nx, dy, dx,
                                                        add_uv_ghost_cells,
                                                        add_scalar_ghost_cells,
                                                        extrapolate_over_cf)
-    
-    get_uv_residuals_nonlinear_ssa = compute_ssa_uv_residuals_function(
-                                                       ny, nx, dy, dx, b,
-                                                       beta_fct, ice_mask,
-                                                       interp_cc_to_fc,
-                                                       ew_gradient, ns_gradient,
-                                                       cc_gradient,
-                                                       add_uv_ghost_cells,
-                                                       add_scalar_ghost_cells,
-                                                       extrapolate_over_cf, mucoef_0)
-
-    
-
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
@@ -1100,62 +1088,89 @@ def make_diva_velocity_solver_function(ny, nx, dy, dx,
 
    
     la_solver = create_sparse_petsc_la_solver_with_custom_vjp(coords, (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
                                                               ksp_type="gmres",
                                                               preconditioner="hypre",
                                                               precondition_only=False,
                                                               ksp_max_iter=60,
                                                               monitor_ksp=False)
 
-
-
     def solver(q, C, u_trial, v_trial, h):
-        u_trial = jnp.where(h>1e-10, u_trial, 0)
-        v_trial = jnp.where(h>1e-10, v_trial, 0)
+        u_trial = jnp.where(h > 1e-10, u_trial, 0)
+        v_trial = jnp.where(h > 1e-10, v_trial, 0)
 
         u_1d = u_trial.copy().reshape(-1)
         v_1d = v_trial.copy().reshape(-1)
         h_1d = h.copy().reshape(-1)
 
-        residual = jnp.inf
-        init_res = 0
+        zs = define_z_coordinates(b, h, n_levels)
+        dudz = jnp.zeros((ny, nx, n_levels))
+        dvdz = jnp.zeros((ny, nx, n_levels))
 
         for i in range(n_iterations):
 
-            mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
-            beta = beta_fct(C, u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+            u_va = u_1d.reshape((ny, nx))
+            v_va = v_1d.reshape((ny, nx))
 
+            #1. update 3D viscosity from current (u_va, v_va, dudz, dvdz),
+            #   vertically average it
+            mu_vv, mu_va = diva_viscosity(q, u_va, v_va, dudz, dvdz, zs)
+
+
+            #2. Arthern F2 integral, then beta_eff
+            f2 = arthern_function(mu_vv, zs, m=2)
+            beta, beta_eff = beta_eff_fct(C, u_vv[..., 0], v_vv[..., 0], h, f2)
+
+
+            #3. interpolate the vertically-averaged viscosity to faces
+            mu_va_gc = add_scalar_ghost_cells(mu_va)
+            mu_ew, mu_ns = interp_cc_to_fc(mu_va_gc)
+            #to account for calving front boundary condition, set effective viscosities
+            #of faces of all cells with zero thickness to zero:
+            mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+            mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+            mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+            mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+
+            #4. linear solve for (u_va, v_va) from linear SSA formulation
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_linear_ssa,
-                                                 (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta)
+                                                 (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta_eff)
                                                           )
-
-            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
+            nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],
                                              dJv_du[mask], dJv_dv[mask]])
 
-           
-            #nz_jac_values = jnp.where(jnp.abs(nz_jac_values) < 1e-10, 0.0, nz_jac_values)
-            #jax.debug.print("{x}", x=nz_jac_values)
+            rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d,
+                                                                mu_ew, mu_ns, beta_eff))
 
-            rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
-
-            
             du = la_solver(nz_jac_values, rhs)
 
             u_1d = u_1d + du[:(ny*nx)]
             v_1d = v_1d + du[(ny*nx):]
-            
-            rhs_new = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
-            if i==0:
-                initial_residual = jnp.max(rhs)
+
+            rhs_new = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d,
+                                                                    mu_ew, mu_ns, beta_eff))
+            if i == 0:
+                initial_residual = jnp.max(jnp.abs(rhs))
             print(f"linear residual reduction factor: {jnp.max(jnp.abs(rhs))/jnp.max(jnp.abs(rhs_new))}")
 
-        final_residual = jnp.max(jnp.abs(rhs_new))
+            #5. update dudz/dvdz for the next iteration's viscosity (Eq. 21)
+            u_va = u_1d.reshape((ny, nx))
+            v_va = v_1d.reshape((ny, nx))
+            dudz, dvdz = new_shear(mu_vv, u_va, v_va, beta_eff, zs)
 
+        final_residual = jnp.max(jnp.abs(rhs_new))
         print("----------")
         print("Final residual: {}".format(final_residual))
         print("Total residual reduction factor: {}".format(initial_residual/final_residual))
         print("----------")
-        
-        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+        u_va = u_1d.reshape((ny, nx))
+        v_va = v_1d.reshape((ny, nx))
+
+        #reconstruct the full 3D velocity field for diagnostics
+        u_vv, v_vv = reconstruct_3d(u_va, v_va, dudz, dvdz, beta, f2, zs)
+
+        return u_va, v_va, u_vv, v_vv, zs
 
     return solver
 
