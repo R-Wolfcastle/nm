@@ -422,9 +422,326 @@ def plot_dmda_solution(dm, u, nr, nc):
 
         return U
 
-plot_dmda_solution(dm, u_global, nr, nc)
 
+#def plot_dmda_solution_scattered(dm, u, nr, nc):
+#
+#    rank = MPI.COMM_WORLD.rank
+#    comm = MPI.COMM_WORLD
+#
+#    #
+#    # local owned portion (not ghosted)
+#    #
+#    ulocal = dm.getVecArray(u)[:,:]
+#
+#    (y0, y1), (x0, x1) = dm.getRanges()
+#
+#    payload = (
+#        y0,
+#        y1,
+#        x0,
+#        x1,
+#        np.array(ulocal, copy=True)
+#    )
+#
+#    gathered = comm.gather(payload, root=0)
+#
+#    if rank == 0:
+#
+#        U = np.zeros((nr, nc))
+#
+#        plot, subplots = plt.figure(figsize=, subplots=)
+#
+#        for y0, y1, x0, x1, block in gathered:
+#
+#            U[y0:y1, x0:x1] = block
+#
+#            plt.figure()
+#            plt.imshow(U, origin='upper', cmap="gnuplot2")
+#            plt.colorbar()
+#            plt.show()
+#
+#        return U
+def plot_dmda_solution_scattered(dm, u, nr, nc, pad=2):
 
+    rank = MPI.COMM_WORLD.rank
+    comm = MPI.COMM_WORLD
+
+    ulocal = dm.getVecArray(u)[:, :]
+
+    (y0, y1), (x0, x1) = dm.getRanges()
+
+    payload = (
+        y0,
+        y1,
+        x0,
+        x1,
+        np.array(ulocal, copy=True)
+    )
+
+    gathered = comm.gather(payload, root=0)
+
+    if rank == 0:
+
+        px, py = dm.getProcSizes()
+
+        # Determine unique processor-grid boundaries
+        xs = sorted(set(x0 for y0, y1, x0, x1, block in gathered))
+        ys = sorted(set(y0 for y0, y1, x0, x1, block in gathered))
+
+        blocks = [[None for _ in range(px)] for _ in range(py)]
+
+        for y0, y1, x0, x1, block in gathered:
+            i = xs.index(x0)
+            j = ys.index(y0)
+            blocks[j][i] = block
+
+        row_heights = [
+            max(blocks[j][i].shape[0] for i in range(px))
+            for j in range(py)
+        ]
+
+        col_widths = [
+            max(blocks[j][i].shape[1] for j in range(py))
+            for i in range(px)
+        ]
+
+        H = sum(row_heights) + pad * (py - 1)
+        W = sum(col_widths) + pad * (px - 1)
+
+        canvas = np.full((H, W), np.nan)
+
+        yoff = 0
+        for j in range(py):
+
+            xoff = 0
+            for i in range(px):
+
+                block = blocks[j][i]
+                h, w = block.shape
+
+                canvas[yoff:yoff+h, xoff:xoff+w] = block
+
+                xoff += col_widths[i] + pad
+
+            yoff += row_heights[j] + pad
+
+        plt.figure(figsize=(8, 8))
+        plt.imshow(canvas, origin="upper", cmap="gnuplot2")
+        plt.colorbar()
+        plt.axis("off")
+        plt.show()
+
+        return canvas
+
+def plot_dmda_solution_subplots(dm, u):
+
+    rank = MPI.COMM_WORLD.rank
+    comm = MPI.COMM_WORLD
+
+    ulocal = dm.getVecArray(u)[:, :]
+
+    (y0, y1), (x0, x1) = dm.getRanges()
+
+    payload = (
+        y0,
+        y1,
+        x0,
+        x1,
+        np.array(ulocal, copy=True)
+    )
+
+    gathered = comm.gather(payload, root=0)
+
+    if rank != 0:
+        return None
+
+    px, py = dm.getProcSizes()
+
+    xs = sorted(set(x0 for y0, y1, x0, x1, block in gathered))
+    ys = sorted(set(y0 for y0, y1, x0, x1, block in gathered))
+
+    blocks = [[None for _ in range(px)] for _ in range(py)]
+    metadata = [[None for _ in range(px)] for _ in range(py)]
+
+    for y0, y1, x0, x1, block in gathered:
+
+        i = xs.index(x0)
+        j = ys.index(y0)
+
+        blocks[j][i] = block
+        metadata[j][i] = (x0, x1, y0, y1)
+
+    # Shared colour scale across all subdomains
+    vmin = min(
+        np.nanmin(block)
+        for row in blocks
+        for block in row
+    )
+
+    vmax = max(
+        np.nanmax(block)
+        for row in blocks
+        for block in row
+    )
+
+    fig, axes = plt.subplots(
+        py,
+        px,
+        figsize=(4 * px, 4 * py),
+        squeeze=False,
+        constrained_layout=True
+    )
+
+    for j in range(py):
+        for i in range(px):
+
+            ax = axes[j, i]
+
+            block = blocks[j][i]
+            x0, x1, y0, y1 = metadata[j][i]
+
+            im = ax.imshow(
+                block,
+                origin="upper",
+                cmap="gnuplot2",
+                vmin=vmin,
+                vmax=vmax
+            )
+
+            ax.set_title(
+                f"x:[{x0},{x1})  y:[{y0},{y1})"
+            )
+
+            ax.set_xlabel("local x")
+            ax.set_ylabel("local y")
+
+    ## One shared colourbar
+    #fig.colorbar(
+    #    im,
+    #    ax=axes.ravel().tolist(),
+    #    shrink=0.9,
+    #    pad=0.02
+    #)
+    fig.colorbar(
+        im,
+        ax=axes,
+        location="right",
+        shrink=0.9
+    )
+
+    #plt.tight_layout()
+    plt.show()
+
+    return blocks
+
+def plot_dmda_solution_subplots(dm, u):
+
+    rank = MPI.COMM_WORLD.rank
+    comm = MPI.COMM_WORLD
+
+    ulocal = dm.getVecArray(u)[:, :]
+
+    (y0, y1), (x0, x1) = dm.getRanges()
+
+    payload = (
+        y0,
+        y1,
+        x0,
+        x1,
+        np.array(ulocal, copy=True)
+    )
+
+    gathered = comm.gather(payload, root=0)
+
+    if rank != 0:
+        return None
+
+    # Determine processor-grid structure from the actual decomposition
+    xs = sorted(set(x0 for y0, y1, x0, x1, block in gathered))
+    ys = sorted(set(y0 for y0, y1, x0, x1, block in gathered))
+
+    px = len(xs)
+    py = len(ys)
+
+    blocks = [[None for _ in range(px)] for _ in range(py)]
+    metadata = [[None for _ in range(px)] for _ in range(py)]
+
+    for y0, y1, x0, x1, block in gathered:
+
+        i = xs.index(x0)
+        j = ys.index(y0)
+
+        blocks[j][i] = block
+        metadata[j][i] = (x0, x1, y0, y1)
+
+    # Shared colour scale
+    vmin = min(
+        np.nanmin(block)
+        for row in blocks
+        for block in row
+        if block is not None
+    )
+
+    vmax = max(
+        np.nanmax(block)
+        for row in blocks
+        for block in row
+        if block is not None
+    )
+
+    fig, axes = plt.subplots(
+        py,
+        px,
+        figsize=(4 * px, 4 * py),
+        squeeze=False,
+        constrained_layout=True
+    )
+
+    im = None
+
+    for j in range(py):
+        for i in range(px):
+
+            ax = axes[j, i]
+
+            block = blocks[j][i]
+
+            if block is None:
+                ax.axis("off")
+                continue
+
+            x0, x1, y0, y1 = metadata[j][i]
+
+            im = ax.imshow(
+                block,
+                origin="upper",
+                cmap="gnuplot2",
+                vmin=vmin,
+                vmax=vmax
+            )
+
+            ax.set_title(
+                f"x:[{x0},{x1})  y:[{y0},{y1})"
+            )
+
+            ax.set_xlabel("local x")
+            ax.set_ylabel("local y")
+
+    if im is not None:
+        fig.colorbar(
+            im,
+            ax=axes,
+            location="right",
+            shrink=0.9
+        )
+
+    plt.show()
+
+    return blocks
+
+#plot_dmda_solution(dm, u_global, nr, nc)
+#plot_dmda_solution_scattered(dm, u_global, nr, nc)
+plot_dmda_solution_subplots(dm, u_global)
 
 #############gunk:
 

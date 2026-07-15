@@ -125,6 +125,8 @@ def long_ice_shelf():
     C = C.at[5:-5, 1:].set(0)
     C = C.at[:, :5].set(0)
 
+    #C = jnp.zeros_like(b)
+
     mucoef_0 = jnp.ones_like(C)
     q = jnp.zeros_like(mucoef_0)
     ice_mask = jnp.where(thk>0, 1, 0)
@@ -253,9 +255,10 @@ def adv_test():
     u_init = jnp.zeros_like(b) + 100
     v_init = jnp.zeros_like(b)
     D_init = v_init.copy()
-    D_init = D_init.at[:, 50:54].set(0.9)
+    D_init = D_init.at[:, 46:54].set(0.9)
     
-    
+    plt_dir = f"{nm_home}/bits_of_data/adv_tests/8/"
+
     n_timesteps = 400
     
     prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
@@ -263,10 +266,11 @@ def adv_test():
                                                          b, ice_mask,
                                                          4, 6, n_timesteps,
                                                          mucoef_0, C,
-                                                         sliding="linear")
+                                                         sliding="linear",
+                                                         plt_dir=plt_dir)
     
-    os.system(f"mkdir -p {nm_home}/bits_of_data/adv_tests/2/")
-    os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/adv_tests/2/")
+    os.system(f"mkdir -p {plt_dir}")
+    os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {plt_dir}")
     
     u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
 
@@ -307,12 +311,8 @@ print(f"DOFS: {jnp.log2(nr*nc)}")
 u_init = jnp.zeros_like(b)
 v_init = jnp.zeros_like(b)
 
-#D_init = 1 -  mucoef_0*jnp.exp(q)
-#D_init = jnp.maximum(D_init, 0.01)
-##D_init = jnp.zeros_like(q)
-
-#mucoef_0 = mucoef_0*jnp.exp(q)
-#q = jnp.zeros_like(q)
+#D_init = 1 -  mucoef_0
+#mucoef_0 = jnp.ones_like(D_init)
 
 D_init = jnp.zeros_like(b)
 mucoef_0 = jnp.where(grounded==1, mucoef_0, 1)
@@ -342,23 +342,30 @@ delta_y, delta_x = res, res
 #raise
 
 
-n_timesteps = 400
+n_timesteps = 500
+
+dir_ = f"{nm_home}/bits_of_data/adv_tests/3/"
+
+print(dir_)
+raise
 
 prognostic_solver = make_picnewton_vel_expl_dam_solver_function_noextrap(nr, nc,
                                                      delta_y, delta_x,
                                                      b, ice_mask,
                                                      2, 5, n_timesteps,
                                                      mucoef_0, C,
-                                                     sliding="linear")
+                                                     sliding="linear",
+                                                     plt_dir=dir_)
 
-os.system(f"mkdir -p {nm_home}/bits_of_data/ss_damage_cook/12/")
-os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {nm_home}/bits_of_data/ss_damage_cook/12/")
+
+os.system(f"mkdir -p {dir_}")
+os.system(f"cp {nm_home}/solvers/nonlinear_solvers.py {dir_}")
 
 u, v, D = prognostic_solver(jnp.zeros((nr, nc)), jnp.zeros((nr, nc)), u_init, v_init, thk, D_init)
 
 raise
 
-jnp.save(f"{nm_home}/bits_of_data/ss_damage_cook/12/D.npy", D)
+jnp.save(f"{dir_}/D.npy", D)
 
 
 from pathlib import Path
@@ -366,8 +373,6 @@ from PIL import Image
 
 
 def make_speed_gif():
-    dir_ = f"{nm_home}/bits_of_data/ss_damage_cook/12/"
-
     img_dir = Path(dir_)
 
     #pngs = sorted(img_dir.glob("*.png"))

@@ -16812,3 +16812,5 @@ Newton residual reduction factor: 43643068516.81542
 TOTAL residual reduction factor: 75795827290.94543
 ===========================================
 Saved GIF to /uolstore/home/users/eartsu/Documents/nm//bits_of_data/ss_damage_cook/5//damgif.gif
+/uolstore/Research/b/b0133/eartsu/miniconda3_foe_cpu/envs/nme_lm/lib/python3.14/site-packages/osgeo/gdal.py:606: FutureWarning: Neither gdal.UseExceptions() nor gdal.DontUseExceptions() has been explicitly called. In GDAL 4.0, exceptions will be enabled by default.
+  warnings.warn(
