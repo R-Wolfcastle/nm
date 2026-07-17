@@ -296,3 +296,74 @@ def tiny_ice_shelf(resolution=30):
 
     return lx, ly, nr, nc, x, y, delta_x, delta_y, thk, b, C, mucoef_0, q
 
+
+
+def mismip_domain(resolution=2000, buffer_km=20, thk_init=None, A=2.0e-17, beta2=1.0e4):
+    """
+    MISMIP+ domain (Cornford et al. 2020, Sect 2.1).
+
+    Domain: 640 km (along-flow, x) x 80 km (across-flow, y), y in [-40, 40] km
+    so that the channel centerline is y=0
+    
+    x=0: no-slip.  y=+-40km: free-slip.  x=640km: calving front.
+
+    + buffer (20 km) of ice-free cells.
+    """
+   
+    #Table 1:
+    xbar = 300_000.0
+    B0, B2, B4, B6 = -150.0, -728.8, 343.91, -50.75
+    wc, fc, dc = 24_000.0, 4_000.0, 500.0
+
+    lx_ice = 640_000.0
+    ly = 80_000.0
+    lx = lx_ice + buffer_km * 1_000.0
+
+    nc = int(lx / resolution)
+    nr = int(ly / resolution)
+
+    x = jnp.linspace(0, lx, nc)
+    y = jnp.linspace(-ly/2, ly/2, nr)
+
+    delta_x = x[1] - x[0]
+    delta_y = y[1] - y[0]
+
+    xx, yy = jnp.meshgrid(x, y)
+
+    #topg
+    Bx = B0 + B2*(xx/xbar)**2 + B4*(xx/xbar)**4 + B6*(xx/xbar)**6
+    By = dc * (1.0/(1.0 + jnp.exp(-2.0*(yy - wc)/fc))
+               + 1.0/(1.0 + jnp.exp( 2.0*(yy + wc)/fc)))
+    b = jnp.maximum(Bx + By, -720.0)
+
+    #Stickiness
+    C = jnp.zeros((nr, nc)) + beta2
+
+
+    #initial thickness guess
+    #A crude but serviceable first guess: linearly taper from a plausible
+    #divide thickness down toward 0 at the (nominal) calving front, so the
+    #spin-up isn't starting from either "flat slab" or "zero everywhere".
+    #This is deliberately not a solution of anything -- see the discussion
+    #below for how much this actually matters and cheaper ways to improve it.
+    if thk_init is None:
+        h_divide = 600.0
+        thk = jnp.clip(h_divide * (1.0 - xx/lx_ice), 10.0, h_divide)
+        thk = jnp.where(xx > lx_ice, 0.0, thk)
+    else:
+        thk = thk_init
+
+    surface = jnp.maximum(b + thk, thk*(1.0 - c.RHO_I/c.RHO_W))
+    grounded = jnp.where((b + thk) > thk*(1.0 - c.RHO_I/c.RHO_W), 1, 0)
+    ice_mask = (thk > 0).astype(int)
+
+    mucoef_0 = jnp.ones((nr, nc))
+    q = jnp.zeros((nr, nc))
+
+    return (lx, ly, nr, nc, x, y, delta_x, delta_y,
+            thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
+
+
+
+
+

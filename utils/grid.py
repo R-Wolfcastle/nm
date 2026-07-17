@@ -105,8 +105,6 @@ def interp_fc_to_nc(var_ew, var_ns):
         var_ns[:-1, :-1] + var_ns[:-1, 1:]     # south/north faces around node
     )
 
-
-
 @jax.jit
 def interp_cc_to_nc(var):
     return 0.25 * (var[:-1, :-1] + var[1:, :-1] + var[:-1, 1:] + var[1:, 1:])
@@ -830,16 +828,22 @@ def linear_extrapolate_over_cf_function_cornersafe(thk):
         u1_choice = jnp.take_along_axis(u1, best_k[None, ...], axis=0)[0]
         u2_choice = jnp.take_along_axis(u2, best_k[None, ...], axis=0)[0]
 
-        #cc_field_extrapolated = cc_field\
-        #                                 + cf_adjacent_flat*\
-        #                                        (2*u1_choice - u2_choice)\
-        #                                 + cf_adjacent_corners*\
-        #            jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
+        ## LINEAR EXTRAP
         cc_field_extrapolated = cc_field\
                                          + cf_adjacent_flat*\
-                                                (u1_choice)\
+                                                (2*u1_choice - u2_choice)\
                                          + cf_adjacent_corners*\
                     jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
+
+        ## no extrapolation
+        #cc_field_extrapolated = cc_field
+
+        ## COPY LAST VEL
+        #cc_field_extrapolated = cc_field\
+        #                                 + cf_adjacent_flat*\
+        #                                        (u1_choice)\
+        #                                 + cf_adjacent_corners*\
+        #            jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
         
         return cc_field_extrapolated
 
@@ -1701,3 +1705,61 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
 
  #       return mu_ew, mu_ns
  #   return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)
+
+
+
+def gl_aware_driving_stress_function(dy, dx):
+    """
+    Stephy Cornford et al. (2016) Eq. (2)
+    """
+    def h_gradds(s, h, grounded):
+        #Note: mode='edge' pads with the edge values of the array
+
+        s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
+        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+        s_s = jnp.pad(s, ((0,1),(0,0)), mode='edge')[1:, :]
+        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+
+        h_n = jnp.pad(h, ((1,0),(0,0)), mode='edge')[:-1, :]
+        h_e = jnp.pad(h, ((0,0),(0,1)), mode='edge')[:, 1:]
+        h_s = jnp.pad(h, ((0,1),(0,0)), mode='edge')[1:, :]
+        h_w = jnp.pad(h, ((0,0),(1,0)), mode='edge')[:, :-1]
+        
+        g_n = jnp.pad(grounded, ((1,0),(0,0)), mode='edge')[:-1, :]
+        g_e = jnp.pad(grounded, ((0,0),(0,1)), mode='edge')[:, 1:]
+        g_s = jnp.pad(grounded, ((0,1),(0,0)), mode='edge')[1:, :]
+        g_w = jnp.pad(grounded, ((0,0),(1,0)), mode='edge')[:, :-1]
+        
+        same_n = (g_n == grounded).astype(int)
+        same_e = (g_e == grounded).astype(int)
+        same_s = (g_s == grounded).astype(int)
+        same_w = (g_w == grounded).astype(int)
+
+        central_x   = h * (s_e - s_w) / (2*dx)
+        one_sided_e = 0.5 * (h_e + h) * (s_e - s) / dx
+        one_sided_w = 0.5 * (h_w + h) * (s - s_w) / dx
+
+        hdsdx = jnp.where(same_e & same_w, central_x,
+                    jnp.where(same_w, one_sided_w,
+                        jnp.where(same_e, one_sided_e,
+                                  central_x
+                                 )
+                             )
+                         )
+
+        central_y   = h * (s_n - s_s) / (2*dy)
+        one_sided_n = 0.5 * (h_n + h) * (s_n - s) / dy
+        one_sided_s = 0.5 * (h_s + h) * (s - s_s) / dy
+        
+        hdsdy = jnp.where(same_n & same_s, central_y,
+                    jnp.where(same_n, one_sided_n,
+                        jnp.where(same_s, one_sided_s,
+                                  central_y
+                                 )
+                             )
+                         )
+        return hdsdx, hdsdy
+
+    return jax.jit(h_gradds)
+
+

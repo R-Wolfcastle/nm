@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 rho = 900
 rho_w = 1000
@@ -116,7 +116,7 @@ def make_gif(arrays, filename="animation.gif", interval=200, cmap="viridis", vmi
     print(f"Saved gif to {filename}")
 
 
-def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, showcbar=True, savepath=None, show=True, title=None):
+def show_vel_field(u, v, spacing=1, cmap='RdYlBu_r', vmin=None, vmax=None, showcbar=True, savepath=None, show=True, title=None):
     """
     Displays the magnitude of a 2D vector field and overlays flow direction lines.
 
@@ -160,6 +160,88 @@ def show_vel_field(u, v, spacing=1, cmap='Spectral_r', vmin=None, vmax=None, sho
 
     if show:
         plt.show()
+
+
+def show_vel_field_2(
+    u,
+    v,
+    spacing=1,
+    cmap='RdYlBu_r',
+    vmin=None,
+    vmax=None,
+    showcbar=True,
+    savepath=None,
+    show=True,
+    title=None,
+):
+    """
+    Display the magnitude of a 2D velocity field with streamlines.
+
+    Parameters
+    ----------
+    u : 2D array
+        x-component of the velocity field.
+    v : 2D array
+        y-component of the velocity field.
+    spacing : float
+        Controls streamline density. Larger values give fewer lines.
+    cmap : str
+        Matplotlib colormap.
+    """
+    assert u.shape == v.shape, "u and v must have the same shape"
+
+    u = jnp.flipud(u)
+    v = jnp.flipud(v)
+
+    magnitude = np.sqrt(u**2 + v**2)
+
+    ny, nx = u.shape
+
+    x = np.arange(nx)
+    y = np.arange(ny)
+    X, Y = np.meshgrid(x, y)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    im = ax.imshow(
+        magnitude,
+        origin='lower',
+        cmap=cmap,
+        extent=(0, nx, 0, ny),
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    if showcbar:
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        fig.colorbar(im, cax=cax, label="Speed (m/yr)")
+
+    ax.streamplot(
+        X,
+        Y,
+        u,
+        v,
+        color='k',
+        density=1 / spacing,
+        linewidth=0.25,
+        arrowstyle='-'
+    )
+
+    if title is not None:
+        ax.set_title(title)
+
+    plt.tight_layout()
+
+    if savepath is not None:
+        plt.savefig(savepath, dpi=100, bbox_inches='tight')
+
+    if show:
+        plt.show()
+
+    return fig, ax
+
+
 
 def show_damage_field(d, spacing=1, cmap='cubehelix_r', vmin=0, vmax=1, showcbar=True, savepath=None, show=True, title=None):
     d = jnp.flipud(d)

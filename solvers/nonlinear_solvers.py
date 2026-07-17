@@ -1023,7 +1023,8 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                                          b, ice_mask, n_iterations,
                                          mucoef_0, sliding="linear",
                                          periodic=False,
-                                         temperature_field=None):
+                                         temperature_field=None,
+                                         n_timesteps=0):
 
     if temperature_field is None:
         temperature_field = (jnp.zeros((ny,nx))+258.15)
@@ -1035,7 +1036,7 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
     cc_vel_gradient                            = cc_vel_gradient_function(dy, dx, add_uv_ghost_cells)
-   
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx) 
 
     #DIVA-specific functions from grid:
     diva_viscosity = diva_cc_viscosity_function(dy, dx, cc_vel_gradient, mucoef_0, temperature_field)
@@ -1045,13 +1046,22 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
     reconstruct_3d = diva_reconstruct_3d_velocity_function()
 
 
-    get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,
+
+
+    advection_step = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
+                                            add_uv_ghost_cells, add_scalar_ghost_cells,
+                                            method="PPM")
+
+
+
+    get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_gl_aware(ny, nx, dy, dx, b,
                                                        interp_cc_to_fc,
                                                        ew_gradient, ns_gradient,
                                                        cc_gradient,
                                                        add_uv_ghost_cells,
                                                        add_scalar_ghost_cells,
-                                                       extrapolate_over_cf)
+                                                       extrapolate_over_cf,
+                                                       hgrads_fct)
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
@@ -1096,7 +1106,7 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                                                               ksp_max_iter=60,
                                                               monitor_ksp=False)
 
-    def solver(q, C, u_trial, v_trial, h):
+    def momentum_solver(q, C, u_trial, v_trial, h):
         u_trial = jnp.where(h > 1e-10, u_trial, 0)
         v_trial = jnp.where(h > 1e-10, v_trial, 0)
 
@@ -1159,9 +1169,15 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
             u_va = u_1d.reshape((ny, nx))
             v_va = v_1d.reshape((ny, nx))
             dudz, dvdz = new_shear(mu_vv, u_va, v_va, beta_eff, zs)
-            
+           
+            #dudz *= 0
+            #dvdz *= 0
+
             #6. reconstruct the full 3D velocity field
             u_vv, v_vv = reconstruct_3d(u_va, v_va, dudz, dvdz, beta, f2, zs)
+            #weirdly, it seems that u_va does not match the average taken over the vertical
+            #layers of u_vv after this function is executed... Maybe that disappears
+            #as the number of vertical levels is increased...
 
 
         final_residual = jnp.max(jnp.abs(rhs_new))
@@ -1171,8 +1187,47 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
         print("----------")
 
         return u_va, v_va, u_vv, v_vv, zs
+    
 
-    return solver
+    def run_model_forward(q, C, u_trial, v_trial, h_init):
+        h = h_init
+        u_va, v_va = u_trial, v_trial
+
+        t_cum = 0
+        if n_timesteps:
+            for ts in range(n_timesteps):
+                #plt.imshow(h)
+                #plt.colorbar()
+                #plt.show()
+                
+                u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, C, u_va, v_va, h)
+
+                accumulation = jnp.where(h>0, 0.3, 0)
+
+                delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
+                print(delta_t)
+                
+                t_cum += delta_t
+                print(f"Time: {t_cum} years")
+
+                #delta_t = jnp.maximum(delta_t, 0.06)
+
+                h = advection_step(u_va.reshape(-1), v_va.reshape(-1),
+                                   h.reshape(-1), source=accumulation,
+                                   delta_t=delta_t)
+        else:
+            u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, C, u_va, v_va, h)
+
+        dhdt_final = ( advection_step(u_va.reshape(-1), v_va.reshape(-1),
+                               h.reshape(-1), source=accumulation,
+                               delta_t=delta_t)\
+                      - h 
+                     ) /delta_t
+
+
+        return u_va, v_va, u_vv, v_vv, zs, h, dhdt_final
+
+    return run_model_forward
 
 
 def make_picard_velocity_solver_function_custom_vjp(ny, nx, dy, dx,
@@ -2448,7 +2503,8 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
 
 
 def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc, 
-                           add_uv_ghost_cells, add_s_ghost_cells):
+                           add_uv_ghost_cells, add_s_ghost_cells,
+                           method="PPM"):
 
     def advection_step(u_1d, v_1d, h_1d, source=0, delta_t=0.08):
         u = u_1d.reshape((ny, nx))
@@ -2465,18 +2521,43 @@ def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
         u_fc_ew, _ = interp_cc_to_fc(u_full)
         _, v_fc_ns = interp_cc_to_fc(v_full)
 
-        u_signs = jnp.where(u_fc_ew>0, 1, -1)
-        v_signs = jnp.where(v_fc_ns>0, 1, -1)
 
+        if method=="FOU": 
+            u_signs = jnp.where(u_fc_ew>0, 1, -1)
+            v_signs = jnp.where(v_fc_ns>0, 1, -1)
 
-        ##face-centred values according to first-order upwinding
-        h_fc_fou_ew = jnp.where(u_fc_ew>0, h_full[1:-1,:-1], h_full[1:-1, 1:])
-        h_fc_fou_ns = jnp.where(v_fc_ns>0, h_full[1:, 1:-1], h_full[-1:,1:-1])
+            ##face-centred values according to first-order upwinding
+            h_fc_fou_ew = jnp.where(u_fc_ew>0, h_full[1:-1,:-1], h_full[1:-1, 1:])
+            h_fc_fou_ns = jnp.where(v_fc_ns>0, h_full[1:, 1:-1], h_full[-1:,1:-1])
 
-        flux_term = (u_fc_ew[:,1:]*h_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*h_fc_fou_ew[:,:-1])*dy*delta_t +\
-                    (v_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx*delta_t
+            flux_term = (u_fc_ew[:,1:]*h_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*h_fc_fou_ew[:,:-1])*dy*delta_t +\
+                        (v_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx*delta_t
+
+        elif method=="PPM":
+            h_fc_fou_ew = jnp.where(
+                u_fc_ew > 0,
+                h_full[1:-1, :-1],
+                h_full[1:-1, 1:]
+            )
+
+            h_fc_fou_ns = jnp.where(
+                v_fc_ns > 0,
+                h_full[1:, 1:-1],
+                h_full[:-1, 1:-1]
+            )
+
+            flux_term = - (
+                (u_fc_ew[:,:-1] * h_fc_fou_ew[:,:-1]
+                 - u_fc_ew[:,1:] * h_fc_fou_ew[:,1:])
+                * dy * delta_t
+                +
+                (v_fc_ns[1:,:] * h_fc_fou_ns[1:,:]
+                 - v_fc_ns[:-1,:] * h_fc_fou_ns[:-1,:])
+                * dx * delta_t
+            )
+
         #to keep calving front in same location, prevent any flux into or out of ice-free cells!
-        flux_term = jnp.where(h>1e-2, flux_term, 0)
+        flux_term = jnp.where(h>0, flux_term, 0)
 
         return h + source*delta_t - flux_term/(dy*dx)
 
@@ -2628,147 +2709,6 @@ def make_advsrc_damage_stepper(nx, ny, dx, dy, interp_cc_to_fc,
 #    #return jax.jit(advection_step)
 #    return advection_step
 
-
-
-
-
-
-
-
-
-##########FIRST PPM ATTEMPT!
-
-#def ppm_reconstruct_1d(q, dx):
-#
-#    n = q.shape[0]
-#
-#    dq_cd  = jnp.zeros_like(q)
-#    dq_lsd = jnp.zeros_like(q)
-#    dq_rsd = jnp.zeros_like(q)
-#
-#    dq_cd  = dq_cd.at[1:-1].set((q[2:] - q[:-2])/(2*dx))
-#    dq_lsd = dq_lsd.at[1:].set((q[1:] - q[:-1])/dx)
-#    dq_rsd = dq_rsd.at[:-1].set((q[1:] - q[:-1])/dx)
-#    
-#
-#
-#
-#    same_sign = dq_lsd * dq_rsd > 0
-#    
-#    dq_lim = jnp.sign(dq_cd) * jnp.minimum(
-#        jnp.abs(dq_cd),
-#        jnp.minimum(
-#            jnp.abs(dq_lsd),
-#            jnp.abs(dq_rsd)
-#        )
-#    )
-#    
-#    dq = jnp.where(same_sign, dq_lim, 0.0)
-#
-#    ##find the smalest!
-#    #dq = jnp.sign(dq_cd) * jnp.minimum(
-#    #    jnp.abs(dq_cd),
-#    #    jnp.minimum(jnp.abs(dq_lsd), jnp.abs(dq_rsd))
-#    #)
-#
-#
-#    qL = jnp.zeros_like(q)
-#    qL = qL.at[1:].set(
-#        0.5*(q[:-1] + q[1:])
-#        - (1.0/6.0)*(dq[1:] - dq[:-1])*dx
-#    )
-#
-#    qR = jnp.zeros_like(q)
-#    qR = qR.at[:-1].set(qL[1:])
-#
-#    qL = qL.at[0].set(q[0])
-#    qR = qR.at[-1].set(q[-1])
-#
-#    # monotonicity constraint
-#
-#    q6 = 6*(q - 0.5*(qL + qR))
-#    dqlr = qR - qL
-#
-#    cond1 = ((qR-q)*(q-qL)) <= 0
-#    cond2 = dqlr**2 < dqlr*q6
-#    cond3 = -dqlr**2 > dqlr*q6
-#
-#    qL = jnp.where(cond1, q, qL)
-#    qR = jnp.where(cond1, q, qR)
-#
-#    qL = jnp.where(cond2, 3*q - 2*qR, qL)
-#    qR = jnp.where(cond3, 3*q - 2*qL, qR)
-#
-#
-#
-#
-#
-#    return qL, qR
-#
-#def ppm_flux_x(phi, u, dx, dt):
-#
-#    ny, nx = phi.shape
-#    
-#    reconstruct_phix = jax.vmap(ppm_reconstruct_1d,
-#                                in_axes=(0, None),
-#                                out_axes=(0, 0)
-#                               )
-#    phiL, phiR = reconstruct_phix(phi, dx)
-#
-#    #phiL = jnp.zeros_like(phi)
-#    #phiR = jnp.zeros_like(phi)
-#    #for j in range(ny):
-#    #    qL, qR = ppm_reconstruct_1d(phi[j], dx)
-#    #    phiL = phiL.at[j].set(qL)
-#    #    phiR = phiR.at[j].set(qR)
-#
-#
-#    u_face = 0.5*(u[:, :-1] + u[:, 1:])
-#
-#    left_state  = phiR[:, :-1]
-#    right_state = phiL[:, 1:]
-#
-#    phi_face = jnp.where(
-#        u_face > 0,
-#        left_state,
-#        right_state
-#    )
-#
-#    flux = u_face * phi_face
-#
-#    return flux
-#
-#def ppm_flux_y(phi, v, dy, dt):
-#
-#    ny, nx = phi.shape
-#
-#    reconstruct_phiy = jax.vmap(ppm_reconstruct_1d,
-#                                in_axes=(1, None),
-#                                out_axes=(1, 1)
-#                               )
-#    phiL, phiR = reconstruct_phiy(phi, dy)
-#
-#    #phiL = jnp.zeros_like(phi)
-#    #phiR = jnp.zeros_like(phi)
-#    #for i in range(nx):
-#    #    qL, qR = ppm_reconstruct_1d(phi[:, i], dy)
-#    #    phiL = phiL.at[:, i].set(qL)
-#    #    phiR = phiR.at[:, i].set(qR)
-#
-#    v_face = 0.5*(v[:-1, :] + v[1:, :])
-#
-#    left_state  = phiR[:-1, :]
-#    right_state = phiL[1:, :]
-#
-#    phi_face = jnp.where(
-#        v_face > 0,
-#        right_state,
-#        left_state
-#    )
-#
-#    flux = v_face * phi_face
-#
-#    return flux
 
 
 
