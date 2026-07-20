@@ -97,7 +97,7 @@ def thing():
                                                       ice_mask,
                                                       n_iterations,
                                                       mucoef_0,
-                                                      sliding="linear",
+                                                      sliding="basic_weertman",
                                                       temperature_field=None,
                                                       n_timesteps=n_timesteps
                                                     )
@@ -128,7 +128,7 @@ def thing():
 resolution = 2000
 n_levels = 50
 n_iterations = 40
-n_timesteps = 250
+n_timesteps = 50
 
 (
     lx, ly, nr, nc,
@@ -138,16 +138,32 @@ n_timesteps = 250
     ice_mask, surface,
     grounded
 ) = mismip_domain(resolution=resolution)
-    
 
-thk = jnp.load(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{resolution}m_{n_timesteps}.npy")
 
-grounded = jnp.where((thk+b)>(thk*(1-c.RHO_I/c.RHO_W)), 1, 0)
+solver = make_diva3d_velocity_solver_function(nr, nc,
+                                              delta_y,
+                                              delta_x,
+                                              n_levels,
+                                              b,
+                                              ice_mask,
+                                              n_iterations,
+                                              mucoef_0,
+                                              sliding="basic_weertman",
+                                              temperature_field=None,
+                                              n_timesteps=n_timesteps
+                                            )
+        
+u_va, v_va, u_vv, v_vv, zs, thk_final, dhdt_final = solver(q, C, jnp.zeros_like(C), jnp.zeros_like(C), thk)
+
+print(f"max |dhdt| ={float(jnp.max(jnp.abs(dhdt_final)))}")
+#thk_final = jnp.load(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{resolution}m_{n_timesteps}.npy")
+
+grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
 
 plt.imshow(grounded)
 plt.show()
 
-plt.imshow(thk)
+plt.imshow(thk_final)
 plt.show()
 
 raise
