@@ -1019,12 +1019,14 @@ def make_coupled_quasi_newton_solver_function_cvjp(ny, nx, dy, dx,
 
     return solver
 
-def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
-                                         b, ice_mask, n_iterations,
-                                         mucoef_0, sliding="linear",
-                                         periodic=False,
-                                         temperature_field=None,
-                                         n_timesteps=0):
+
+def make_diva3d_solver_cvjp(ny, nx, dy, dx, n_levels,
+                            b, ice_mask, n_iterations,
+                            mucoef_0, C_0,
+                            sliding="linear",
+                            periodic=False,
+                            temperature_field=None,
+                            n_timesteps=0):
 
     if temperature_field is None:
         temperature_field = (jnp.zeros((ny,nx))+258.15)
@@ -1041,17 +1043,14 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
     #DIVA-specific functions from grid:
     diva_viscosity = diva_cc_viscosity_function(dy, dx, cc_vel_gradient, mucoef_0, temperature_field)
     beta_raw_fct   = beta_function(b, sliding)
-    beta_eff_fct   = diva_beta_eff_function(beta_raw_fct)
+    beta_eff_fct   = diva_beta_eff_function(beta_raw_fct, C_0)
     new_shear      = diva_vertical_shear_function()
     reconstruct_3d = diva_reconstruct_3d_velocity_function()
-
-
 
 
     advection_step = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                                             add_uv_ghost_cells, add_scalar_ghost_cells,
                                             method="PPM")
-
 
 
     get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_gl_aware(ny, nx, dy, dx, b,
@@ -1106,7 +1105,339 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                                                               ksp_max_iter=60,
                                                               monitor_ksp=False)
 
-    def momentum_solver(q, C, u_trial, v_trial, h):
+    def diva_iteration_update(q, p, h, zs, u_va_1d, v_va_1d, u_vv, v_vv, dudz, dvdz):
+
+        u_va = u_va_1d.reshape((ny,nx))
+        v_va = v_va_1d.reshape((ny,nx))
+        h_1d = h.reshape(-1)
+
+        #1. update 3D viscosity from current (u_va, v_va, dudz, dvdz),
+        #   vertically average it
+        mu_vv, mu_va = diva_viscosity(q, u_va, v_va, dudz, dvdz, zs)
+
+        #2. Arthern F2 integral, then beta_eff. Uses the LAGGED basal
+        f2 = arthern_function(mu_vv, zs, m=2)
+        beta, beta_eff = beta_eff_fct(p, u_vv[..., 0], v_vv[..., 0], h, f2)
+
+        #3. interpolate the vertically-averaged viscosity to faces;
+        #   zero it at calving-front faces
+        mu_va_gc = add_scalar_ghost_cells(mu_va)
+        mu_ew, mu_ns = interp_cc_to_fc(mu_va_gc)
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+
+        #4. linear solve for (u_va, v_va) from the linear SSA-form residual
+        dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_linear_ssa,
+                                             (u_va_1d, v_va_1d, h_1d, mu_ew, mu_ns, beta_eff)
+                                                      )
+        nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],
+                                         dJv_du[mask], dJv_dv[mask]])
+
+        rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_va_1d, v_va_1d, h_1d,
+                                                           mu_ew, mu_ns, beta_eff))
+
+        du = la_solver(nz_jac_values, rhs)
+
+        u_va_new = (u_va_1d + du[:(ny*nx)]).reshape((ny, nx))
+        v_va_new = (v_va_1d + du[(ny*nx):]).reshape((ny, nx))
+
+        #5. update dudz/dvdz for the next iteration's viscosity (Eq. 21)
+        dudz_new, dvdz_new = new_shear(mu_vv, u_va_new, v_va_new, beta_eff, zs)
+
+        #6. reconstruct the full 3D velocity field (the basal vel
+        #becomes lagged input to beta and beta_eff on next iteration)
+        u_vv_new, v_vv_new = reconstruct_3d(u_va_new, v_va_new, dudz_new, dvdz_new,
+                                            beta, f2, zs)
+
+        return u_va_new.reshape(-1), v_va_new.reshape(-1), u_vv_new, v_vv_new, dudz_new, dvdz_new
+
+    def adjoint_operator_prediff(u_va_1d, v_va_1d, u_vv, v_vv, dudz, dvdz, q, p, h, zs):
+        u_va_new_1d, v_va_new_1d, _,_,_,_ = diva_iteration_update(q, p, h, zs,
+                                                                  u_va_1d, v_va_1d,
+                                                                  u_vv, v_vv,
+                                                                  dudz, dvdz)
+        return u_va_1d - u_va_new_1d, v_va_1d - v_va_new_1d
+
+
+    def diva_fixed_point_solve(q, p, h, zs, u0, v0):
+        u_vv0 = jnp.zeros((ny, nx, n_levels)) + u0[..., None]
+        v_vv0 = jnp.zeros((ny, nx, n_levels)) + v0[..., None]
+        dudz0 = jnp.zeros((ny, nx, n_levels))
+        dvdz0 = jnp.zeros((ny, nx, n_levels))
+
+        state = (u0.reshape(-1), v0.reshape(-1),
+                 u_vv0, v_vv0, dudz0, dvdz0)
+        
+        mean_speed0 = jnp.mean(jnp.sqrt(state[0]**2 + state[1]**2 + 1e-12))
+        for _ in range(n_iterations):
+            state = diva_iteration_update(q, p, h, zs, *state)
+            mean_speed = jnp.mean(jnp.sqrt(state[0]**2 + state[1]**2 + 1e-12))
+            print(f"U ratio: {mean_speed0/mean_speed}")
+            mean_speed0 = mean_speed
+        return state
+
+
+    @jax.custom_vjp
+    def momentum_solver(q, p, u_trial, v_trial, h):
+        zs = define_z_coordinates(b, h, n_levels)
+        
+        u_va, v_va, u_vv, v_vv, dudz, dvdz = diva_fixed_point_solve(q, p, h, zs,
+                                                                    u_trial, v_trial)
+        return (u_va.reshape((ny,nx)),
+                v_va.reshape((ny,nx)),
+                u_vv, v_vv, zs)
+
+    def mom_solver_fwd(q, p, u0, v0, h):
+        zs = define_z_coordinates(b, h, n_levels)
+
+        state_star = diva_fixed_point_solve(q, p, h, zs, u0, v0)
+        #only the converged state and (q, p) needed on the backward pass.
+        #Not sure why I computed the jacobians on the forward pass before...
+        
+        u_va_1d, v_va_1d, u_vv, v_vv, dudz, dvdz = state_star
+
+        return ((u_va_1d.reshape((ny,nx)), v_va_1d.reshape((ny,nx)),
+                 u_vv, v_vv, zs), 
+                (q, p, h, zs, state_star))
+
+
+    #def diva_fp_solve_bwd(res, cotangent):
+    #    q, p, h, zs, state_star = res
+    #    #u_va_star, v_va_star, u_vv_star, v_vv_star, dudz_star, dvdz_star = *state_star
+
+    #    #Assuming that the derivatives of the functional with respect to
+    #    #u_vv, v_vv, dudz, dvdz are all zero anyway
+    #    u_bar, v_bar, _,_,_,_ = cotangent
+
+
+    #    dgu_du, dgv_du, dgu_dv, dgv_dv = sparse_jacrev(adjoint_operator_prediff, \
+    #                                                   (*state_star, q, p, h, zs)
+    #                                                  )
+    #    dg_dvel_nz_values = jnp.concatenate([dgu_du[mask], dgu_dv[mask],\
+    #                                         dgv_du[mask], dgv_dv[mask]])
+
+
+    #    lambda_ = la_solver(dg_dvel_nz_values,
+    #                        jnp.concatenate([u_bar.reshape(-1),
+    #                                         v_bar.reshape(-1)]),
+    #                        transpose=True)
+
+    #    lambda_u = lambda_[:(ny*nx)]
+    #    lambda_v = lambda_[(ny*nx):]
+
+    #    #phi_bar = (dG/dphi)^T lambda
+    #    _, pullback_function = jax.vjp(diva_iteration_update,
+    #                                   q, p, h, zs, *state_star
+    #                                  )
+    #    q_bar, p_bar, _,_,_,_,_,_,_,_ = pullback_function(
+    #                                        (
+    #                                          lambda_u,
+    #                                          lambda_v,
+    #                                          jnp.zeros((ny, nx, n_levels)),
+    #                                          jnp.zeros((ny, nx, n_levels)),
+    #                                          jnp.zeros((ny, nx, n_levels)),
+    #                                          jnp.zeros((ny, nx, n_levels))
+    #                                        )
+    #                                    )
+    #    
+    #    #I wonder if I can get away with just returning None for u_trial_bar and v_trial_bar...
+    #    return (q_bar.reshape((ny, nx)), p_bar.reshape((ny,nx)), None, None, None, None)
+
+    def mom_solver_bwd(res, cotangent):
+        q, p, h, zs, state_star = res
+   
+        #assuming u_vv_bar, v_vv_bar, zs_bar_out are zero
+        u_bar, v_bar, _,_,_ = cotangent
+    
+        u_va_star_1d, v_va_star_1d, u_vv_star, v_vv_star, dudz_star, dvdz_star = state_star
+    
+        dgu_du, dgv_du, dgu_dv, dgv_dv = sparse_jacrev(adjoint_operator_prediff,
+                                                       (*state_star, q, p, h, zs)
+                                                      )
+    
+        dg_dvel_nz_values = jnp.concatenate([dgu_du[mask], dgu_dv[mask],
+                                             dgv_du[mask], dgv_dv[mask]
+                                            ])
+    
+        rhs_adj = jnp.concatenate([u_bar.reshape(-1),
+                                   v_bar.reshape(-1)
+                                  ])
+    
+        lambda_ = la_solver(dg_dvel_nz_values,
+                            rhs_adj,
+                            transpose=True
+                        )
+    
+        lambda_u = lambda_[:ny * nx]
+        lambda_v = lambda_[ny * nx:]
+    
+        _, pullback_function = jax.vjp(diva_iteration_update,
+                                       q, p, h, zs, *state_star
+                                       )
+   
+        #don't care about h_bar, zs_bar for the moment, or any of the others.
+        q_bar, p_bar, _, _, _,_,_,_,_,_ = pullback_function(
+                                                                (
+                                                                    lambda_u,
+                                                                    lambda_v,
+                                                                    jnp.zeros_like(u_vv_star),
+                                                                    jnp.zeros_like(v_vv_star),
+                                                                    jnp.zeros_like(dudz_star),
+                                                                    jnp.zeros_like(dvdz_star)
+                                                                )
+                                                            )
+        #For when interested in time-dep inv problem:
+
+        ## Add direct cotangent from zs output if needed.
+        #zs_bar_total = zs_bar_direct + zs_bar_out
+    
+        ## Propagate zs_bar_total back through zs = define_z_coordinates(b, h, n_levels)
+        #_, zs_pullback = jax.vjp(
+        #    lambda h_: define_z_coordinates(b, h_, n_levels),
+        #    h
+        #)
+    
+        #h_bar_from_zs, = zs_pullback(zs_bar_total)
+    
+        #h_bar = h_bar_direct + h_bar_from_zs
+    
+        #return q_bar, p_bar, u_trial_bar, v_trial_bar, h_bar
+        return q_bar, p_bar, None, None, None
+
+
+    def run_model_forward(q, p, h):
+        u_va = jnp.where(h > 1e-10, 1.0, 0)
+        v_va = jnp.where(h > 1e-10, 1.0, 0)
+
+        accumulation = jnp.where(h>0, 0.3, 0)
+        delta_t = None
+
+        t_cum = 0
+        if n_timesteps:
+            for ts in range(n_timesteps):
+                u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, p, u_va, v_va, h)
+
+                accumulation = jnp.where(h>0, 0.3, 0)
+
+                delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
+
+                print(delta_t)
+                
+                t_cum += delta_t
+                print(f"Time: {t_cum} years")
+
+                h = advection_step(u_va.reshape(-1), v_va.reshape(-1),
+                                   h.reshape(-1), source=accumulation,
+                                   delta_t=delta_t)
+        else:
+            u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, p, u_va, v_va, h)
+            delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
+
+        dhdt_final = ( advection_step(u_va.reshape(-1), v_va.reshape(-1),
+                               h.reshape(-1), source=accumulation,
+                               delta_t=delta_t)\
+                      - h
+                     ) /delta_t
+
+
+        return u_va, v_va, u_vv, v_vv, zs, h, dhdt_final
+
+    momentum_solver.defvjp(mom_solver_fwd, mom_solver_bwd)
+
+    return momentum_solver, run_model_forward
+
+
+def make_diva3d_solver(ny, nx, dy, dx, n_levels,
+                       b, ice_mask, n_iterations,
+                       mucoef_0, C_0,
+                       sliding="linear",
+                       periodic=False,
+                       temperature_field=None,
+                       n_timesteps=0):
+
+    if temperature_field is None:
+        temperature_field = (jnp.zeros((ny,nx))+258.15)
+
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
+    cc_vel_gradient                            = cc_vel_gradient_function(dy, dx, add_uv_ghost_cells)
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx) 
+
+    #DIVA-specific functions from grid:
+    diva_viscosity = diva_cc_viscosity_function(dy, dx, cc_vel_gradient, mucoef_0, temperature_field)
+    beta_raw_fct   = beta_function(b, sliding)
+    beta_eff_fct   = diva_beta_eff_function(beta_raw_fct, C_0)
+    new_shear      = diva_vertical_shear_function()
+    reconstruct_3d = diva_reconstruct_3d_velocity_function()
+
+
+    advection_step = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
+                                            add_uv_ghost_cells, add_scalar_ghost_cells,
+                                            method="PPM")
+
+
+    get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_gl_aware(ny, nx, dy, dx, b,
+                                                       interp_cc_to_fc,
+                                                       ew_gradient, ns_gradient,
+                                                       cc_gradient,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells,
+                                                       extrapolate_over_cf,
+                                                       hgrads_fct)
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=periodic)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coords, (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
+                                                              ksp_type="gmres",
+                                                              preconditioner="hypre",
+                                                              ksp_max_iter=60,
+                                                              monitor_ksp=False)
+
+
+    def momentum_solver(q, p, u_trial, v_trial, h):
         u_trial = jnp.where(h > 1e-10, u_trial, 0)
         v_trial = jnp.where(h > 1e-10, v_trial, 0)
 
@@ -1132,7 +1463,7 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
 
             #2. Arthern F2 integral, then beta_eff
             f2 = arthern_function(mu_vv, zs, m=2)
-            beta, beta_eff = beta_eff_fct(C, u_vv[..., 0], v_vv[..., 0], h, f2)
+            beta, beta_eff = beta_eff_fct(p, u_vv[..., 0], v_vv[..., 0], h, f2)
 
             #3. interpolate the vertically-averaged viscosity to faces
             mu_va_gc = add_scalar_ghost_cells(mu_va)
@@ -1155,6 +1486,8 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                                                                 mu_ew, mu_ns, beta_eff))
 
             du = la_solver(nz_jac_values, rhs)
+            
+            print(f"u_ratio: {jnp.max(jnp.abs(u_1d + du[:(ny*nx)]))/jnp.max(jnp.abs(u_1d))}")
 
             u_1d = u_1d + du[:(ny*nx)]
             v_1d = v_1d + du[(ny*nx):]
@@ -1163,8 +1496,10 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                                                                     mu_ew, mu_ns, beta_eff))
             if i == 0:
                 initial_residual = jnp.max(jnp.abs(rhs))
+                initial_umax = jnp.max(jnp.abs(u_1d))
+            print(f"SSA residual: {jnp.max(jnp.abs(rhs_new))}")
             print(f"linear residual reduction factor: {jnp.max(jnp.abs(rhs))/jnp.max(jnp.abs(rhs_new))}")
-
+            print("-----------")
             #5. update dudz/dvdz for the next iteration's viscosity (Eq. 21)
             u_va = u_1d.reshape((ny, nx))
             v_va = v_1d.reshape((ny, nx))
@@ -1189,7 +1524,7 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
         return u_va, v_va, u_vv, v_vv, zs
     
 
-    def run_model_forward(q, C, u_trial, v_trial, h_init):
+    def run_model_forward(q, p, u_trial, v_trial, h_init):
         h = h_init
         u_va, v_va = u_trial, v_trial
 
@@ -1200,7 +1535,7 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                 #plt.colorbar()
                 #plt.show()
                 
-                u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, C, u_va, v_va, h)
+                u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, p, u_va, v_va, h)
 
                 accumulation = jnp.where(h>0, 0.3, 0)
 
@@ -1216,7 +1551,7 @@ def make_diva3d_velocity_solver_function(ny, nx, dy, dx, n_levels,
                                    h.reshape(-1), source=accumulation,
                                    delta_t=delta_t)
         else:
-            u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, C, u_va, v_va, h)
+            u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, p, u_va, v_va, h)
 
         dhdt_final = ( advection_step(u_va.reshape(-1), v_va.reshape(-1),
                                h.reshape(-1), source=accumulation,
