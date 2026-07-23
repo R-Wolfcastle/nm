@@ -19,143 +19,116 @@ from standard_domains import mismip_domain
 from plotting_stuff import show_vel_field, show_vel_field_2
 
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
-from nonlinear_solvers import make_diva3d_solver,\
-                              make_diva3d_solver_cvjp_new,\
-                              make_picnewton_velocity_solver_function_full_cvjp,\
-                              make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap
+from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
+                              make_time_marcher,\
+                              make_coupled_quasi_newton_solver_function,\
+                              make_coupled_picnewton_solver_function,\
+                              implicit_forward_solver
 
 
-def interpolate_to_new_grid(x_old, y_old, field_old, x_new, y_new):
 
-    interp = RegularGridInterpolator(
-        (y_old, x_old),
-        jnp.asarray(field_old),
-        method="linear",
-        bounds_error=False,
-        fill_value=None,
-    )
-
-    Xn, Yn = jnp.meshgrid(x_new, y_new)
-
-    pts = jnp.column_stack([
-        Yn.ravel(),
-        Xn.ravel()
-    ])
-
-    return jnp.asarray(
-        interp(pts).reshape(len(y_new), len(x_new))
-    )
-
-
-def thing():
-    prev_res = 2000
-    prev_n_ts = 250
-
-    thk_prev = jnp.load(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{prev_res}m_{prev_n_ts}.npy")
-
-
-    (
-        _,_,_,_,
-        x_prev, y_prev, _,
-        _,_,_,
-        _,_,_,
-        ice_mask_prev,_,_,
-    ) = mismip_domain(resolution=prev_res)
-
-
-    for resolution in [1000, 500]:
-
-    
-        n_levels = 50
-        n_iterations = 40
-        n_timesteps = 50
-        
-        (
-            lx, ly, nr, nc,
-            x, y, delta_x,
-            delta_y, thk, b,
-            C, mucoef_0, q,
-            ice_mask, surface,
-            grounded
-        ) = mismip_domain(resolution=resolution)
-    
-
-        starting_thickness = interpolate_to_new_grid(x_prev, y_prev, thk_prev, x, y)
-        ice_mask_prev_interp = interpolate_to_new_grid(x_prev, y_prev, ice_mask_prev, x, y)
-        ice_mask = jnp.minimum(ice_mask, ice_mask_prev_interp)
-
-        starting_thickness = starting_thickness * ice_mask
-
-        #plt.imshow(starting_thickness)
-        #plt.show()
-        #raise
-        
-        solver = make_diva3d_solver(nr, nc,
-                                                      delta_y,
-                                                      delta_x,
-                                                      n_levels,
-                                                      b,
-                                                      ice_mask,
-                                                      n_iterations,
-                                                      mucoef_0,
-                                                      sliding="basic_weertman",
-                                                      temperature_field=None,
-                                                      n_timesteps=n_timesteps
-                                                    )
-        
-        
-        #ssa_solver = make_picnewton_velocity_solver_function_full_cvjp(nr, nc, delta_y, delta_x,
-        #                                                               b, ice_mask, 12, 8,
-        #                                                               mucoef_0, C, sliding="linear",
-        #                                                               temperature_field=None)
-        ##ssa_solver = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc, delta_y, delta_x,
-        ##                                                               b, ice_mask, 12, 8,
-        ##                                                               mucoef_0, C, sliding="linear",
-        ##                                                               temperature_field=None)
-        #u_ssa, v_ssa = ssa_solver(q, jnp.zeros_like(q), u_init, v_init, thk)
-        #show_vel_field_2(u_ssa, v_ssa, vmin=0, cmap="RdYlBu_r")
-        #raise
-        
-        u_va, v_va, u_vv, v_vv, zs, h_final, dhdt_final = solver(q, C, jnp.zeros_like(C), jnp.zeros_like(C), starting_thickness)
-        
-        jnp.save(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{resolution}m_{n_timesteps}.npy", h_final)
-        
-        print(f"max |dhdt| ={float(jnp.max(jnp.abs(dhdt_final)))}")
-
-#thing()
-#raise
-
-
-resolution = 4000
+resolution = 1000
 n_levels = 50
-n_iterations = 40
-n_timesteps = 200
+n_pic_iterations = 15
+n_newt_iterations = 8
+n_timesteps = 4
 
 (
     lx, ly, nr, nc,
     x, y, delta_x,
     delta_y, thk, b,
-    C, mucoef_0, q,
+    C_0, mucoef_0, q,
     ice_mask, surface,
     grounded
 ) = mismip_domain(resolution=resolution)
 p = jnp.zeros_like(q)
 
-momentum_solver, time_marcher = make_diva3d_solver_cvjp_new(nr, nc,
+
+#solver = make_coupled_quasi_newton_solver_function(nr, nc,delta_y,
+#                                              delta_x,
+#                                              b,
+#                                              ice_mask,
+#                                              n_pic_iterations,
+#                                              mucoef_0, C_0,
+#                                              sliding="basic_weertman")
+#solver = make_coupled_picnewton_solver_function(nr, nc,delta_y,
+#                                                delta_x,
+#                                                b,
+#                                                ice_mask,
+#                                                n_pic_iterations,
+#                                                n_newt_iterations,
+#                                                mucoef_0, C_0,
+#                                                sliding="basic_weertman")
+solver = implicit_forward_solver(nr, nc,delta_y,
+                                 delta_x,
+                                 b,
+                                 ice_mask,
+                                 n_pic_iterations,
+                                 n_newt_iterations,
+                                 mucoef_0, C_0,
+                                 sliding="basic_weertman")
+
+delta_t = 50
+
+u_trial = jnp.zeros_like(C_0)
+v_trial = jnp.zeros_like(u_trial)
+
+u_va, v_va, thk_final = solver(q, p, u_trial, v_trial, thk, delta_t, n_timesteps, accm=0.3)
+
+show_vel_field(u_va, v_va)
+
+grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+plt.imshow(grounded)
+plt.show()
+
+plt.imshow(thk_final-thk)
+plt.colorbar()
+plt.show()
+
+
+
+
+
+raise
+############ EXPLICIT:
+
+
+momentum_solver, advection_stepper = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
                                               delta_y,
                                               delta_x,
-                                              n_levels,
                                               b,
                                               ice_mask,
-                                              n_iterations,
+                                              n_pic_iterations,
+                                              n_newt_iterations,
                                               mucoef_0,
                                               C,
                                               sliding="basic_weertman",
                                               temperature_field=None,
-                                              n_timesteps=n_timesteps
                                             )
-        
-#u_va, v_va, u_vv, v_vv, zs, thk_final, dhdt_final = time_marcher(q, p, thk)
+
+time_marcher = make_time_marcher(momentum_solver, advection_stepper, n_timesteps, delta_x)
+
+u_va, v_va, thk_final, dhdt_final = time_marcher(q, p, thk)
+
+
+show_vel_field(u_va, v_va)
+
+grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+plt.imshow(grounded)
+plt.show()
+
+plt.imshow(thk_final)
+plt.show()
+
+
+plt.imshow(dhdt_final, vmin=-1, vmax=1, cmap="RdBu_r")
+plt.colorbar()
+plt.show()
+
+
+raise
 
 
 def functional(q_deriv):

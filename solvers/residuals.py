@@ -2061,6 +2061,99 @@ def make_fo_upwind_residual_function(nx, ny, dx, dy, vel_bcs="rflc"):
     return fo_upwind_residual_function
 
 
+def compute_ssa_uv_residuals_function_wextrap(ny, nx, dy, dx, b,
+                                   beta_fct, ice_mask,
+                                   interp_cc_to_fc,
+                                   ew_gradient,
+                                   ns_gradient,
+                                   cc_gradient,
+                                   add_uv_ghost_cells,
+                                   add_s_ghost_cells,
+                                   extrp_over_cf, mucoef_0,
+                                   C_0, temp_cc,
+                                   hgrads_fct):
+  
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+
+    def compute_uv_residuals(u_1d, v_1d, q, p, h_1d):
+
+        mucoef = mucoef_0*jnp.exp(q)
+        C = C_0*jnp.exp(p)
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+
+        s_gnd = h + b #b is globally defined
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        hdsdx, hdsdy = hgrads_fct(s, h, (s_gnd>s_flt).astype(int))
+        
+        beta = beta_fct(C, u, v, h)
+
+        volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
+
+
+        #obvs not going to do anything in the no-cf case
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #momentum_term
+        u, v = add_uv_ghost_cells(u, v)
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+
+
+        #interpolate things onto face-cenres
+        h = add_s_ghost_cells(h)
+        h_ew, h_ns = interp_cc_to_fc(h)
+        #remove those ghost cells again!
+        h = h[1:-1,1:-1]
+
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        #jax.debug.print("mucoef_ew = {x}",x=mucoef_ew)
+
+        #calculate face-centred viscosity:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        #Again, shouldn't do owt when there's no calving front
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+        
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
+
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+        return x_mom_residual.reshape(-1), y_mom_residual.reshape(-1)
+
+    return jax.jit(compute_uv_residuals)
 
 
 def compute_ssa_uv_residuals_function_pnotC_givenT(ny, nx, dy, dx, b,
@@ -3527,17 +3620,237 @@ def compute_uvh_residuals_function(ny, nx, dy, dx,
 
     return compute_uvh_residuals
 
-
-
-
-def compute_uvh_linear_ssa_residuals_function(ny, nx, dy, dx, b,\
+def compute_uvh_linear_ssa_residuals_function_fc_visc_noextrap(ny, nx, dy, dx, b,
                                           interp_cc_to_fc,
-                                          ew_gradient,\
-                                          ns_gradient,\
-                                          cc_gradient,\
-                                          add_uv_ghost_cells,\
-                                          add_s_ghost_cells,\
-                                          extrapolate_over_cf):
+                                          ice_mask,
+                                          fc_vel_gradient,
+                                          add_uv_ghost_cells,
+                                          add_s_ghost_cells,
+                                          hgrads_fct):
+
+    """
+    Linear (frozen-coefficient) coupled u,v,h residual for the Picard/quasi-Newton
+    phase of a coupled momentum+advection solve, with NO calving-front
+    extrapolation anywhere. Velocity gradients at faces are computed with
+    fc_vel_gradient (the same cf-safe gradient function used to build mu_ew/mu_ns),
+    so the linearised viscous term and the actual viscosity closure see exactly
+    the same treatment of the ice edge -- the last ice-filled cells simply see
+    zero velocity/thickness across the edge, equivalent to those cells being
+    strongly damaged, rather than having their state linearly extrapolated
+    past the edge.
+
+    The calving front is not allowed to move within a single implicit solve:
+    flux is zeroed for any cell that was ice-free at the start of the step
+    (h_t<=0), so the ice extent is fixed for the duration of the solve.
+    """
+
+    def compute_uvh_residuals(u_1d, v_1d, h_1d,
+                              mu_ew, mu_ns, beta,
+                              h_t, source, delta_t):
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        ######### MOMENTUM RESIDUALS #############################
+        s_gnd = h + b
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+
+        volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
+
+        #momentum_term -- no extrapolation over the calving front
+        u_full, v_full = add_uv_ghost_cells(u, v)
+
+        #get thickness on the faces
+        h_full = add_s_ghost_cells(h)
+        h_ew, h_ns = interp_cc_to_fc(h_full)
+
+        #various face-centred derivatives, computed with the same cf-safe
+        #gradient function used in the viscosity closure
+        dudx_ew, dudy_ew,\
+        dvdx_ew, dvdy_ew,\
+        dudx_ns, dudy_ns,\
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+        ################ ADVECTION RESIDUALS #############################
+        
+        
+
+        u_fc_ew, _ = interp_cc_to_fc(u_full)
+        _, v_fc_ns = interp_cc_to_fc(v_full)
+        
+
+        ##On the calving front faces, the interpolated thickness will be half what it should be
+        #so ice builds up there in the advection bit. To fudge that, multiply the face-centred
+        #For the purposes of the advection, the velocity should also be doubled there, I guess.
+        mask_ew, mask_ns = interp_cc_to_fc(add_s_ghost_cells(ice_mask))
+        ff_ew = jnp.nan_to_num(1/mask_ew, nan=0.0, posinf=0.0, neginf=0.0)
+        ff_ns = jnp.nan_to_num(1/mask_ns, nan=0.0, posinf=0.0, neginf=0.0)
+        u_fc_ew, v_fc_ns = u_fc_ew*ff_ew, v_fc_ns*ff_ns
+
+
+        ##face-centred values according to first-order upwinding
+        h_fc_fou_ew = jnp.where(u_fc_ew>0, h_full[1:-1,:-1], h_full[1:-1, 1:])
+        h_fc_fou_ns = jnp.where(v_fc_ns>0, h_full[1:, 1:-1], h_full[-1:,1:-1])
+
+        flux_term = (u_fc_ew[:,1:]*h_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*h_fc_fou_ew[:,:-1])*dy*delta_t +\
+                    (v_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx*delta_t
+        #calving front is fixed within an implicit solve: no flux into or out
+        #of cells that were ice-free at the start of the timestep
+        flux_term = jnp.where(h_t>1e-2, flux_term, 0)
+
+        adv_residual = ((h - h_t) - source * delta_t)*dx*dy + flux_term
+
+        ##################################################################
+
+        return (x_mom_residual.reshape(-1),
+                y_mom_residual.reshape(-1),
+                adv_residual.reshape(-1))
+
+    return jax.jit(compute_uvh_residuals)
+
+
+def compute_uvh_residuals_function_fully_nonlinear_givenT_noextrap(ny, nx, dy, dx,
+                                   b, beta_fct, ice_mask,
+                                   interp_cc_to_fc,
+                                   fc_vel_gradient,
+                                   add_uv_ghost_cells,
+                                   add_s_ghost_cells,
+                                   hgrads_fct,
+                                   mucoef_0, C_0, temp_cc):
+    """
+    Fully nonlinear coupled u,v,h residual (viscosity and beta evaluated at the
+    current iterate rather than frozen), with NO calving-front extrapolation,
+    for use in the Newton phase of a coupled Picard-Newton (picnewton) solve
+    and for adjoint linearisation. Parameterised by q (log mucoef) and p (log C)
+    to match the rest of the coupled solver stack.
+    """
+
+    temp_cc_ghost = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc_ghost)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+
+    def compute_uvh_residuals(u_1d, v_1d, h_1d, q, p, h_t, source, delta_t):
+
+        mucoef = mucoef_0*jnp.exp(q)
+        C = C_0*jnp.exp(p)
+
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+
+        ######### MOMENTUM RESIDUALS #############################
+        s_gnd = h + b
+        s_flt = h * (1-c.RHO_I/c.RHO_W)
+        s = jnp.maximum(s_gnd, s_flt)
+
+        hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+
+        beta = beta_fct(C, u, v, h)
+
+        volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
+
+        #various face-centred derivatives, no extrapolation over the cf
+        dudx_ew, dudy_ew,\
+        dvdx_ew, dvdy_ew,\
+        dudx_ns, dudy_ns,\
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
+
+        #interpolate thickness and mucoef onto face-centres
+        h_full = add_s_ghost_cells(h)
+        h_ew, h_ns = interp_cc_to_fc(h_full)
+        
+        mucoef_full = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef_full)
+
+        #calculate face-centred viscosity using the given temperature field:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #calving front is fixed for the duration of this solve, so we use the
+        #(fixed) ice_mask captured at solver construction time to zero the
+        #viscosity of faces belonging to ice-free cells:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+
+        visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(2*dudx_ew[:,:-1] + dvdy_ew[:,:-1])*dy   +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(dudy_ns[:-1,:] + dvdx_ns[:-1,:])*0.5*dx -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(dudy_ns[1:, :] + dvdx_ns[1:, :])*0.5*dx
+
+        visc_y = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(dudy_ew[:, 1:] + dvdx_ew[:, 1:])*0.5*dy -\
+                 2 * mu_ew[:,:-1]*h_ew[:,:-1]*(dudy_ew[:,:-1] + dvdx_ew[:,:-1])*0.5*dy +\
+                 2 * mu_ns[:-1,:]*h_ns[:-1,:]*(2*dvdy_ns[:-1,:] + dudx_ns[:-1,:])*dx   -\
+                 2 * mu_ns[1:, :]*h_ns[1:, :]*(2*dvdy_ns[1:, :] + dudx_ns[1:, :])*dx
+
+        x_mom_residual = visc_x + volume_x
+        y_mom_residual = visc_y + volume_y
+
+        ################ ADVECTION RESIDUALS #############################
+
+        u_full, v_full = add_uv_ghost_cells(u, v)
+
+        u_fc_ew, _ = interp_cc_to_fc(u_full)
+        _, v_fc_ns = interp_cc_to_fc(v_full)
+
+        ##On the calving front faces, the interpolated thickness will be half what it should be
+        #so ice builds up there in the advection bit. To fudge that, multiply the face-centred
+        #For the purposes of the advection, the velocity should also be doubled there, I guess.
+        mask_ew, mask_ns = interp_cc_to_fc(add_s_ghost_cells(ice_mask))
+        ff_ew = jnp.nan_to_num(1/mask_ew, nan=0.0, posinf=0.0, neginf=0.0)
+        ff_ns = jnp.nan_to_num(1/mask_ns, nan=0.0, posinf=0.0, neginf=0.0)
+        u_fc_ew, v_fc_ns = u_fc_ew*ff_ew, v_fc_ns*ff_ns
+
+        h_fc_fou_ew = jnp.where(u_fc_ew>0, h_full[1:-1,:-1], h_full[1:-1, 1:])
+        h_fc_fou_ns = jnp.where(v_fc_ns>0, h_full[1:, 1:-1], h_full[-1:,1:-1])
+
+        flux_term = (u_fc_ew[:,1:]*h_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*h_fc_fou_ew[:,:-1])*dy*delta_t +\
+                    (v_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx*delta_t
+        #calving front is fixed within an implicit solve
+        flux_term = jnp.where(h_t>1e-2, flux_term, 0)
+
+        adv_residual = ((h - h_t) - source * delta_t)*dx*dy + flux_term
+
+        ##################################################################
+
+        return (x_mom_residual.reshape(-1),
+                y_mom_residual.reshape(-1),
+                adv_residual.reshape(-1))
+
+    return compute_uvh_residuals
+
+
+def compute_uvh_linear_ssa_residuals_function_noextrap(ny, nx, dy, dx, b,
+                                          interp_cc_to_fc,
+                                          ew_gradient,
+                                          ns_gradient,
+                                          cc_gradient,
+                                          add_uv_ghost_cells,
+                                          add_s_ghost_cells,
+                                          extrapolate_over_cf,
+                                          hgrads_fct):
 
     def compute_uvh_residuals(u_1d, v_1d, h_1d,
                               mu_ew, mu_ns, beta,
@@ -3557,36 +3870,35 @@ def compute_uvh_linear_ssa_residuals_function(ny, nx, dy, dx, b,\
         s_flt = h * (1-c.RHO_I/c.RHO_W)
         s = jnp.maximum(s_gnd, s_flt)
         
-        s = add_s_ghost_cells(s)
-        #jax.debug.print("s: {x}",x=s)
+        #s = add_s_ghost_cells(s)
+        ##jax.debug.print("s: {x}",x=s)
 
-        dsdx, dsdy = cc_gradient(s)
-        #jax.debug.print("dsdx: {x}",x=dsdx)
-        #sneakily fudge this:
-        dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
-        dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
-        dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
-        dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
-        dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
-        dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
-        dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
-        dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+        #dsdx, dsdy = cc_gradient(s)
+        ##jax.debug.print("dsdx: {x}",x=dsdx)
+        ##sneakily fudge this:
+        #dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
+        #dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
+        #dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
+        #dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
+        #dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
+        #dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
+        #dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
+        #dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
 
+        hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
 
-        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
-        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
-
-
+        volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
 
 
         #momentum_term
-        u = extrapolate_over_cf(u)
-        v = extrapolate_over_cf(v)
+        #u = extrapolate_over_cf(u)
+        #v = extrapolate_over_cf(v)
         u_full, v_full = add_uv_ghost_cells(u, v)
 
         #get thickness on the faces
-        h_extrp = extrapolate_over_cf(h)
-        h_full = add_s_ghost_cells(h_extrp)
+        #h_extrp = extrapolate_over_cf(h)
+        h_full = add_s_ghost_cells(h)
         h_ew, h_ns = interp_cc_to_fc(h_full)
         
         #various face-centred derivatives
@@ -3626,16 +3938,12 @@ def compute_uvh_linear_ssa_residuals_function(ny, nx, dy, dx, b,\
         h_fc_fou_ew = jnp.where(u_fc_ew>0, h_full[1:-1,:-1], h_full[1:-1, 1:])
         h_fc_fou_ns = jnp.where(v_fc_ns>0, h_full[1:, 1:-1], h_full[-1:,1:-1])
 
-
-
         flux_term = (u_fc_ew[:,1:]*h_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*h_fc_fou_ew[:,:-1])*dy*delta_t +\
                     (v_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx*delta_t
         #to keep calving front in same location, prevent any flux into or out of ice-free cells!
         flux_term = jnp.where(h_t>1e-2, flux_term, 0)
 
-
         adv_residual =  ((h - h_t) - source * delta_t)*dx*dy + flux_term
-
         ##################################################################
 
 
