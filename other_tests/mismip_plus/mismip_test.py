@@ -27,11 +27,11 @@ from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,
 
 
 
-resolution = 1000
+resolution = 2000
 n_levels = 50
 n_pic_iterations = 15
 n_newt_iterations = 8
-n_timesteps = 4
+n_timesteps = 10
 
 (
     lx, ly, nr, nc,
@@ -43,6 +43,7 @@ n_timesteps = 4
 ) = mismip_domain(resolution=resolution)
 p = jnp.zeros_like(q)
 
+temp_field = jnp.zeros_like(q)+269
 
 #solver = make_coupled_quasi_newton_solver_function(nr, nc,delta_y,
 #                                              delta_x,
@@ -66,7 +67,8 @@ solver = implicit_forward_solver(nr, nc,delta_y,
                                  n_pic_iterations,
                                  n_newt_iterations,
                                  mucoef_0, C_0,
-                                 sliding="basic_weertman")
+                                 sliding="basic_weertman",
+                                 temperature_field=temp_field)
 
 delta_t = 50
 

@@ -23,6 +23,10 @@ def rate_factor(T, P=0):
 
 @jax.jit
 def B_from_T(T, P=0):
+    #jax.debug.print("{x}", x=rate_factor(T, P))
+    #263.15K: A = 2.875e-18
+    #269K:    A = 2e-17
+    #270K:    A = 2.8e-17
     return 0.5 * (rate_factor(T, P)**(-1/c.GLEN_N))
 
 @jax.jit

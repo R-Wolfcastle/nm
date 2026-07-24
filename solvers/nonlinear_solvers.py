@@ -937,6 +937,7 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
 
     res_fct = lambda x: jnp.max(jnp.abs(x))
 
+    @custom_vjp
     def solver(q, p, u_trial, v_trial, h, delta_t, accm=0):
         u_trial = jnp.where(h>1e-10, u_trial, 0)
         v_trial = jnp.where(h>1e-10, v_trial, 0)
@@ -1062,6 +1063,65 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
         return (u_1d.reshape((ny, nx)),
                 v_1d.reshape((ny, nx)),
                 h_1d.reshape((ny, nx)) )
+   
+
+    def solver_fwd(q, p, u_trial, v_trial, h, delta_t, accm=0):
+
+        u_trial = jnp.where(h>1e-10, u_trial, 0)
+        v_trial = jnp.where(h>1e-10, v_trial, 0)
+
+        h_t = h.copy()
+        accm_masked = accm*ice_mask
+
+        u, v, h_out = solver(q, p, u_trial, v_trial, h, delta_t, accm)
+
+        dRu_du, dRv_du, dRh_du, \
+        dRu_dv, dRv_dv, dRh_dv, \
+        dRu_dh, dRv_dh, dRh_dh = sparse_jacrev(
+                                               get_uvh_residuals_nonlinear,
+                                               (u.reshape(-1), v.reshape(-1), h_out.reshape(-1),
+                                               q, p,
+                                               h_t, accm_masked, delta_t)
+                                                      )
+
+        nz_jac_values = jnp.concatenate(
+                            [dRu_du[mask], dRu_dv[mask], dRu_dh[mask],\
+                             dRv_du[mask], dRv_dv[mask], dRv_dh[mask],\
+                             dRh_du[mask], dRh_dv[mask], dRh_dh[mask]]
+                                       )
+
+
+        fwd_residuals = (u, v, h_out, nz_jac_values, q, p, h_t, accm_masked, delta_t)
+
+        return (u, v, h_out), fwd_residuals
+
+    def solver_bwd(res, cotangent):
+
+        u_bar, v_bar, h_bar = cotangent
+
+        u, v, h_out, dJduvh_nz_jac_values, q, p, h_t, accm_masked, delta_t = res
+
+        lambda_ = la_solver(dJduvh_nz_jac_values,
+                            -jnp.concatenate([u_bar.reshape(-1), v_bar.reshape(-1), h_bar.reshape(-1)]),
+                            transpose=True)
+
+        lambda_u = lambda_[:(ny*nx)]
+        lambda_v = lambda_[(ny*nx):(2*ny*nx)]
+        lambda_h = lambda_[(2*ny*nx):]
+
+
+        #phi_bar = (dG/dphi)^T lambda
+        _, pullback_function = jax.vjp(get_uvh_residuals_nonlinear,
+                                       u.reshape(-1), v.reshape(-1), h_out.reshape(-1),
+                                       q, p, h_t, accm_masked, delta_t
+                                      )
+        _, _, _, q_bar, p_bar, _, _, _ = pullback_function((lambda_u, lambda_v, lambda_h))
+
+        
+        return (q_bar.reshape((ny, nx)), p_bar.reshape((ny, nx)), None, None, None, None, None)
+
+
+    solver.defvjp(solver_fwd, solver_bwd)
 
     return solver
 
