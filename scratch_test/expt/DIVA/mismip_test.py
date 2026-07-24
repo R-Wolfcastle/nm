@@ -47,8 +47,8 @@ def interpolate_to_new_grid(x_old, y_old, field_old, x_new, y_new):
 
 
 def thing():
-    prev_res = 2000
-    prev_n_ts = 250
+    prev_res = 1000
+    prev_n_ts = 50
 
     thk_prev = jnp.load(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{prev_res}m_{prev_n_ts}.npy")
 
@@ -62,12 +62,12 @@ def thing():
     ) = mismip_domain(resolution=prev_res)
 
 
-    for resolution in [1000, 500]:
+    for resolution in [500]:
 
     
         n_levels = 50
         n_iterations = 40
-        n_timesteps = 50
+        n_timesteps = 500
         
         (
             lx, ly, nr, nc,
@@ -121,8 +121,8 @@ def thing():
         
         print(f"max |dhdt| ={float(jnp.max(jnp.abs(dhdt_final)))}")
 
-#thing()
-#raise
+thing()
+raise
 
 
 resolution = 2000
