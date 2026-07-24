@@ -45,7 +45,8 @@ def implicit_spinup():
 
     thk = jnp.load(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_1001.5174506828529m_2526.3248196221084years.npy")
     
-    temp_field = jnp.zeros_like(q)+269
+    #temp_field = jnp.zeros_like(q)+269
+    temp_field = None
     
     #solver = make_coupled_quasi_newton_solver_function(nr, nc,delta_y,
     #                                              delta_x,
@@ -136,7 +137,7 @@ def explicit_spinup():
                                                   mucoef_0,
                                                   C_0,
                                                   sliding="basic_weertman",
-                                                  temperature_field=None,
+                                                  temperature_field=temp_field,
                                                 )
     
     time_marcher = make_time_marcher(momentum_solver, advection_stepper, n_timesteps, delta_x, b)
