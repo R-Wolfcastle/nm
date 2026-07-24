@@ -295,7 +295,7 @@ def create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coordinates, jac_sha
         #TODO: CHECK WHICH WAY ROUND THESE COORDS GO. SHOULD BE RIGHT IF THEY ARE IJ!
         values_bar = x[coordinates[1]] * lambda_[coordinates[0]]
 
-        return values_bar, b_bar
+        return values_bar, b_bar, None
 
     petsc_sparse_la_solver.defvjp(la_solver_fwd, linear_solve_bwd)
 

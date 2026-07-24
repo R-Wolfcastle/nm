@@ -193,6 +193,66 @@ def nc_velocity_gradient_function(dy, dx, add_uv_ghost_cells):
         return du_dx_node, du_dy_node, dv_dx_node, dv_dy_node
     return jax.jit(node_gradient)
 
+
+def fc_velocity_gradient_function_noextrap(dy, dx, ny, nx, 
+                                           add_uv_ghost_cells):
+
+    def ew_face_gradient(var):
+        dvar_dx_ew = (var[1:-1, 1:] - var[1:-1, :-1]) / dx
+        dvar_dy_ew = (var[:-2, 1:] + var[:-2, :-1] - var[2:, 1:] - var[2:, :-1])/(4*dy)
+        return dvar_dx_ew, dvar_dy_ew
+    
+    def ns_face_gradient(var):
+        dvar_dy_ns = (var[:-1, 1:-1] - var[1:, 1:-1]) / dy
+        dvar_dx_ns = (var[:-1, 2:] + var[1:, 2:] - var[:-1, :-2] - var[1:, :-2])/(4*dx)
+        return dvar_dx_ns, dvar_dy_ns
+
+    def uv_ew_ns_gradient(u, v):
+        u, v = add_uv_ghost_cells(u, v)
+
+        dudx_ew, dudy_ew = ew_face_gradient(u)
+        dvdx_ew, dvdy_ew = ew_face_gradient(v)
+        dudx_ns, dudy_ns = ns_face_gradient(u)
+        dvdx_ns, dvdy_ns = ns_face_gradient(v)
+
+        return dudx_ew, dudy_ew, dvdx_ew, dvdy_ew,\
+               dudx_ns, dudy_ns, dvdx_ns, dvdy_ns
+
+    return jax.jit(uv_ew_ns_gradient)
+
+
+#def interp_cc_with_ghosts_to_fc_function_cfsafe(ny, nx, ice_mask,
+#                                                add_ice_mask_ghost_cells):
+#    
+#    ice_mask = add_ice_mask_ghost_cells(ice_mask)
+#
+#    #Define a flag for each face centre for whether it has ice in the right
+#    #places to define the derivatives nicely. Otherwise, we do an extrapolation
+#    #depending on the direction of the derivative, whether it's a vertical or
+#    #or horizontal face. This replaces having to explicitly store extrapolated
+#    #velocities. The difficulty of that is that the required version of the
+#    #extrapolation to keep the stecil down to 3x3 depends on the direction of the
+#    #derivative and orientation of the face.
+#
+#    ew_missing_tr = (1 - ice_mask[:-2, 1:])
+#    ew_missing_br = (1 - ice_mask[2:,  1:])
+#    ew_missing_tl = (1 - ice_mask[:-2,:-1])
+#    ew_missing_bl = (1 - ice_mask[2:, :-1])
+#
+#    ns_missing_tr = (1 - ice_mask[:-1, 2:])
+#    ns_missing_br = (1 - ice_mask[1:,  2:])
+#    ns_missing_tl = (1 - ice_mask[:-1,:-2])
+#    ns_missing_bl = (1 - ice_mask[1:, :-2])
+#    
+#    def interp_cc_to_fc(var):
+#        
+#        var_ew = 0.5*(var[1:-1, 1:]+var[1:-1, :-1])
+#        var_ns = 0.5*(var[:-1, 1:-1]+var[1:, 1:-1])
+#
+#        return var_ew, var_ns
+#    return jax.jit(interp_cc_to_fc)
+
+
 def fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx, 
                                           ice_mask, add_uv_ghost_cells,
                                           add_ice_mask_ghost_cells):
