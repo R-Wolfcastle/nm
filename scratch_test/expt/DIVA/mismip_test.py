@@ -19,7 +19,8 @@ from standard_domains import mismip_domain
 from plotting_stuff import show_vel_field, show_vel_field_2
 
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
-from nonlinear_solvers import make_diva3d_velocity_solver_function,\
+from nonlinear_solvers import make_diva3d_solver,\
+                              make_diva3d_solver_cvjp,\
                               make_picnewton_velocity_solver_function_full_cvjp,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap
 
@@ -89,7 +90,7 @@ def thing():
         #plt.show()
         #raise
         
-        solver = make_diva3d_velocity_solver_function(nr, nc,
+        solver = make_diva3d_solver(nr, nc,
                                                       delta_y,
                                                       delta_x,
                                                       n_levels,
@@ -97,7 +98,7 @@ def thing():
                                                       ice_mask,
                                                       n_iterations,
                                                       mucoef_0,
-                                                      sliding="linear",
+                                                      sliding="basic_weertman",
                                                       temperature_field=None,
                                                       n_timesteps=n_timesteps
                                                     )
@@ -125,10 +126,10 @@ thing()
 raise
 
 
-resolution = 2000
+resolution = 4000
 n_levels = 50
 n_iterations = 40
-n_timesteps = 250
+n_timesteps = 200
 
 (
     lx, ly, nr, nc,
@@ -138,16 +139,49 @@ n_timesteps = 250
     ice_mask, surface,
     grounded
 ) = mismip_domain(resolution=resolution)
-    
+p = jnp.zeros_like(q)
 
-thk = jnp.load(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{resolution}m_{n_timesteps}.npy")
+momentum_solver, time_marcher = make_diva3d_solver_cvjp(nr, nc,
+                                              delta_y,
+                                              delta_x,
+                                              n_levels,
+                                              b,
+                                              ice_mask,
+                                              n_iterations,
+                                              mucoef_0,
+                                              C,
+                                              sliding="basic_weertman",
+                                              temperature_field=None,
+                                              n_timesteps=n_timesteps
+                                            )
+        
+#u_va, v_va, u_vv, v_vv, zs, thk_final, dhdt_final = time_marcher(q, p, thk)
 
-grounded = jnp.where((thk+b)>(thk*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+def functional(q_deriv):
+    u_va, v_va, u_vv, v_vv, zs = momentum_solver(q_deriv, p,
+                                                 jnp.zeros_like(q),
+                                                 jnp.zeros_like(q),
+                                                 thk)
+    return jnp.sum(u_va**2)
+
+dJ_dq = jax.grad(functional)(q)
+
+plt.imswho(dJ_dq)
+plt.colorbar()
+plt.show()
+
+raise
+
+print(f"max |dhdt| ={float(jnp.max(jnp.abs(dhdt_final)))}")
+#thk_final = jnp.load(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{resolution}m_{n_timesteps}.npy")
+
+grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
 
 plt.imshow(grounded)
 plt.show()
 
-plt.imshow(thk)
+plt.imshow(thk_final)
 plt.show()
 
 raise
@@ -274,7 +308,7 @@ def spin_up():
 
         print(f"iterations = {n_iterations}")
 
-        solver = make_diva3d_velocity_solver_function(nr, nc,
+        solver = make_diva3d_solver(nr, nc,
                                                       delta_y,
                                                       delta_x,
                                                       n_levels,
@@ -343,7 +377,7 @@ spin_up()
 #        n_iterations = 80/(2**i)
 #
 #
-#        solver = make_diva3d_velocity_solver_function(nr, nc, delta_y, delta_x, n_levels,
+#        solver = make_diva3d_solver(nr, nc, delta_y, delta_x, n_levels,
 #                                              b, ice_mask, n_iterations,
 #                                              mucoef_0, sliding="linear",
 #                                              temperature_field=None,

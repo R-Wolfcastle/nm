@@ -74,14 +74,14 @@ def arthern_function(mu_vv, zs, m=1, only_return_surface=True):
         return fm
 
 
-def diva_beta_eff_function(beta_fct):
+def diva_beta_eff_function(beta_fct, C_0):
     """
     beta_fct is what would be used in the SSA formulation - so is the
     sliding function applied to the basal ice veloctity.
     beta_eff is according to equation 19, or 12 in Arthern 2015.
     """
-    def beta_eff(C, u_base, v_base, h, f2):
-        beta = beta_fct(C, u_base, v_base, h)
+    def beta_eff(p, u_base, v_base, h, f2):
+        beta = beta_fct(C_0*jnp.exp(p), u_base, v_base, h)
         beta_eff_val = beta / (1 + beta * f2)
         
         beta_eff_val = jnp.where(h>0, beta_eff_val, 1)
