@@ -49,7 +49,7 @@ from cg import make_sparse_matvec, make_sparse_dpgc_solver_comp,\
 
 def print_residual_things(residual, rhs, init_residual, i):
     old_residual = residual
-    residual = jnp.max(jnp.abs(-rhs))
+    residual = jnp.max(jnp.abs(rhs))
 
     if i==0:
         init_residual = residual.copy()
@@ -820,7 +820,8 @@ def make_coupled_quasi_newton_solver_function(ny, nx, dy, dx,
 
 def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
                                            b, ice_mask,
-                                           n_pic_iterations, n_newt_iterations,
+                                           max_n_pic_iterations,
+                                           n_newt_iterations,
                                            mucoef_0, C_0,
                                            sliding="linear",
                                            periodic=False,
@@ -957,7 +958,7 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
 
 
         #################### PICARD PHASE ####################
-        for i in range(n_pic_iterations):
+        for i in range(max_n_pic_iterations):
 
             h_current = h_1d.reshape((ny, nx))
 
@@ -984,9 +985,15 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
                                                      h_t, accm, delta_t)
                                    )
             
+            if i==0:
+                initial_residual = res_fct(rhs)
+
             old_residual, residual, init_res = print_residual_things(
                                                   residual, rhs, init_res, i
                                                                     )
+
+            if (residual/init_res)<0.01:
+                break
 
             du = la_solver(nz_jac_values, rhs)
 
@@ -1000,8 +1007,6 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
                                        h_t, accm, delta_t)
                                       )
 
-            if i==0:
-                initial_residual = res_fct(rhs)
             #print(f"Picard linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
 
         final_residual_pic = res_fct(rhs_new)
@@ -1148,8 +1153,26 @@ def implicit_forward_solver(ny, nx, dy, dx,
         t_cum = 0
         for ts in range(n_timesteps):
             u, v, h = single_timestep_solver(q, p, u, v, h, delta_t, accm)
+            
             t_cum += delta_t
             print(f"Time: {t_cum} years")
+
+            
+            plt.imshow(jnp.sqrt(u**2 + v**2), cmap="RdYlBu_r", vmin=0)
+            plt.colorbar()
+            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/speed_{dx}m_{t_cum}years.png")
+            plt.close()
+
+            plt.imshow(h, vmin=0)
+            plt.colorbar()
+            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/thickness_{dx}m_{t_cum}years.png")
+            plt.close()
+
+            grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+            plt.imshow(grounded)
+            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/grounded_{dx}m_{t_cum}years.png")
+            plt.close()
 
         return u, v, h
 
@@ -1999,6 +2022,7 @@ def make_diva3d_solver_cvjp_new(ny, nx, dy, dx, n_levels,
 def make_time_marcher(momentum_solver,
                       thickness_updater,
                       n_timesteps, delta_x,
+                      b,
                       max_delta_t=None):
     
 
@@ -2020,6 +2044,12 @@ def make_time_marcher(momentum_solver,
             if max_delta_t:
                 delta_t = jnp.min(delta_t, max_delta_t)
             print(delta_t)
+            
+            plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+            plt.colorbar()
+            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{t_cum}years.png")
+            plt.close()
+
 
             t_cum += delta_t
             print(f"Time: {t_cum} years")
@@ -2027,6 +2057,20 @@ def make_time_marcher(momentum_solver,
             h = thickness_updater(u_va.reshape(-1), v_va.reshape(-1),
                                   h.reshape(-1), source=accumulation,
                                   delta_t=delta_t)
+            
+            plt.imshow(h, vmin=0)
+            plt.colorbar()
+            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.png")
+            plt.close()
+
+            grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+            plt.imshow(grounded)
+            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{t_cum}years.png")
+            plt.close()
+
+            if not ts%100:
+                jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.npy", h)
         
         dhdt_final = ( thickness_updater(u_va.reshape(-1), v_va.reshape(-1),
                                h.reshape(-1), source=accumulation,

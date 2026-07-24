@@ -26,72 +26,152 @@ from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,
                               implicit_forward_solver
 
 
+def implicit_spinup():
+    resolution = 1000
+    n_levels = 50
+    max_n_pic_iterations = 50
+    n_newt_iterations = 7
+    n_timesteps = 500
+    
+    (
+        lx, ly, nr, nc,
+        x, y, delta_x,
+        delta_y, thk, b,
+        C_0, mucoef_0, q,
+        ice_mask, surface,
+        grounded
+    ) = mismip_domain(resolution=resolution)
+    p = jnp.zeros_like(q)
 
-resolution = 2000
-n_levels = 50
-n_pic_iterations = 15
-n_newt_iterations = 8
-n_timesteps = 10
+    thk = jnp.load(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_1001.5174506828529m_2526.3248196221084years.npy")
+    
+    temp_field = jnp.zeros_like(q)+269
+    
+    #solver = make_coupled_quasi_newton_solver_function(nr, nc,delta_y,
+    #                                              delta_x,
+    #                                              b,
+    #                                              ice_mask,
+    #                                              n_pic_iterations,
+    #                                              mucoef_0, C_0,
+    #                                              sliding="basic_weertman")
+    #solver = make_coupled_picnewton_solver_function(nr, nc,delta_y,
+    #                                                delta_x,
+    #                                                b,
+    #                                                ice_mask,
+    #                                                n_pic_iterations,
+    #                                                n_newt_iterations,
+    #                                                mucoef_0, C_0,
+    #                                                sliding="basic_weertman")
+    solver = implicit_forward_solver(nr, nc,delta_y,
+                                     delta_x,
+                                     b,
+                                     ice_mask,
+                                     max_n_pic_iterations,
+                                     n_newt_iterations,
+                                     mucoef_0, C_0,
+                                     sliding="basic_weertman",
+                                     temperature_field=temp_field)
+    
+    delta_t = 20
+    
+    u_trial = jnp.zeros_like(C_0)
+    v_trial = jnp.zeros_like(u_trial)
+    
+    u_va, v_va, thk_final = solver(q, p, u_trial, v_trial, thk, delta_t, n_timesteps, accm=0.3)
+    
+    
+    jnp.save(f"{nm_home}/bits_of_data/mismip_figs/impl/thickness_{delta_x}m_{delta_t*n_timesteps}years.npy", thk_final)
+    
+    
+    #show_vel_field(u_va, v_va)
+    
+    grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+    
+    #plt.imshow(grounded)
+    #plt.show()
+    #
+    #plt.imshow(thk_final-thk)
+    #plt.colorbar()
+    #plt.show()
+    
+    
+    plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+    plt.colorbar()
+    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
 
-(
-    lx, ly, nr, nc,
-    x, y, delta_x,
-    delta_y, thk, b,
-    C_0, mucoef_0, q,
-    ice_mask, surface,
-    grounded
-) = mismip_domain(resolution=resolution)
-p = jnp.zeros_like(q)
+    plt.imshow(grounded)
+    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
 
-temp_field = jnp.zeros_like(q)+269
+implicit_spinup()
+raise
 
-#solver = make_coupled_quasi_newton_solver_function(nr, nc,delta_y,
-#                                              delta_x,
-#                                              b,
-#                                              ice_mask,
-#                                              n_pic_iterations,
-#                                              mucoef_0, C_0,
-#                                              sliding="basic_weertman")
-#solver = make_coupled_picnewton_solver_function(nr, nc,delta_y,
-#                                                delta_x,
-#                                                b,
-#                                                ice_mask,
-#                                                n_pic_iterations,
-#                                                n_newt_iterations,
-#                                                mucoef_0, C_0,
-#                                                sliding="basic_weertman")
-solver = implicit_forward_solver(nr, nc,delta_y,
-                                 delta_x,
-                                 b,
-                                 ice_mask,
-                                 n_pic_iterations,
-                                 n_newt_iterations,
-                                 mucoef_0, C_0,
-                                 sliding="basic_weertman",
-                                 temperature_field=temp_field)
+def explicit_spinup():
+    resolution = 1000
+    n_levels = 50
+    n_pic_iterations = 10
+    n_newt_iterations = 7
+    n_timesteps = 5000
+    
+    (
+        lx, ly, nr, nc,
+        x, y, delta_x,
+        delta_y, thk, b,
+        C_0, mucoef_0, q,
+        ice_mask, surface,
+        grounded
+    ) = mismip_domain(resolution=resolution)
+    p = jnp.zeros_like(q)
+    
+    temp_field = jnp.zeros_like(q)+269
+    
+    momentum_solver, advection_stepper = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+                                                  delta_y,
+                                                  delta_x,
+                                                  b,
+                                                  ice_mask,
+                                                  n_pic_iterations,
+                                                  n_newt_iterations,
+                                                  mucoef_0,
+                                                  C_0,
+                                                  sliding="basic_weertman",
+                                                  temperature_field=None,
+                                                )
+    
+    time_marcher = make_time_marcher(momentum_solver, advection_stepper, n_timesteps, delta_x, b)
+    
+    u_va, v_va, thk_final, dhdt_final = time_marcher(q, p, thk)
+    
+    jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{delta_t*n_timesteps}years.npy", thk_final)
+    
+    #show_vel_field(u_va, v_va)
+    
+    grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+    
+    #plt.imshow(grounded)
+    #plt.show()
+    #
+    #plt.imshow(thk_final-thk)
+    #plt.colorbar()
+    #plt.show()
+   
+    
+    plt.imshow(dhdt_final, vmin=-1, vmax=1, cmap="RdBu")
+    plt.colorbar()
+    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/dhdt_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
 
-delta_t = 50
+    plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+    plt.colorbar()
+    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
 
-u_trial = jnp.zeros_like(C_0)
-v_trial = jnp.zeros_like(u_trial)
+    plt.imshow(grounded)
+    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
 
-u_va, v_va, thk_final = solver(q, p, u_trial, v_trial, thk, delta_t, n_timesteps, accm=0.3)
-
-show_vel_field(u_va, v_va)
-
-grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
-
-plt.imshow(grounded)
-plt.show()
-
-plt.imshow(thk_final-thk)
-plt.colorbar()
-plt.show()
-
-
-
-
-
+explicit_spinup()
 raise
 ############ EXPLICIT:
 
