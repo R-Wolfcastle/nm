@@ -1276,7 +1276,7 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0):
 #    return jax.jit(beta)
 
 
-def make_gl_C_scaling_function(ny, nx, add_s_ghost_cells, a=2):
+def make_grounded_fraction_function(add_s_ghost_cells, a=2):
     """
     Returns a function grounded_fraction(b, h) -> array (ny, nx) giving
     the  fraction of each cell that is grounded for use in beta_function.
@@ -1818,12 +1818,72 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
  #   return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)
 
 
+def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
+    """
+    Stephy Cornford et al. (2016) Eq. (2)
+    """
+    def hgrads(h, b):
+        #Note: mode='edge' pads with the edge values of the array
+
+        s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
+        grounded_fraction = grounded_fraction_fct(b, h)
+        grounded = jnp.where(grounded_fraction>0.5, 1, 0)
+
+        s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
+        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+        s_s = jnp.pad(s, ((0,1),(0,0)), mode='edge')[1:, :]
+        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+
+        h_n = jnp.pad(h, ((1,0),(0,0)), mode='edge')[:-1, :]
+        h_e = jnp.pad(h, ((0,0),(0,1)), mode='edge')[:, 1:]
+        h_s = jnp.pad(h, ((0,1),(0,0)), mode='edge')[1:, :]
+        h_w = jnp.pad(h, ((0,0),(1,0)), mode='edge')[:, :-1]
+        
+        g_n = jnp.pad(grounded, ((1,0),(0,0)), mode='edge')[:-1, :]
+        g_e = jnp.pad(grounded, ((0,0),(0,1)), mode='edge')[:, 1:]
+        g_s = jnp.pad(grounded, ((0,1),(0,0)), mode='edge')[1:, :]
+        g_w = jnp.pad(grounded, ((0,0),(1,0)), mode='edge')[:, :-1]
+        
+        same_n = (g_n == grounded).astype(int)
+        same_e = (g_e == grounded).astype(int)
+        same_s = (g_s == grounded).astype(int)
+        same_w = (g_w == grounded).astype(int)
+
+        central_x   = h * (s_e - s_w) / (2*dx)
+        one_sided_e = 0.5 * (h_e + h) * (s_e - s) / dx
+        one_sided_w = 0.5 * (h_w + h) * (s - s_w) / dx
+
+        hdsdx = jnp.where(same_e & same_w, central_x,
+                    jnp.where(same_w, one_sided_w,
+                        jnp.where(same_e, one_sided_e,
+                                  central_x
+                                 )
+                             )
+                         )
+
+        central_y   = h * (s_n - s_s) / (2*dy)
+        one_sided_n = 0.5 * (h_n + h) * (s_n - s) / dy
+        one_sided_s = 0.5 * (h_s + h) * (s - s_s) / dy
+        
+        hdsdy = jnp.where(same_n & same_s, central_y,
+                    jnp.where(same_n, one_sided_n,
+                        jnp.where(same_s, one_sided_s,
+                                  central_y
+                                 )
+                             )
+                         )
+        return hdsdx, hdsdy
+        #return central_x, central_y
+
+    return jax.jit(hgrads)
 
 def gl_aware_driving_stress_function(dy, dx):
     """
     Stephy Cornford et al. (2016) Eq. (2)
     """
-    def h_gradds(s, h, grounded):
+    def hgrads(h, b):
+        s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
+        grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
         #Note: mode='edge' pads with the edge values of the array
 
         s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
@@ -1870,7 +1930,8 @@ def gl_aware_driving_stress_function(dy, dx):
                              )
                          )
         return hdsdx, hdsdy
+        #return central_x, central_y
 
-    return jax.jit(h_gradds)
+    return jax.jit(hgrads)
 
 

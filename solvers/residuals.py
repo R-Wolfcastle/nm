@@ -156,14 +156,14 @@ def compute_linear_ssa_residuals_function_fc_visc_gl_aware(ny, nx, dy, dx, b,\
 
         ice_mask = jnp.where(h.copy()>0, 1, 0)
 
-        s_gnd = h + b #b is globally defined
-        s_flt = h * (1-c.RHO_I/c.RHO_W)
-        s = jnp.maximum(s_gnd, s_flt)
+        #s_gnd = h + b #b is globally defined
+        #s_flt = h * (1-c.RHO_I/c.RHO_W)
+        #s = jnp.maximum(s_gnd, s_flt)
         
         #s = add_s_ghost_cells(s)
         #jax.debug.print("s: {x}",x=s)
 
-        hdsdx, hdsdy = hgrads_fct(s, h, (s_gnd>s_flt).astype(int))
+        hdsdx, hdsdy = hgrads_fct(b, h)
 
         volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
@@ -2087,11 +2087,11 @@ def compute_ssa_uv_residuals_function_wextrap(ny, nx, dy, dx, b,
         h = h_1d.reshape((ny, nx))
 
 
-        s_gnd = h + b #b is globally defined
-        s_flt = h * (1-c.RHO_I/c.RHO_W)
-        s = jnp.maximum(s_gnd, s_flt)
+        #s_gnd = h + b #b is globally defined
+        #s_flt = h * (1-c.RHO_I/c.RHO_W)
+        #s = jnp.maximum(s_gnd, s_flt)
 
-        hdsdx, hdsdy = hgrads_fct(s, h, (s_gnd>s_flt).astype(int))
+        hdsdx, hdsdy = hgrads_fct(h, b)
         
         beta = beta_fct(C, u, v, h)
 
@@ -3653,11 +3653,12 @@ def compute_uvh_linear_ssa_residuals_function_fc_visc_noextrap(ny, nx, dy, dx, b
         h = h_1d.reshape((ny, nx))
 
         ######### MOMENTUM RESIDUALS #############################
-        s_gnd = h + b
-        s_flt = h * (1-c.RHO_I/c.RHO_W)
-        s = jnp.maximum(s_gnd, s_flt)
+        #s_gnd = h + b
+        #s_flt = h * (1-c.RHO_I/c.RHO_W)
+        #s = jnp.maximum(s_gnd, s_flt)
 
-        hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+        #hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+        hdsdx, hdsdy = hgrads_fct(h, b)
 
         volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
@@ -3757,11 +3758,12 @@ def compute_uvh_residuals_function_fully_nonlinear_givenT_noextrap(ny, nx, dy, d
         h = h_1d.reshape((ny, nx))
 
         ######### MOMENTUM RESIDUALS #############################
-        s_gnd = h + b
-        s_flt = h * (1-c.RHO_I/c.RHO_W)
-        s = jnp.maximum(s_gnd, s_flt)
+        #s_gnd = h + b
+        #s_flt = h * (1-c.RHO_I/c.RHO_W)
+        #s = jnp.maximum(s_gnd, s_flt)
 
-        hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+        #hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+        hdsdx, hdsdy = hgrads_fct(h, b)
 
         beta = beta_fct(C, u, v, h)
 
@@ -3866,26 +3868,28 @@ def compute_uvh_linear_ssa_residuals_function_noextrap(ny, nx, dy, dx, b,
 
 
         ######### MOMENTUM RESIDUALS #############################
-        s_gnd = h + b
-        s_flt = h * (1-c.RHO_I/c.RHO_W)
-        s = jnp.maximum(s_gnd, s_flt)
-        
-        #s = add_s_ghost_cells(s)
-        ##jax.debug.print("s: {x}",x=s)
+        #s_gnd = h + b
+        #s_flt = h * (1-c.RHO_I/c.RHO_W)
+        #s = jnp.maximum(s_gnd, s_flt)
+        #
+        ##s = add_s_ghost_cells(s)
+        ###jax.debug.print("s: {x}",x=s)
 
-        #dsdx, dsdy = cc_gradient(s)
-        ##jax.debug.print("dsdx: {x}",x=dsdx)
-        ##sneakily fudge this:
-        #dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
-        #dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
-        #dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
-        #dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
-        #dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
-        #dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
-        #dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
-        #dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+        ##dsdx, dsdy = cc_gradient(s)
+        ###jax.debug.print("dsdx: {x}",x=dsdx)
+        ###sneakily fudge this:
+        ##dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
+        ##dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
+        ##dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
+        ##dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
+        ##dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
+        ##dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
+        ##dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
+        ##dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
 
-        hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+        #hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+
+        hdsdx, hdsdy = hgrads_fct(h, b)
 
         volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
