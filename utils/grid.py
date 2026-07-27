@@ -1276,30 +1276,81 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0):
 #    return jax.jit(beta)
 
 
-def beta_function(b, mode="linear"):
-    if mode=="linear":
-        def beta(C, u, v, h):
+def make_gl_C_scaling_function(ny, nx, add_s_ghost_cells, a=2):
+    """
+    Returns a function grounded_fraction(b, h) -> array (ny, nx) giving
+    the  fraction of each cell that is grounded for use in beta_function.
+
+    a: each cell is split into (2**a) x (2**a)
+       sub-cells. a=2 -> 4x4=16 sub-cells per cell.
+
+    Based on stuff in Cornford 2016 AMR vs subgrid friction interpolation...
+    """
+    n_sub = 2 ** a
+    u = (jnp.arange(n_sub) + 0.5) / n_sub  # sub-cell centres, local coord in [0,1]
+    v = (jnp.arange(n_sub) + 0.5) / n_sub
+
+    #bilinear weights for each of the four corners, shape (n_sub, n_sub)
+    #https://en.wikipedia.org/wiki/Bilinear_interpolatio - unit square, first formula
+    w_sw = jnp.outer(1 - v, 1 - u)
+    w_se = jnp.outer(1 - v, u)
+    w_nw = jnp.outer(v, 1 - u)
+    w_ne = jnp.outer(v, u)
+
+    def grounded_fraction(b, h):
+        haf = h + b * (c.RHO_W/c.RHO_I)
+
+        haf_full = add_s_ghost_cells(haf) 
+
+        # corner values: average of the (up to) 4 cell-centre values
+        # touching each corner. Shape (ny+1, nx+1).
+        corners = 0.25 * (
+            haf_full[:-1, :-1] + haf_full[:-1, 1:] + haf_full[1:, :-1] + haf_full[1:, 1:]
+        )
+
+        #I know I'm mixing global coordinate system with origin in the top left and
+        #a local one with origin in the bottom left, but screw you.
+        haf_sw = corners[1:,  :-1]  # (ny, nx)
+        haf_se = corners[1:,   1:]
+        haf_nw = corners[:-1, :-1]
+        haf_ne = corners[:-1,  1:]
+
+        # f_sub[i,j,k,l] = bilinear interpolant of cell (i,j) at sub-cell (k,l)
+        #shape is (ny, nx, n_sub, n_sub)
+        haf_sub = (
+            haf_sw[:, :, None, None] * w_sw +\
+            haf_se[:, :, None, None] * w_se +\
+            haf_nw[:, :, None, None] * w_nw +\
+            haf_ne[:, :, None, None] * w_ne
+                )
+
+        return jnp.mean(haf_sub > 0, axis=(-2, -1))
+
+    return jax.jit(grounded_fraction)
+
+
+def beta_function(b, mode="linear", C_scaling_function=None):
+    if C_scaling_function is None:
+        def C_scaling_function(b, h):
             s_gnd = h + b
             s_flt = h * (1-c.RHO_I/c.RHO_W)
+            return jnp.where(s_gnd>s_flt, 1, 0)
 
-            beta = jnp.where(s_gnd>s_flt, C, 0)
+    if mode=="linear":
+        def beta(C, u, v, h):
+            beta = C * C_scaling_function(b, h)
             beta = jnp.where(h>0, beta, 1)
-            #beta =  jnp.where(True, C, 0)
-
             return beta
     
     if mode=="basic_weertman":
         def beta(C, u, v, h):
+            
             speed = jnp.sqrt(u*u + v*v + 1)
             beta = C * (speed ** (1/c.GLEN_N - 1))
-            #beta = C #* (speed ** (1/1 - 1))
-
-            s_gnd = h + b
-            s_flt = h * (1-c.RHO_I/c.RHO_W)
-
-            beta = jnp.where(s_gnd>s_flt, beta, 0)
+            
+            beta = beta * C_scaling_function(b, h)
+            
             beta = jnp.where(h>0, beta, 1)
-            #beta =  jnp.where(True, C, 0)
 
             return beta
 
