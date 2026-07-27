@@ -1276,7 +1276,7 @@ def cc_viscosity_function(ny, nx, dy, dx, cc_vector_field_gradient, mucoef_0):
 #    return jax.jit(beta)
 
 
-def make_gl_C_scaling_function(ny, nx, add_s_ghost_cells, a=2):
+def make_gl_C_scaling_function(add_s_ghost_cells, a=2):
     """
     Returns a function grounded_fraction(b, h) -> array (ny, nx) giving
     the  fraction of each cell that is grounded for use in beta_function.
