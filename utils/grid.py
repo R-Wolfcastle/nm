@@ -1302,8 +1302,8 @@ def make_grounded_fraction_function(add_s_ghost_cells, a=2):
 
             haf_full = add_s_ghost_cells(haf) 
 
-            # corner values: average of the (up to) 4 cell-centre values
-            # touching each corner. Shape (ny+1, nx+1).
+            #corner values: average of the (up to) 4 cell-centre values
+            #touching each corner. Shape (ny+1, nx+1).
             corners = 0.25 * (
                 haf_full[:-1, :-1] + haf_full[:-1, 1:] + haf_full[1:, :-1] + haf_full[1:, 1:]
             )
@@ -1315,7 +1315,7 @@ def make_grounded_fraction_function(add_s_ghost_cells, a=2):
             haf_nw = corners[:-1, :-1]
             haf_ne = corners[:-1,  1:]
 
-            # f_sub[i,j,k,l] = bilinear interpolant of cell (i,j) at sub-cell (k,l)
+            #haf_sub[i,j,k,l] = bilinear interpolant of cell (i,j) at sub-cell (k,l)
             #shape is (ny, nx, n_sub, n_sub)
             haf_sub = (
                 haf_sw[:, :, None, None] * w_sw +\
@@ -1329,549 +1329,556 @@ def make_grounded_fraction_function(add_s_ghost_cells, a=2):
         return jax.jit(grounded_fraction)
 
 
-    def beta_function(b, mode="linear", C_scaling_function=None):
-        if C_scaling_function is None:
-            def C_scaling_function(b, h):
-                s_gnd = h + b
-                s_flt = h * (1-c.RHO_I/c.RHO_W)
-                return jnp.where(s_gnd>s_flt, 1, 0)
+def beta_function(b, mode="linear", C_scaling_function=None):
+    if C_scaling_function is None:
+        def C_scaling_function(b, h):
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+            return jnp.where(s_gnd>s_flt, 1, 0)
 
-        if mode=="linear":
-            def beta(C, u, v, h):
-                beta = C * C_scaling_function(b, h)
-                beta = jnp.where(h>0, beta, 1)
-                return beta
+    if mode=="linear":
+        def beta(C, u, v, h):
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+            
+            beta = C
+            #beta = C * C_scaling_function(b, h)
+            beta = jnp.where(s_gnd>s_flt, beta, 0)
+            beta = jnp.where(h>0, beta, 1)
+            return beta
+    
+    if mode=="basic_weertman":
+        def beta(C, u, v, h):
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+            
+            speed = jnp.sqrt(u*u + v*v + 1)
+            beta = C * (speed ** (1/c.GLEN_N - 1))
+            
+            #beta = beta * C_scaling_function(b, h)
+            beta = jnp.where(s_gnd>s_flt, beta, 0)
+            
+            beta = jnp.where(h>0, beta, 1)
+
+            return beta
+
+    return jax.jit(beta)
+
+
+def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
+                               extrp_over_cf, add_uv_ghost_cells,
+                               add_s_ghost_cells,
+                               cc_gradient, mucoef_0,
+                               temp_cc=None):
+    if temp_cc==None:
+        temp_cc = jnp.zeros((ny,nx))+263.15
+
+    B_cc = B_from_T(temp_cc)
+
+    def randd_stress(q, u, v, h):
+        mucoef = mucoef_0*jnp.exp(q)
         
-        if mode=="basic_weertman":
-            def beta(C, u, v, h):
-                
-                speed = jnp.sqrt(u*u + v*v + 1)
-                beta = C * (speed ** (1/c.GLEN_N - 1))
-                
-                beta = beta * C_scaling_function(b, h)
-                
-                beta = jnp.where(h>0, beta, 1)
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
-                return beta
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
 
-        return jax.jit(beta)
+        dudx, dudy = cc_gradient(u)
+        dvdx, dvdy = cc_gradient(v)
 
-
-    def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
-                                   extrp_over_cf, add_uv_ghost_cells,
-                                   add_s_ghost_cells,
-                                   cc_gradient, mucoef_0,
-                                   temp_cc=None):
-        if temp_cc==None:
-            temp_cc = jnp.zeros((ny,nx))+263.15
-
-        B_cc = B_from_T(temp_cc)
-
-        def randd_stress(q, u, v, h):
-            mucoef = mucoef_0*jnp.exp(q)
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
-
-            u = extrp_over_cf(u)
-            v = extrp_over_cf(v)
-            #and add the ghost cells in
-            u, v = add_uv_ghost_cells(u, v)
-
-            dudx, dudy = cc_gradient(u)
-            dvdx, dvdy = cc_gradient(v)
-
-            #calculate face-centred viscosity:
-            mu = B_cc * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
-                        0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-            #mu = B_cc * (dudx**2 + dvdy**2 + dudx*dvdy +\
-            #            0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        #calculate face-centred viscosity:
+        mu = B_cc * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
+                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        #mu = B_cc * (dudx**2 + dvdy**2 + dudx*dvdy +\
+        #            0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
 
-            tau_xx = 2 * mu * dudx
-            tau_yy = 2 * mu * dvdy
-            tau_xy = mu * (dudy + dvdx)
+        tau_xx = 2 * mu * dudx
+        tau_yy = 2 * mu * dvdy
+        tau_xy = mu * (dudy + dvdx)
 
-            visc_xx = (2*tau_xx + tau_yy)
-            visc_yy = (2*tau_yy + tau_xx)
-            visc_xy = tau_xy.copy()
-
-
-            r_stress = jnp.stack([
-                jnp.stack([visc_xx, visc_xy], axis=-1),
-                jnp.stack([visc_xy, visc_yy], axis=-1)
-            ], axis=-2)
-
-            d_stress = jnp.stack([
-                jnp.stack([tau_xx, tau_xy], axis=-1),
-                jnp.stack([tau_xy, tau_yy], axis=-1)
-            ], axis=-2)
-
-            return r_stress, d_stress
+        visc_xx = (2*tau_xx + tau_yy)
+        visc_yy = (2*tau_yy + tau_xx)
+        visc_xy = tau_xy.copy()
 
 
-        return jax.jit(randd_stress)
+        r_stress = jnp.stack([
+            jnp.stack([visc_xx, visc_xy], axis=-1),
+            jnp.stack([visc_xy, visc_yy], axis=-1)
+        ], axis=-2)
+
+        d_stress = jnp.stack([
+            jnp.stack([tau_xx, tau_xy], axis=-1),
+            jnp.stack([tau_xy, tau_yy], axis=-1)
+        ], axis=-2)
+
+        return r_stress, d_stress
 
 
-    def principal_resistive_stress_function(ny, nx, dy, dx,
-                                   #extrp_over_cf,
-                                   add_uv_ghost_cells,
-                                   add_s_ghost_cells,
-                                   cc_gradient, mucoef_0,
-                                   temp_cc=None):
-        if temp_cc==None:
-            temp_cc = jnp.zeros((ny,nx))+263.15
-
-        B_cc = B_from_T(temp_cc)
-
-        def prs_fct(q, u, v, h):
-            mucoef = mucoef_0*jnp.exp(q)
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
-
-            #u = extrp_over_cf(u)
-            #v = extrp_over_cf(v)
-
-            #and add the ghost cells in
-            u, v = add_uv_ghost_cells(u, v)
-
-            dudx, dudy = cc_gradient(u)
-            dvdx, dvdy = cc_gradient(v)
-
-            #calculate face-centred viscosity:
-            mu = B_cc * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
-                        0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-
-            tau_xx = 2 * mu * dudx
-            tau_yy = 2 * mu * dvdy
-            tau_xy = mu * (dudy + dvdx)
-
-            visc_xx = (2*tau_xx + tau_yy)
-            visc_yy = (2*tau_yy + tau_xx)
-            visc_xy = tau_xy.copy()
+    return jax.jit(randd_stress)
 
 
-            return 0.5 * (visc_xx + visc_yy + jnp.sqrt(
-                                      (visc_xx + visc_yy)**2 -\
-                                      4*(visc_xx*visc_yy - visc_xy**2)
-                                           )
-                         )
-            #return visc_xx
+def principal_resistive_stress_function(ny, nx, dy, dx,
+                               #extrp_over_cf,
+                               add_uv_ghost_cells,
+                               add_s_ghost_cells,
+                               cc_gradient, mucoef_0,
+                               temp_cc=None):
+    if temp_cc==None:
+        temp_cc = jnp.zeros((ny,nx))+263.15
 
-        return jax.jit(prs_fct)
+    B_cc = B_from_T(temp_cc)
 
-
-    def cc_viscosity_function(ny, nx, dy, dx, 
-                              add_uv_ghost_cells,
-                              add_s_ghost_cells,
-                              interp_cc_to_fc, 
-                              ew_gradient,
-                              ns_gradient, 
-                              ice_mask, mucoef_0,
-                              temp_cc):
-
-        temp_cc = add_s_ghost_cells(temp_cc)
-        B_cc = B_from_T(temp_cc)
-        B_ew, B_ns = interp_cc_to_fc(B_cc)
+    def prs_fct(q, u, v, h):
+        mucoef = mucoef_0*jnp.exp(q)
         
-        def fc_viscosity(q, u, v):
-            mucoef = mucoef_0*jnp.exp(q)
-            mucoef = add_s_ghost_cells(mucoef)
-            mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
-            u = extrp_over_cf(u)
-            v = extrp_over_cf(v)
-            #and add the ghost cells in
-            u, v = add_uv_ghost_cells(u, v)
+        #u = extrp_over_cf(u)
+        #v = extrp_over_cf(v)
 
-            #various face-centred derivatives
-            dudx_ew, dudy_ew = ew_gradient(u)
-            dvdx_ew, dvdy_ew = ew_gradient(v)
-            dudx_ns, dudy_ns = ns_gradient(u)
-            dvdx_ns, dvdy_ns = ns_gradient(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
 
-            u = u[1:-1,1:-1]
-            v = v[1:-1,1:-1]
-            u = u*ice_mask
-            v = v*ice_mask
-            
-            #calculate face-centred viscosity:
-            mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                        0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-            mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                        0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        dudx, dudy = cc_gradient(u)
+        dvdx, dvdy = cc_gradient(v)
 
-            #to account for calving front boundary condition, set effective viscosities
-            #of faces of all cells with zero thickness to zero:
-            mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
-            mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
-            mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
-            mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+        #calculate face-centred viscosity:
+        mu = B_cc * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
+                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-            return mu_ew, mu_ns
-        return jax.jit(fc_viscosity)
+        tau_xx = 2 * mu * dudx
+        tau_yy = 2 * mu * dvdy
+        tau_xy = mu * (dudy + dvdx)
+
+        visc_xx = (2*tau_xx + tau_yy)
+        visc_yy = (2*tau_yy + tau_xx)
+        visc_xy = tau_xy.copy()
 
 
+        return 0.5 * (visc_xx + visc_yy + jnp.sqrt(
+                                  (visc_xx + visc_yy)**2 -\
+                                  4*(visc_xx*visc_yy - visc_xy**2)
+                                       )
+                     )
+        #return visc_xx
 
-    def fc_viscosity_function_new_givenT(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
-                              add_s_ghost_cells,
-                              interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0,
-                                         temp_cc):
+    return jax.jit(prs_fct)
 
-        temp_cc = add_s_ghost_cells(temp_cc)
-        B_cc = B_from_T(temp_cc)
-        B_ew, B_ns = interp_cc_to_fc(B_cc)
+
+def cc_viscosity_function(ny, nx, dy, dx, 
+                          add_uv_ghost_cells,
+                          add_s_ghost_cells,
+                          interp_cc_to_fc, 
+                          ew_gradient,
+                          ns_gradient, 
+                          ice_mask, mucoef_0,
+                          temp_cc):
+
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+    
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
         
-        def fc_viscosity(q, u, v):
-            mucoef = mucoef_0*jnp.exp(q)
-            mucoef = add_s_ghost_cells(mucoef)
-            mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
-            u = extrp_over_cf(u)
-            v = extrp_over_cf(v)
-            #and add the ghost cells in
-            u, v = add_uv_ghost_cells(u, v)
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
 
-            #various face-centred derivatives
-            dudx_ew, dudy_ew = ew_gradient(u)
-            dvdx_ew, dvdy_ew = ew_gradient(v)
-            dudx_ns, dudy_ns = ns_gradient(u)
-            dvdx_ns, dvdy_ns = ns_gradient(v)
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
 
-            u = u[1:-1,1:-1]
-            v = v[1:-1,1:-1]
-            u = u*ice_mask
-            v = v*ice_mask
-            
-            #calculate face-centred viscosity:
-            mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                        0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-            mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                        0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-
-            #to account for calving front boundary condition, set effective viscosities
-            #of faces of all cells with zero thickness to zero:
-            mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
-            mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
-            mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
-            mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
-
-            return mu_ew, mu_ns
-        return jax.jit(fc_viscosity)
-
-    def fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, add_uv_ghost_cells,
-                                                  add_s_ghost_cells,
-                                                  interp_cc_to_fc, 
-                                                  fc_vel_gradient, 
-                                                  ice_mask, mucoef_0,
-                                                  temp_cc):
-
-        temp_cc = add_s_ghost_cells(temp_cc)
-        B_cc = B_from_T(temp_cc)
-        B_ew, B_ns = interp_cc_to_fc(B_cc)
+        u = u[1:-1,1:-1]
+        v = v[1:-1,1:-1]
+        u = u*ice_mask
+        v = v*ice_mask
         
-        def fc_viscosity(q, u, v):
-            mucoef = mucoef_0*jnp.exp(q)
-            mucoef = add_s_ghost_cells(mucoef)
-            mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
+        #calculate face-centred viscosity:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-            #various face-centred derivatives
-            dudx_ew, dudy_ew,\
-            dvdx_ew, dvdy_ew,\
-            dudx_ns, dudy_ns,\
-            dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
 
-            u = u*ice_mask
-            v = v*ice_mask
-            
-            #calculate face-centred viscosity:
-            mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                        0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-            mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                        0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
 
-            #to account for calving front boundary condition, set effective viscosities
-            #of faces of all cells with zero thickness to zero:
-            mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
-            mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
-            mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
-            mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
 
-            return mu_ew, mu_ns
-        return jax.jit(fc_viscosity)
 
-    def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
-                              add_mucoef_ghost_cells,
-                              interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0):
+def fc_viscosity_function_new_givenT(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+                          add_s_ghost_cells,
+                          interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0,
+                                     temp_cc):
+
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+    
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
         
-        def fc_viscosity(q, u, v):
-            mucoef = mucoef_0*jnp.exp(q)
-            mucoef = add_mucoef_ghost_cells(mucoef)
-            mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
-            u = extrp_over_cf(u)
-            v = extrp_over_cf(v)
-            #and add the ghost cells in
-            u, v = add_uv_ghost_cells(u, v)
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
 
-            #various face-centred derivatives
-            dudx_ew, dudy_ew = ew_gradient(u)
-            dvdx_ew, dvdy_ew = ew_gradient(v)
-            dudx_ns, dudy_ns = ns_gradient(u)
-            dvdx_ns, dvdy_ns = ns_gradient(v)
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
 
-            u = u[1:-1,1:-1]
-            v = v[1:-1,1:-1]
-            u = u*ice_mask
-            v = v*ice_mask
-            
-            #calculate face-centred viscosity:
-            mu_ew = 1.0 + c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                        0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-            mu_ns = 1.0 + c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                        0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        u = u[1:-1,1:-1]
+        v = v[1:-1,1:-1]
+        u = u*ice_mask
+        v = v*ice_mask
+        
+        #calculate face-centred viscosity:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-            #to account for calving front boundary condition, set effective viscosities
-            #of faces of all cells with zero thickness to zero:
-            mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
-            mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
-            mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
-            mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
 
-            return mu_ew, mu_ns
-        return jax.jit(fc_viscosity)
-     
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
 
+def fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, add_uv_ghost_cells,
+                                              add_s_ghost_cells,
+                                              interp_cc_to_fc, 
+                                              fc_vel_gradient, 
+                                              ice_mask, mucoef_0,
+                                              temp_cc):
 
-    def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
-                              add_mucoef_ghost_cells,
-                              interp_cc_to_fc, ew_gradient, ns_gradient, h_1d, mucoef_0):
-        def fc_viscosity(q, u, v):
-            mucoef = mucoef_0*jnp.exp(q)
-            mucoef = add_mucoef_ghost_cells(mucoef)
-            mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
-            h = h_1d.reshape((ny, nx))
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+    
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
-            u = extrp_over_cf(u)
-            v = extrp_over_cf(v)
-            #and add the ghost cells in
-            u, v = add_uv_ghost_cells(u, v)
+        #various face-centred derivatives
+        dudx_ew, dudy_ew,\
+        dvdx_ew, dvdy_ew,\
+        dudx_ns, dudy_ns,\
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
 
-            #various face-centred derivatives
-            dudx_ew, dudy_ew = ew_gradient(u)
-            dvdx_ew, dvdy_ew = ew_gradient(v)
-            dudx_ns, dudy_ns = ns_gradient(u)
-            dvdx_ns, dvdy_ns = ns_gradient(v)
-            
-            #calculate face-centred viscosity:
-            mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-                        0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-            mu_ns = c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-                        0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        u = u*ice_mask
+        v = v*ice_mask
+        
+        #calculate face-centred viscosity:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-            #to account for calving front boundary condition, set effective viscosities
-            #of faces of all cells with zero thickness to zero:
-            mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
-            mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
-            mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
-            mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
 
-            return mu_ew, mu_ns
-        return jax.jit(fc_viscosity)
-     
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
 
-    #def node_centred_viscosity_function(ny, nx, dy, dx,
-    #                                    add_s_ghost_cells,
-    #                                    nc_vel_gradient,
-    #                                    fc_vel_gradient
-    #                                    ice_mask, mucoef_0,
-    #                                    temp_cc):
-    #
-    #    temp_cc = add_s_ghost_cells(temp_cc)
-    #    B_cc = B_from_T(temp_cc)
-    #    B_nc = interp_cc_to_nc(B_cc)
-    #    
-    #    def fc_viscosity(q, u, v):
-    #        mucoef = mucoef_0*jnp.exp(q)
-    #        mucoef = add_s_ghost_cells(mucoef)
-    #        mucoef_nc = interp_cc_to_fc(mucoef)
-    #        
-    #        u = u.reshape((ny, nx))
-    #        v = v.reshape((ny, nx))
-    #
-    #        #various face-centred derivatives
-    #        dudx_ew, dudy_ew,\
-    #        dvdx_ew, dvdy_ew,\
-    #        dudx_ns, dudy_ns,\
-    #        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
-    #        #various node-centred derivatives
-    #        dudx_node, dudy_node,\
-    #        dvdx_node, dvdy_node = nc_vel_gradient(u)
-    #
-    #        u = u*ice_mask
-    #        v = v*ice_mask
-    #        
-    #        #calculate node-centred viscosity:
-    #        mu_nc = B_nc * mucoef_nc * (dudx_nc**2 + dvdy_nc**2 + dudx_nc*dvdy_nc +\
-    #                    0.25*(dudy_nc+dvdx_nc)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-    #
-    #        #to account for calving front boundary condition, set effective viscosities
-    #        #of faces of all cells with zero thickness to zero:
-    #        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
-    #        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
-    #        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
-    #        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
-    #
-    #        return mu_ew, mu_ns
-    #    return jax.jit(fc_viscosity)
+def fc_viscosity_function_new(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+                          add_mucoef_ghost_cells,
+                          interp_cc_to_fc, ew_gradient, ns_gradient, ice_mask, mucoef_0):
+    
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_mucoef_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
 
-    def node_centred_viscosity_function(ny, nx, dy, dx,
-                                        add_s_ghost_cells,
-                                        nc_vel_gradient,
-                                        ice_mask, mucoef_0,
-                                        temp_cc):
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
 
-        temp_cc = add_s_ghost_cells(temp_cc)
-        B_cc = B_from_T(temp_cc)
-        B_nc = interp_cc_to_nc(B_cc)
-            
-        nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
 
-        def nc_viscosity(q, u, v):
-            mucoef = mucoef_0*jnp.exp(q)
-            mucoef = add_s_ghost_cells(mucoef)
-            mucoef_nc = interp_cc_to_nc(mucoef)
+        u = u[1:-1,1:-1]
+        v = v[1:-1,1:-1]
+        u = u*ice_mask
+        v = v*ice_mask
+        
+        #calculate face-centred viscosity:
+        mu_ew = 1.0 + c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = 1.0 + c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-            
-            u = u.reshape((ny, nx))
-            v = v.reshape((ny, nx))
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
 
-            #various node-centred derivatives
-            dudx_nc, dudy_nc,\
-            dvdx_nc, dvdy_nc = nc_vel_gradient(u, v)
-
-            u = u*ice_mask
-            v = v*ice_mask
-            
-            #calculate node-centred viscosity:
-            mu_nc = B_nc * mucoef_nc * (dudx_nc**2 + dvdy_nc**2 + dudx_nc*dvdy_nc +\
-                        0.25*(dudy_nc+dvdx_nc)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)) *\
-                        nc_ice_mask
-
-            return mu_nc
-        return jax.jit(nc_viscosity)
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
+ 
 
 
-     #def fc_viscosity_function_not_fixed_thk(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
-     #                         add_mucoef_ghost_cells,
-     #                         interp_cc_to_fc, ew_gradient, ns_gradient, B):
-     #   def fc_viscosity(q, u, v, h):
-     #       mucoef = mucoef_0*jnp.exp(q)
-     #       mucoef = add_mucoef_ghost_cells(mucoef)
-     #       mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
-     #       
-     #       u = u.reshape((ny, nx))
-     #       v = v.reshape((ny, nx))
-     #       h = h_1d.reshape((ny, nx))
+def fc_viscosity_function(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+                          add_mucoef_ghost_cells,
+                          interp_cc_to_fc, ew_gradient, ns_gradient, h_1d, mucoef_0):
+    def fc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_mucoef_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
 
-     #       u = extrp_over_cf(u)
-     #       v = extrp_over_cf(v)
-     #       #and add the ghost cells in
-     #       u, v = add_uv_ghost_cells(u, v)
+        u = extrp_over_cf(u)
+        v = extrp_over_cf(v)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
 
-     #       #various face-centred derivatives
-     #       dudx_ew, dudy_ew = ew_gradient(u)
-     #       dvdx_ew, dvdy_ew = ew_gradient(v)
-     #       dudx_ns, dudy_ns = ns_gradient(u)
-     #       dvdx_ns, dvdy_ns = ns_gradient(v)
-     #       
-     #       #calculate face-centred viscosity:
-     #       mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
-     #                   0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
-     #       mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
-     #                   0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        #various face-centred derivatives
+        dudx_ew, dudy_ew = ew_gradient(u)
+        dvdx_ew, dvdy_ew = ew_gradient(v)
+        dudx_ns, dudy_ns = ns_gradient(u)
+        dvdx_ns, dvdy_ns = ns_gradient(v)
+        
+        #calculate face-centred viscosity:
+        mu_ew = c.B_COLD * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = c.B_COLD * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-     #       #to account for calving front boundary condition, set effective viscosities
-     #       #of faces of all cells with zero thickness to zero:
-     #       mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
-     #       mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
-     #       mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
-     #       mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
-     #       return mu_ew, mu_ns
-     #   return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
+ 
+
+#def node_centred_viscosity_function(ny, nx, dy, dx,
+#                                    add_s_ghost_cells,
+#                                    nc_vel_gradient,
+#                                    fc_vel_gradient
+#                                    ice_mask, mucoef_0,
+#                                    temp_cc):
+#
+#    temp_cc = add_s_ghost_cells(temp_cc)
+#    B_cc = B_from_T(temp_cc)
+#    B_nc = interp_cc_to_nc(B_cc)
+#    
+#    def fc_viscosity(q, u, v):
+#        mucoef = mucoef_0*jnp.exp(q)
+#        mucoef = add_s_ghost_cells(mucoef)
+#        mucoef_nc = interp_cc_to_fc(mucoef)
+#        
+#        u = u.reshape((ny, nx))
+#        v = v.reshape((ny, nx))
+#
+#        #various face-centred derivatives
+#        dudx_ew, dudy_ew,\
+#        dvdx_ew, dvdy_ew,\
+#        dudx_ns, dudy_ns,\
+#        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
+#        #various node-centred derivatives
+#        dudx_node, dudy_node,\
+#        dvdx_node, dvdy_node = nc_vel_gradient(u)
+#
+#        u = u*ice_mask
+#        v = v*ice_mask
+#        
+#        #calculate node-centred viscosity:
+#        mu_nc = B_nc * mucoef_nc * (dudx_nc**2 + dvdy_nc**2 + dudx_nc*dvdy_nc +\
+#                    0.25*(dudy_nc+dvdx_nc)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+#
+#        #to account for calving front boundary condition, set effective viscosities
+#        #of faces of all cells with zero thickness to zero:
+#        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+#        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+#        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+#        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+#
+#        return mu_ew, mu_ns
+#    return jax.jit(fc_viscosity)
+
+def node_centred_viscosity_function(ny, nx, dy, dx,
+                                    add_s_ghost_cells,
+                                    nc_vel_gradient,
+                                    ice_mask, mucoef_0,
+                                    temp_cc):
+
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_nc = interp_cc_to_nc(B_cc)
+        
+    nc_ice_mask = jnp.where(interp_cc_to_nc(add_s_ghost_cells(ice_mask))>0.999, 1, 0)
+
+    def nc_viscosity(q, u, v):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_nc = interp_cc_to_nc(mucoef)
+
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        #various node-centred derivatives
+        dudx_nc, dudy_nc,\
+        dvdx_nc, dvdy_nc = nc_vel_gradient(u, v)
+
+        u = u*ice_mask
+        v = v*ice_mask
+        
+        #calculate node-centred viscosity:
+        mu_nc = B_nc * mucoef_nc * (dudx_nc**2 + dvdy_nc**2 + dudx_nc*dvdy_nc +\
+                    0.25*(dudy_nc+dvdx_nc)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1)) *\
+                    nc_ice_mask
+
+        return mu_nc
+    return jax.jit(nc_viscosity)
 
 
-    def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
-        """
-        Stephy Cornford et al. (2016) Eq. (2)
-        """
-        def hgrads(h, b):
-            #Note: mode='edge' pads with the edge values of the array
+ #def fc_viscosity_function_not_fixed_thk(ny, nx, dy, dx, extrp_over_cf, add_uv_ghost_cells,
+ #                         add_mucoef_ghost_cells,
+ #                         interp_cc_to_fc, ew_gradient, ns_gradient, B):
+ #   def fc_viscosity(q, u, v, h):
+ #       mucoef = mucoef_0*jnp.exp(q)
+ #       mucoef = add_mucoef_ghost_cells(mucoef)
+ #       mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+ #       
+ #       u = u.reshape((ny, nx))
+ #       v = v.reshape((ny, nx))
+ #       h = h_1d.reshape((ny, nx))
 
-            s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
-            grounded_fraction = grounded_fraction_fct(b, h)
-            grounded = jnp.where(grounded_fraction>0.5, 1, 0)
+ #       u = extrp_over_cf(u)
+ #       v = extrp_over_cf(v)
+ #       #and add the ghost cells in
+ #       u, v = add_uv_ghost_cells(u, v)
 
-            s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
-            s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
-            s_s = jnp.pad(s, ((0,1),(0,0)), mode='edge')[1:, :]
-            s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+ #       #various face-centred derivatives
+ #       dudx_ew, dudy_ew = ew_gradient(u)
+ #       dvdx_ew, dvdy_ew = ew_gradient(v)
+ #       dudx_ns, dudy_ns = ns_gradient(u)
+ #       dvdx_ns, dvdy_ns = ns_gradient(v)
+ #       
+ #       #calculate face-centred viscosity:
+ #       mu_ew = B * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+ #                   0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+ #       mu_ns = B * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+ #                   0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
 
-            h_n = jnp.pad(h, ((1,0),(0,0)), mode='edge')[:-1, :]
-            h_e = jnp.pad(h, ((0,0),(0,1)), mode='edge')[:, 1:]
-            h_s = jnp.pad(h, ((0,1),(0,0)), mode='edge')[1:, :]
-            h_w = jnp.pad(h, ((0,0),(1,0)), mode='edge')[:, :-1]
-            
-            g_n = jnp.pad(grounded, ((1,0),(0,0)), mode='edge')[:-1, :]
-            g_e = jnp.pad(grounded, ((0,0),(0,1)), mode='edge')[:, 1:]
-            g_s = jnp.pad(grounded, ((0,1),(0,0)), mode='edge')[1:, :]
-            g_w = jnp.pad(grounded, ((0,0),(1,0)), mode='edge')[:, :-1]
-            
-            same_n = (g_n == grounded).astype(int)
-            same_e = (g_e == grounded).astype(int)
-            same_s = (g_s == grounded).astype(int)
-            same_w = (g_w == grounded).astype(int)
+ #       #to account for calving front boundary condition, set effective viscosities
+ #       #of faces of all cells with zero thickness to zero:
+ #       mu_ew = mu_ew.at[:, 1:].set(jnp.where(h==0, 0, mu_ew[:, 1:]))
+ #       mu_ew = mu_ew.at[:,:-1].set(jnp.where(h==0, 0, mu_ew[:,:-1]))
+ #       mu_ns = mu_ns.at[1:, :].set(jnp.where(h==0, 0, mu_ns[1:, :]))
+ #       mu_ns = mu_ns.at[:-1,:].set(jnp.where(h==0, 0, mu_ns[:-1,:]))
 
-            central_x   = h * (s_e - s_w) / (2*dx)
-            one_sided_e = 0.5 * (h_e + h) * (s_e - s) / dx
-            one_sided_w = 0.5 * (h_w + h) * (s - s_w) / dx
+ #       return mu_ew, mu_ns
+ #   return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)
 
-            hdsdx = jnp.where(same_e & same_w, central_x,
-                        jnp.where(same_w, one_sided_w,
-                            jnp.where(same_e, one_sided_e,
-                                      central_x
-                                     )
-                                 )
-                             )
 
-            central_y   = h * (s_n - s_s) / (2*dy)
-            one_sided_n = 0.5 * (h_n + h) * (s_n - s) / dy
-            one_sided_s = 0.5 * (h_s + h) * (s - s_s) / dy
-            
-            hdsdy = jnp.where(same_n & same_s, central_y,
-                        jnp.where(same_n, one_sided_n,
-                            jnp.where(same_s, one_sided_s,
-                                      central_y
+def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
+    """
+    Cornford et al. (2016) Eq. (2)
+    """
+    def hgrads(h, b):
+        s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
+        grounded_fraction = grounded_fraction_fct(b, h)
+        grounded = jnp.where(grounded_fraction>0.5, 1, 0)
+
+        s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
+        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+        s_s = jnp.pad(s, ((0,1),(0,0)), mode='edge')[1:, :]
+        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+
+        h_n = jnp.pad(h, ((1,0),(0,0)), mode='edge')[:-1, :]
+        h_e = jnp.pad(h, ((0,0),(0,1)), mode='edge')[:, 1:]
+        h_s = jnp.pad(h, ((0,1),(0,0)), mode='edge')[1:, :]
+        h_w = jnp.pad(h, ((0,0),(1,0)), mode='edge')[:, :-1]
+        
+        g_n = jnp.pad(grounded, ((1,0),(0,0)), mode='edge')[:-1, :]
+        g_e = jnp.pad(grounded, ((0,0),(0,1)), mode='edge')[:, 1:]
+        g_s = jnp.pad(grounded, ((0,1),(0,0)), mode='edge')[1:, :]
+        g_w = jnp.pad(grounded, ((0,0),(1,0)), mode='edge')[:, :-1]
+        
+        same_n = (g_n == grounded).astype(int)
+        same_e = (g_e == grounded).astype(int)
+        same_s = (g_s == grounded).astype(int)
+        same_w = (g_w == grounded).astype(int)
+
+        central_x   = h * (s_e - s_w) / (2*dx)
+        one_sided_e = 0.5 * (h_e + h) * (s_e - s) / dx
+        one_sided_w = 0.5 * (h_w + h) * (s - s_w) / dx
+
+        hdsdx = jnp.where(same_e & same_w, central_x,
+                    jnp.where(same_w, one_sided_w,
+                        jnp.where(same_e, one_sided_e,
+                                  central_x
                                  )
                              )
                          )
+
+        central_y   = h * (s_n - s_s) / (2*dy)
+        one_sided_n = 0.5 * (h_n + h) * (s_n - s) / dy
+        one_sided_s = 0.5 * (h_s + h) * (s - s_s) / dy
+        
+        hdsdy = jnp.where(same_n & same_s, central_y,
+                    jnp.where(same_n, one_sided_n,
+                        jnp.where(same_s, one_sided_s,
+                                  central_y
+                             )
+                         )
+                     )
+    
         return hdsdx, hdsdy
         #return central_x, central_y
 
@@ -1882,6 +1889,8 @@ def gl_aware_driving_stress_function(dy, dx):
     Stephy Cornford et al. (2016) Eq. (2)
     """
     def hgrads(h, b):
+        #Note: mode='edge' pads with the edge values of the array
+
         s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
         grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
         #Note: mode='edge' pads with the edge values of the array
@@ -1929,6 +1938,7 @@ def gl_aware_driving_stress_function(dy, dx):
                                  )
                              )
                          )
+
         return hdsdx, hdsdy
         #return central_x, central_y
 

@@ -163,7 +163,7 @@ def compute_linear_ssa_residuals_function_fc_visc_gl_aware(ny, nx, dy, dx, b,\
         #s = add_s_ghost_cells(s)
         #jax.debug.print("s: {x}",x=s)
 
-        hdsdx, hdsdy = hgrads_fct(b, h)
+        hdsdx, hdsdy = hgrads_fct(h, b)
 
         volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx

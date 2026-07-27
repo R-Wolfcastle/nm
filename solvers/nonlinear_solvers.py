@@ -7037,7 +7037,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
     #extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
     extrapolate_over_cf                        = linear_extrapolate_over_cf_function_cornersafe(ice_mask)
     #extrapolate_over_cf                        = mean_linear_extrapolate_over_cf_function(ice_mask)
-    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
+    #hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
 
     viscosity_fct = fc_viscosity_function_new_givenT(ny, nx, dy, dx, 
                                                    extrapolate_over_cf,
@@ -7050,8 +7050,8 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
     
     grounded_fraction_fct                       = make_grounded_fraction_function(add_scalar_ghost_cells)
     beta_fct                                    = beta_function(b, sliding, grounded_fraction_fct)
-    #hgrads_fct                                  = gl_aware_driving_stress_function_grounded_fraction(dy, dx,
-    #                                                                                   grounded_fraction_fct)
+    hgrads_fct                                  = gl_aware_driving_stress_function_grounded_fraction(dy, dx,
+                                                                                       grounded_fraction_fct)
     
     advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                                                add_uv_ghost_cells, add_scalar_ghost_cells,
@@ -7092,7 +7092,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
     #############
     #setting up bvs and coords for a single block of the jacobian
     #NOTE: Look at that stencil radius! Check that's needed!!
-    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 2,
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
                                                                                   periodic_x=periodic)
     #j_coord_ar = jnp.arange(ny*nx)
     #pattern = jnp.zeros((nx*ny, nx*ny))*jnp.nan
@@ -7164,6 +7164,12 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
 
     @custom_vjp
     def solver(q, p, u_trial, v_trial, h):
+
+        #dhdx, dhdy = hgrads_fct(h, b)
+        #plt.plot(dhdx[0, :])
+        #plt.show()
+        #raise
+
         #plt.imshow(q, vmin=-2, vmax=0.5, cmap="RdBu")
         #plt.colorbar()
         #plt.show()
