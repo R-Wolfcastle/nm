@@ -15,7 +15,7 @@ nm_home = os.environ['NM_HOME']
 sys.path.insert(1, os.path.join(nm_home, 'utils'))
 import constants_years as c
 from vertical_grid import *
-from standard_domains import mismip_domain
+from standard_domains import mismip_domain_symm
 from plotting_stuff import show_vel_field, show_vel_field_2
 
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
@@ -40,7 +40,7 @@ def implicit_spinup():
         C_0, mucoef_0, q,
         ice_mask, surface,
         grounded
-    ) = mismip_domain(resolution=resolution)
+    ) = mismip_domain_symm(resolution=resolution)
     p = jnp.zeros_like(q)
 
     thk = jnp.load(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_1001.5174506828529m_2526.3248196221084years.npy")
@@ -105,8 +105,8 @@ def implicit_spinup():
     plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
     plt.close()
 
-implicit_spinup()
-raise
+#implicit_spinup()
+#raise
 
 def explicit_spinup():
     resolution = 1000
@@ -122,7 +122,7 @@ def explicit_spinup():
         C_0, mucoef_0, q,
         ice_mask, surface,
         grounded
-    ) = mismip_domain(resolution=resolution)
+    ) = mismip_domain_symm(resolution=resolution)
     p = jnp.zeros_like(q)
     
     temp_field = jnp.zeros_like(q)+269
@@ -334,7 +334,7 @@ def spin_up():
             C, mucoef_0, q,
             ice_mask, surface,
             grounded
-        ) = mismip_domain(resolution=resn)
+        ) = mismip_domain_symm(resolution=resn)
 
         
         if i == 0:

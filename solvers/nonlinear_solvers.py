@@ -2044,11 +2044,11 @@ def make_time_marcher(momentum_solver,
             if max_delta_t:
                 delta_t = jnp.min(delta_t, max_delta_t)
             print(delta_t)
-            
-            plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
-            plt.colorbar()
-            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{t_cum}years.png")
-            plt.close()
+
+            #plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+            #plt.colorbar()
+            #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{t_cum}years.png")
+            #plt.close()
 
 
             t_cum += delta_t
@@ -2058,16 +2058,20 @@ def make_time_marcher(momentum_solver,
                                   h.reshape(-1), source=accumulation,
                                   delta_t=delta_t)
             
-            plt.imshow(h, vmin=0)
-            plt.colorbar()
-            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.png")
-            plt.close()
+            #plt.imshow(h, vmin=0)
+            #plt.colorbar()
+            #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.png")
+            #plt.close()
 
             grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
 
-            plt.imshow(grounded)
-            plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{t_cum}years.png")
-            plt.close()
+            #plt.imshow(grounded-grounded[::-1,:])
+            #plt.show()
+            #raise
+
+            #plt.imshow(grounded)
+            #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{t_cum}years.png")
+            #plt.close()
 
             if not ts%100:
                 jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.npy", h)
@@ -3961,28 +3965,17 @@ def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                         (v_fc_ns[:-1,:]*h_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*h_fc_fou_ns[1:,:])*dx*delta_t
 
         elif method=="PPM":
-            h_fc_fou_ew = jnp.where(
-                u_fc_ew > 0,
-                h_full[1:-1, :-1],
-                h_full[1:-1, 1:]
-            )
+            flux_x = ppm_flux_x(h_full[1:-1,:], u_full[1:-1,:], dx, delta_t)
+            flux_y = ppm_flux_y(h_full[:,1:-1], v_full[:,1:-1], dy, delta_t)
 
-            h_fc_fou_ns = jnp.where(
-                v_fc_ns > 0,
-                h_full[1:, 1:-1],
-                h_full[:-1, 1:-1]
-            )
-
-            flux_term = - (
-                (u_fc_ew[:,:-1] * h_fc_fou_ew[:,:-1]
-                 - u_fc_ew[:,1:] * h_fc_fou_ew[:,1:])
+            flux_term = (
+                (flux_x[:,1:] - flux_x[:,:-1])
                 * dy * delta_t
                 +
-                (v_fc_ns[1:,:] * h_fc_fou_ns[1:,:]
-                 - v_fc_ns[:-1,:] * h_fc_fou_ns[:-1,:])
+                (flux_y[:-1,:] - flux_y[1:,:])
                 * dx * delta_t
             )
-
+        
         #to keep calving front in same location, prevent any flux into or out of ice-free cells!
         flux_term = jnp.where(h>0, flux_term, 0)
 
@@ -7022,6 +7015,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
                                                  b, ice_mask,
                                                  n_pic_iterations, n_newt_iterations,
                                                  mucoef_0, C_0, sliding="linear",
+                                                 adv_method="PPM",
                                                  periodic=False, B_field=None,
                                                  temperature_field=None):
 
@@ -7055,7 +7049,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
     
     advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                                                add_uv_ghost_cells, add_scalar_ghost_cells,
-                                               method="PPM")
+                                               method=adv_method)
 
 
     #get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new(ny, nx, dy, dx, b,
