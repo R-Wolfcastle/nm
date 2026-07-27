@@ -6606,7 +6606,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                                    ice_mask, mucoef_0,
                                                    temperature_field)
 
-    gl_stickiness_scaling                       = make_gl_C_scaling_function(add_scalar_ghost_cells)
+    gl_stickiness_scaling                       = make_grounded_fraction_function(add_scalar_ghost_cells)
     beta_fct                                    = beta_function(b, sliding, gl_stickiness_scaling)
 
     get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
@@ -7048,8 +7048,10 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
                                                    ice_mask, mucoef_0,
                                                    temperature_field)
     
-    gl_stickiness_scaling                       = make_gl_C_scaling_function(add_scalar_ghost_cells)
-    beta_fct                                    = beta_function(b, sliding, gl_stickiness_scaling)
+    grounded_fraction_fct                       = make_grounded_fraction_function(add_scalar_ghost_cells)
+    beta_fct                                    = beta_function(b, sliding, grounded_fraction_fct)
+    #hgrads_fct                                  = gl_aware_driving_stress_function_grounded_fraction(dy, dx,
+    #                                                                                   grounded_fraction_fct)
     
     advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                                                add_uv_ghost_cells, add_scalar_ghost_cells,
