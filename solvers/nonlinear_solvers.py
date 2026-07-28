@@ -5958,7 +5958,7 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
 
     if temperature_field is None:
     
-        temperature_field = (jnp.zeros((ny,nx))+258.15)
+        temperature_field = (jnp.zeros((ny,nx))+263.15)
 
 
     #functions for various things:
@@ -7023,7 +7023,7 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
 
     if temperature_field is None:
         #just changed from 258.15 
-        temperature_field = (jnp.zeros((ny,nx))+250.15)
+        temperature_field = (jnp.zeros((ny,nx))+263.15)
 
 
     #functions for various things:
@@ -7049,10 +7049,16 @@ def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
                                                    temperature_field)
     
     grounded_fraction_fct                       = make_grounded_fraction_function(add_scalar_ghost_cells)
-    beta_fct                                    = beta_function(b, sliding, grounded_fraction_fct)
-    hgrads_fct                                  = gl_aware_driving_stress_function_grounded_fraction(dy, dx,
-                                                                                       grounded_fraction_fct)
-    
+    #beta_fct                                    = beta_function(b, sliding, grounded_fraction_fct)
+    beta_fct                                    = beta_function(b, sliding, None)
+
+    #This one seems like a bad idea:
+    #hgrads_fct                                  = gl_aware_driving_stress_function_grounded_fraction(dy, dx,
+    #                                                                                   grounded_fraction_fct)
+    #hgrads_fct                                  = gl_aware_driving_stress_function(dy, dx)
+    hgrads_fct                                  = gl_unaware_driving_stress_function(dy, dx)
+   
+
     advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                                                add_uv_ghost_cells, add_scalar_ghost_cells,
                                                method=adv_method)
