@@ -501,3 +501,30 @@ def schoof2007_transect_domain(resolution=2000, lx_ice=1_500_000.0,
 
     return (lx, x[-1], nr, nc, x, y, delta_x, delta_y,
             thk, b, C_0, mucoef_0, q, ice_mask, surface, grounded)
+
+def schoof_scaled(resolution=1000, lx_ice=1_500_000.0,
+                  buffer_km=10, thk_init=None,
+                  C_0_val=24_125.8):
+
+    (lx, ly, nr, nc,
+     x, y, delta_x, delta_y,
+     thk, b, C_0, mucoef_0,
+     q, ice_mask, surface, grounded) =  schoof2007_transect_domain(
+                                resolution, lx_ice,
+                                buffer_km, thk_init,
+                                C_0_val)
+    lx = lx/2
+    nc = floor(nc/2)
+    x        = x/2
+    thk      = thk[:,::2]
+    b        = v[:,::2]
+    C_0      = C_0[:,::2]
+    q        = q[:,::2]
+    mucoef_0 = mucoef_0[:,::2]
+    ice_masl = ice_mask[:,::2]
+    surface  = surface[:,::2]
+    grounded = grounded[:,::2]
+
+    return (lx, ly, nr, nc, x, y, delta_x, delta_y,
+            thk, b, C_0, mucoef_0, q, ice_mask, surface, grounded)
+

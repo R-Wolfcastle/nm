@@ -6573,7 +6573,9 @@ def make_picnewton_vel_expl_dam_solver_function_noextrap(ny, nx, dy, dx,
 def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, dx,
                                                  b, ice_mask,
                                                  n_pic_iterations, n_newt_iterations,
-                                                 mucoef_0, C_0, sliding="linear",
+                                                 mucoef_0, C_0,
+                                                 adv_method="PPM",
+                                                 sliding="linear",
                                                  periodic=False, B_field=None,
                                                  temperature_field=None):
 
@@ -6583,52 +6585,47 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
     #functions for various things:
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
-    
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
     
     fc_velocity_gradient                       = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
                                                                                ice_mask, add_uv_ghost_cells,
                                                                                add_scalar_ghost_cells)
-    cc_gradient                                = cc_gradient_function(dy, dx)
     
-    #add_uv_ghost_cells, add_cont_ghost_cells   = add_ghost_cells_fcts(ny, nx)
-    #add_scalar_ghost_cells                     = add_ghost_cells_periodic_continuation_function(ny, nx) if periodic else add_cont_ghost_cells
-    
-    #extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
-    #extrapolate_over_cf                        = linear_extrapolate_over_cf_function_cornersafe(ice_mask)
-    #extrapolate_over_cf                        = mean_linear_extrapolate_over_cf_function(ice_mask)
-    
-    viscosity_fct = fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, 
+    viscosity_fct = fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx,
                                                    add_uv_ghost_cells,
                                                    add_scalar_ghost_cells,
                                                    interp_cc_to_fc,
                                                    fc_velocity_gradient,
                                                    ice_mask, mucoef_0,
                                                    temperature_field)
-
-    gl_stickiness_scaling                       = make_grounded_fraction_function(add_scalar_ghost_cells)
-    beta_fct                                    = beta_function(b, sliding, gl_stickiness_scaling)
+    
+    #gl_stickiness_scaling                       = make_grounded_fraction_function(add_scalar_ghost_cells)
+    beta_fct                                    = beta_function(b, sliding, None)
 
     get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
                                                        interp_cc_to_fc,
                                                        fc_velocity_gradient,
-                                                       cc_gradient,
                                                        add_uv_ghost_cells,
-                                                       add_scalar_ghost_cells)
+                                                       add_scalar_ghost_cells,
+                                                       hgrads_fct)
     
     get_uv_residuals_nonlinear_ssa = compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(
                                                        ny, nx, dy, dx, b,
                                                        beta_fct, ice_mask,
                                                        interp_cc_to_fc,
                                                        fc_velocity_gradient,
-                                                       cc_gradient,
                                                        add_uv_ghost_cells,
                                                        add_scalar_ghost_cells,
                                                        mucoef_0, C_0,
-                                                       temperature_field)
-
+                                                       temperature_field,
+                                                       hgrads_fct)
     
-
+    
+    advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
+                                               add_uv_ghost_cells, add_scalar_ghost_cells,
+                                               method=adv_method)
+    
     #############
     #setting up bvs and coords for a single block of the jacobian
     basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
@@ -6770,7 +6767,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
             #h_1d = jnp.where(jnp.sqrt(u_1d**2 + v_1d**2 + 1)<3e4, h_1d, 0)
             #h = h_1d.reshape((ny,nx))
 
-            print("constructing LA problem")
+            #print("constructing LA problem")
             dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_linear_ssa,
                                                  (u_1d, v_1d, h_1d, mu_ew, mu_ns, beta)
                                                           )
@@ -6856,7 +6853,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
             rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))
 
-            print("solving LA problem")
+            #print("solving LA problem")
             du = la_solver(nz_jac_values, rhs)
             #du = cg_solver(nz_jac_values, rhs, du)
             #du = j_solver(nz_jac_values, rhs, du)
@@ -6864,7 +6861,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
             #du = bcgs_solver(nz_jac_values, rhs, du)
 
 
-            print("du norm: {}".format(jnp.max(jnp.abs(du))))
+            #print("du norm: {}".format(jnp.max(jnp.abs(du))))
 
             u_1d = (u_1d + omega*du[:(ny*nx)]) * ice_mask
             v_1d = (v_1d + omega*du[(ny*nx):]) * ice_mask
@@ -6886,7 +6883,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
             
             if i==0:
                 initial_residual = jnp.max(rhs)
-            print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
+            #print(f"linear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
             
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
@@ -6896,8 +6893,8 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
         
         final_residual_pic = res_fct(rhs_new)
 
-        print("Final Picard residual: {}".format(final_residual_pic))
-        print("Picard residual reduction factor: {}".format(initial_residual/final_residual_pic))
+        #print("Final Picard residual: {}".format(final_residual_pic))
+        #print("Picard residual reduction factor: {}".format(initial_residual/final_residual_pic))
 
 
         for i in range(n_newt_iterations):
@@ -6925,16 +6922,16 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
             
             rhs_new = -jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))
             
-            print(f"nonlinear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
+            #print(f"nonlinear residual reduction factor: {res_fct(rhs)/res_fct(rhs_new)}")
 
         final_residual = res_fct(rhs_new)
 
         print("Final Newton residual: {}".format(final_residual))
-        print("Newton residual reduction factor: {}".format(final_residual_pic/final_residual))
+        #print("Newton residual reduction factor: {}".format(final_residual_pic/final_residual))
         
         print("TOTAL residual reduction factor: {}".format(initial_residual/final_residual))
 
-        print("===========================================")
+        #print("===========================================")
         
         #plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
         ##plt.imshow(jnp.log10(jnp.abs(-jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta))[(ny*nx):])).reshape((ny,nx)), alpha=1, vmin=0)
@@ -7011,7 +7008,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
 
     solver.defvjp(solver_fwd, solver_bwd)
 
-    return solver
+    return solver, advection_stepper
 
 def make_picnewton_velocity_solver_function_full_cvjp(ny, nx, dy, dx,
                                                  b, ice_mask,
