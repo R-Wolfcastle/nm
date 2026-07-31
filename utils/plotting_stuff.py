@@ -347,38 +347,33 @@ def plotgeom(thk, b):
 
 
 
-def plotboth(thk, b, speed, title=None, savepath=None, axis_limits=None, show_plots=True):
+def plotboth(x, thk, b, speed, title=None, savepath=None, axis_limits=None, show_plots=False):
     s_gnd = b + thk
-    s_flt = thk*(1-rho/rho_w)
+    s_flt = thk*(1-c.RHO_O/c.RHO_W)
     s = jnp.maximum(s_gnd, s_flt)
 
     base = s-thk
 
-
-    fig, ax1 = plt.subplots(figsize=(10,5))
+    fig, ax1 = plt.subplots(figsize=(8, 6))
     ax2 = ax1.twinx()
 
-    ax1.plot(s, label="surface")
-    # ax1.plot(base, label="base")
-    ax1.plot(base, label="base")
-    ax1.plot(b, label="bed")
+    ax1.plot(x / 1000, b, color="saddlebrown", label="bed")
+    ax1.plot(x / 1000, jnp.where(thk>0, base, jnp.nan), color="teal", label="base")
+    ax1.plot(x / 1000, jnp.where(thk>0, surface, jnp.nan), color="steelblue", label="surface")
+    ax1.fill_between(x / 1000, base, surface,
+                     where=(thk > 0),
+                     color="lightblue", alpha=0.5)
+    ax1.set_ylabel("elevation (m)")
+    ax1.legend(fontsize=8)
+    #ax1.set_title(f"Transect profile, {tag} ({resolution} m)")
 
-    ax2.plot(speed*3.15e7, color='k', marker=".", linewidth=0, label="speed")
-
-    #legend
-    ax1.legend(loc='lower left')
-    #slightly lower
-    ax2.legend(loc='center left')
-    #stop legends overlapping
-
-    #axis labels
-    ax1.set_xlabel("x")
-    ax1.set_ylabel("elevation")
-    ax2.set_ylabel("speed")
-
+    ax2.plot(x / 1000, jnp.where(speed>1e-10, speed, jnp.nan), color='k', marker=".", linewidth=0, label="speed")
+    
     if axis_limits is not None:
-        ax1.set_ylim(axis_limits[0])
-        ax2.set_ylim(axis_limits[1])
+        if axis_limits[0] is not None:
+            ax1.set_ylim(axis_limits[0])
+        if axis_limits[1] is not None:
+            ax2.set_ylim(axis_limits[1])
 
     if title is not None:
         plt.title(title)
