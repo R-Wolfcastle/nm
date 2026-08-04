@@ -2254,8 +2254,10 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(ny, nx, dy, dx, b,
                                    C_0, temp_cc,
                                    hgrads_fct):
   
+    jax.debug.print("TEMP: {t}", t=temp_cc)
     temp_cc = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc)
+    #jax.debug.print("B: {t}", t=B_cc)
     B_ew, B_ns = interp_cc_to_fc(B_cc)
 
     def compute_uv_residuals(u_1d, v_1d, q, p, h_1d):
@@ -3727,7 +3729,6 @@ def compute_uvh_residuals_function_fully_nonlinear_givenT_noextrap(ny, nx, dy, d
     and for adjoint linearisation. Parameterised by q (log mucoef) and p (log C)
     to match the rest of the coupled solver stack.
     """
-
     temp_cc_ghost = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc_ghost)
     B_ew, B_ns = interp_cc_to_fc(B_cc)

@@ -503,12 +503,15 @@ def schoof2007_transect_domain(resolution=2000, lx_ice=1_500_000.0,
             thk, b, C_0, mucoef_0, q, ice_mask, surface, grounded)
 
 
-def schoof2007_bed_scaled(x, x_scale):
+def schoof2007_bed_scaled(x, x_scale, z_scale=0.5):
     xbar = 750_000.0 * x_scale
-    return 729.0 - 2184.8 * (x / xbar) ** 2 + 1031.72 * (x / xbar) ** 4 - 151.72 * (x / xbar) ** 6
+    return z_scale*(729.0 - 2184.8 * (x / xbar) ** 2 +\
+                    1031.72 * (x / xbar) ** 4 -\
+                    151.72 * (x / xbar) ** 6)
 
 
-def schoof_scaled(resolution=250, x_scale=0.25, y_scale=0.5,
+def schoof_scaled(resolution=250, x_scale=0.25,
+                  z_scale=0.5,
                   buffer_km=None, thk_init=None,
                   C_0_val=4000):
     """
@@ -542,16 +545,16 @@ def schoof_scaled(resolution=250, x_scale=0.25, y_scale=0.5,
     y = jnp.array([0.0])
 
     delta_x = x[1] - x[0]
-    delta_y = resolution * y_scale  # inert for ny=1, see module docstring
+    delta_y = resolution
 
     xx, yy = jnp.meshgrid(x, y)
 
-    b = schoof2007_bed_scaled(xx, x_scale)
+    b = schoof2007_bed_scaled(xx, x_scale, z_scale=z_scale)
 
     C_0 = jnp.zeros((nr, nc)) + C_0_val
 
     if thk_init is None:
-        h_divide = 2000.0
+        h_divide = 3000.0
         thk = jnp.clip(h_divide * (1.0 - 0.75*xx / lx_ice), 10.0, h_divide)
         thk = jnp.where(xx > lx_ice, 0.0, thk)
     else:

@@ -19,14 +19,12 @@ def rate_factor(T, P=0):
     A_cold = c.A_0 * jnp.exp( -( c.Q_LOW/c.R) * (T_h_recip - T_standard_recip) )  
     A_warm = c.A_0 * jnp.exp( -(c.Q_HIGH/c.R) * (T_h_recip - T_standard_recip) )  
 
-    return jnp.minimum(A_cold, A_warm)
+    #Had this as minimum for a while!
+    return jnp.maximum(A_cold, A_warm)
 
 @jax.jit
 def B_from_T(T, P=0):
-    #jax.debug.print("{x}", x=rate_factor(T, P))
-    #263.15K: A = 2.875e-18
-    #269K:    A = 2e-17
-    #270K:    A = 2.8e-17
+    #jax.debug.print("A: {t}", t=rate_factor(T, P))
     return 0.5 * (rate_factor(T, P)**(-1/c.GLEN_N))
 
 @jax.jit
