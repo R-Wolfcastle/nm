@@ -363,7 +363,6 @@ def mismip_domain(resolution=2000, buffer_km=20, thk_init=None, A=2.0e-17, beta2
     return (lx, ly, nr, nc, x, y, delta_x, delta_y,
             thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
 
-
 def mismip_domain_symm(resolution=2000, buffer_km=20, thk_init=None, A=2.0e-17, beta2=1.0e4):
     """
     MISMIP+ domain (Cornford et al. 2020, Sect 2.1).
@@ -435,4 +434,70 @@ def mismip_domain_symm(resolution=2000, buffer_km=20, thk_init=None, A=2.0e-17, 
     return (lx, ly, nr, nc, x, y, delta_x, delta_y,
             thk, b, C, mucoef_0, q, ice_mask, surface, grounded)
 
+
+def schoof2007_bed(x):
+    """Eq. (10) of Schoof (2007), converted from his b(x) (positive
+    DOWNWARD) to the standard topg convention (positive = above sea
+    level) used elsewhere in this codebase: topg(x) = -b_schoof(x).
+
+    Central portion above sea level, an overdeepening (trough at
+    x~974km, topg~-749m), a shallow sill (x~1266km, topg~-630m), then
+    dropping off toward the continental shelf edge. The polynomial is
+    only sensible out to about x=1500km -- it diverges to unphysical
+    depths beyond that (checked numerically), matching the fact that
+    Schoof's own Figures 3/4/7/9 never plot past x=1500-1600km.
+    """
+    xr = x / 750_000.0
+    return 729.0 - 2184.8 * xr**2 + 1031.72 * xr**4 - 151.72 * xr**6
+
+
+def schoof2007_transect_domain(resolution=2000, lx_ice=1_500_000.0,
+                                buffer_km=10, thk_init=None,
+                                C_0_val=24_125.8):
+    """
+    A single-row (ny=1) transect implementing the Schoof (2007) synthetic
+    geometry (Section 3, eq. 10): an ice divide at x=0 (symmetric, u=0),
+    an overdeepened bed with a sill, out to a shelf edge and a floating
+    buffer for the calving front.
+    """
+
+    nc = int(round((lx_ice + buffer_km * 1000.0) / resolution)) + 1
+    nr = 1
+
+    lx = (nc - 1) * resolution
+    if not jnp.isclose(lx, lx_ice + buffer_km * 1000.0):
+        raise ValueError(
+            f"resolution={resolution} does not evenly divide "
+            f"lx_ice+buffer={lx_ice + buffer_km*1000.0}; choose one that does."
+        )
+
+    x = jnp.arange(nc) * resolution
+    y = jnp.array([0.0])
+
+    delta_x = x[1] - x[0]
+    delta_y = resolution  # arbitrary/inert
+
+    xx, yy = jnp.meshgrid(x, y)  # shape (1, nc)
+
+    b = schoof2007_bed(xx)
+
+    C_0 = jnp.zeros((nr, nc)) + C_0_val
+
+    #Initial thickness guess - crude taper, not a solution of anything.
+    if thk_init is None:
+        h_divide = 3500.0
+        thk = jnp.clip(h_divide * (1.0 - 0.7*xx / lx_ice), 10.0, h_divide)
+        thk = jnp.where(xx > lx_ice, 0.0, thk)
+    else:
+        thk = thk_init
+
+    surface = jnp.maximum(b + thk, thk * (1.0 - c.RHO_I / c.RHO_W))
+    grounded = jnp.where((b + thk) > thk * (1.0 - c.RHO_I / c.RHO_W), 1, 0)
+    ice_mask = (thk > 0).astype(int)
+
+    mucoef_0 = jnp.ones((nr, nc))
+    q = jnp.zeros((nr, nc))
+
+    return (lx, x[-1], nr, nc, x, y, delta_x, delta_y,
+            thk, b, C_0, mucoef_0, q, ice_mask, surface, grounded)
 
