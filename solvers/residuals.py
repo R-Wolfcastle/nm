@@ -1682,9 +1682,9 @@ def compute_nonlinear_ssa_residuals_function_variational_visc(ny, nx, dy, dx, b,
 def compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
                                           interp_cc_to_fc,
                                           fc_vel_gradient,
-                                          cc_gradient,
                                           add_uv_ghost_cells,
-                                          add_s_ghost_cells):
+                                          add_s_ghost_cells,
+                                          hgrads_fct):
 
     def compute_linear_ssa_residuals(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta):
 
@@ -1694,31 +1694,12 @@ def compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b
 
         ice_mask = jnp.where(h.copy()>0, 1, 0)
 
-        s_gnd = h + b #b is globally defined
-        s_flt = h * (1-c.RHO_I/c.RHO_W)
-        s = jnp.maximum(s_gnd, s_flt)
         
-        s = add_s_ghost_cells(s)
-        #jax.debug.print("s: {x}",x=s)
-
-        dsdx, dsdy = cc_gradient(s)
-        #jax.debug.print("dsdx: {x}",x=dsdx)
-        #sneakily fudge this:
-        dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
-        dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
-        dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
-        dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
-        dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
-        dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
-        dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
-        dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+        hdsdx, hdsdy = hgrads_fct(h, b)
 
 
-
-        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
-        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
-
-
+        volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
 
         #momentum_term
 
@@ -2267,14 +2248,16 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(ny, nx, dy, dx, b,
                                    beta_fct, ice_mask,
                                    interp_cc_to_fc,
                                    fc_vel_gradient,
-                                   cc_gradient,
                                    add_uv_ghost_cells,
                                    add_s_ghost_cells,
                                    mucoef_0,
-                                   C_0, temp_cc):
+                                   C_0, temp_cc,
+                                   hgrads_fct):
   
+    jax.debug.print("TEMP: {t}", t=temp_cc)
     temp_cc = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc)
+    #jax.debug.print("B: {t}", t=B_cc)
     B_ew, B_ns = interp_cc_to_fc(B_cc)
 
     def compute_uv_residuals(u_1d, v_1d, q, p, h_1d):
@@ -2287,30 +2270,33 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(ny, nx, dy, dx, b,
         h = h_1d.reshape((ny, nx))
 
 
-        s_gnd = h + b #b is globally defined
-        s_flt = h * (1-c.RHO_I/c.RHO_W)
-        s = jnp.maximum(s_gnd, s_flt)
+        #s_gnd = h + b #b is globally defined
+        #s_flt = h * (1-c.RHO_I/c.RHO_W)
+        #s = jnp.maximum(s_gnd, s_flt)
 
-        s = add_s_ghost_cells(s)
-        #jax.debug.print("s: {x}",x=s)
+        #s = add_s_ghost_cells(s)
+        ##jax.debug.print("s: {x}",x=s)
 
-        dsdx, dsdy = cc_gradient(s)
-        #jax.debug.print("dsdx: {x}",x=dsdx)
-        #sneakily fudge this:
-        dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
-        dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
-        dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
-        dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
-        dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
-        dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
-        dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
-        dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+        #dsdx, dsdy = cc_gradient(s)
+        ##jax.debug.print("dsdx: {x}",x=dsdx)
+        ##sneakily fudge this:
+        #dsdx = dsdx.at[-1,:].set(dsdx[-2,:])
+        #dsdx = dsdx.at[0, :].set(dsdx[1 ,:])
+        #dsdx = dsdx.at[:, 0].set(dsdx[:, 1])
+        #dsdx = dsdx.at[:,-1].set(dsdx[:,-2])
+        #dsdy = dsdy.at[-1,:].set(dsdy[-2,:])
+        #dsdy = dsdy.at[0, :].set(dsdy[1 ,:])
+        #dsdy = dsdy.at[:, 0].set(dsdy[:, 1])
+        #dsdy = dsdy.at[:,-1].set(dsdy[:,-2])
+
+        
+        hdsdx, hdsdy = hgrads_fct(h, b)
 
 
         beta = beta_fct(C, u, v, h)
 
-        volume_x = - (beta * u + c.RHO_I * c.g * h * dsdx) * dx * dy
-        volume_y = - (beta * v + c.RHO_I * c.g * h * dsdy) * dy * dx
+        volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
+        volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
 
 
         #various face-centred derivatives
@@ -3743,7 +3729,6 @@ def compute_uvh_residuals_function_fully_nonlinear_givenT_noextrap(ny, nx, dy, d
     and for adjoint linearisation. Parameterised by q (log mucoef) and p (log C)
     to match the rest of the coupled solver stack.
     """
-
     temp_cc_ghost = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc_ghost)
     B_ew, B_ns = interp_cc_to_fc(B_cc)

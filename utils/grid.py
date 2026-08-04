@@ -1884,6 +1884,32 @@ def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction
 
     return jax.jit(hgrads)
 
+def gl_unaware_driving_stress_function(dy, dx):
+    """
+    Just central differences
+    """
+    def hgrads(h, b):
+        #Note: mode='edge' pads with the edge values of the array
+
+        s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
+
+        s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
+        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+        s_s = jnp.pad(s, ((0,1),(0,0)), mode='edge')[1:, :]
+        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+
+        h_n = jnp.pad(h, ((1,0),(0,0)), mode='edge')[:-1, :]
+        h_e = jnp.pad(h, ((0,0),(0,1)), mode='edge')[:, 1:]
+        h_s = jnp.pad(h, ((0,1),(0,0)), mode='edge')[1:, :]
+        h_w = jnp.pad(h, ((0,0),(1,0)), mode='edge')[:, :-1]
+        
+        central_x   = h * (s_e - s_w) / (2*dx)
+        central_y   = h * (s_n - s_s) / (2*dy)
+        
+        return central_x, central_y
+
+    return jax.jit(hgrads)
+
 def gl_aware_driving_stress_function(dy, dx):
     """
     Stephy Cornford et al. (2016) Eq. (2)
