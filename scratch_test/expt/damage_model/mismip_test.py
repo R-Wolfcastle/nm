@@ -20,6 +20,7 @@ from plotting_stuff import show_vel_field, show_vel_field_2
 
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
+                              make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
                               make_time_marcher,\
                               make_coupled_quasi_newton_solver_function,\
                               make_coupled_picnewton_solver_function,\
@@ -47,9 +48,10 @@ def implicit_spinup():
     p = jnp.zeros_like(q)
 
     #thk = jnp.load(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_1001.5174506828529m_2526.3248196221084years.npy")
+    thk = jnp.load(impl_dir_+"thickness_WmSlidingC1e4_1km_res_HalfDomain_4353.9years.npy")
     
-    #temp_field = jnp.zeros_like(q)+269
-    temp_field = None
+    temp_field = jnp.zeros_like(q)+265.43
+    #temp_field = None
     
     #solver = make_coupled_quasi_newton_solver_function(nr, nc,delta_y,
     #                                              delta_x,
@@ -65,8 +67,9 @@ def implicit_spinup():
                                                     n_pic_iterations,
                                                     n_newt_iterations,
                                                     mucoef_0, C_0,
-                                                    sliding="linear",
-                                                    newton_max_backtracks=10)
+                                                    sliding="basic_weertman",
+                                                    newton_max_backtracks=10,
+                                                    temperature_field=temp_field)
     #max_n_pic_iterations = n_pic_iterations
     #solver = implicit_forward_solver(nr, nc, delta_y, delta_x,
     #                                 b, ice_mask,
@@ -76,6 +79,7 @@ def implicit_spinup():
     #                                 sliding="linear",
     #                                 temperature_field=temp_field)
     
+    
     delta_t = 20
     
     u_trial = jnp.zeros_like(C_0)
@@ -84,10 +88,14 @@ def implicit_spinup():
     
     u_va, v_va, thk_final, dhdt, iterations_taken = solve_steady_state_direct(solver, q, p,
                                                               u_trial, v_trial, thk, b,
-                                                              acc_val=0.3, delta_t_start=5,
+                                                              acc_val=0.3,
+                                                              delta_t_start=5,
                                                               delta_t_growth_factor=1.5,
-                                                              delta_t_max=500,
-                                                              n_outer=100)
+                                                              delta_t_max=50,
+                                                              n_outer=1000,
+                                                              t_max=20_000,
+                                                              dir_=impl_dir_,
+                                                              t_start=4353.9)
 
     #u_va, v_va, thk_final = solver(q, p, u_trial, v_trial, thk, delta_t, n_timesteps, accm=0.3)
 
@@ -104,7 +112,7 @@ def implicit_spinup():
     #plt.show()
     #
 
-    jnp.save(f"{nm_home}/bits_of_data/damage/mismip/impl/thickness_linearSlidingC1e4_1km_res_HalfDomain.npy", thk_final)
+    jnp.save(impl_dir_+f"/thickness_WmSlidingC1e4_1km_res_HalfDomain.npy", thk_final)
 
     
     plt.imshow(thk_final)
@@ -122,8 +130,13 @@ def implicit_spinup():
     #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
     plt.close()
 
-implicit_spinup()
-raise
+impl_dir_ = f"{nm_home}/bits_of_data/damage/mismip/impl/2/"
+expl_dir_ = f"{nm_home}/bits_of_data/damage/mismip/expl/2/"
+os.makedirs(impl_dir_, exist_ok=True)
+os.makedirs(expl_dir_, exist_ok=True)
+
+#implicit_spinup()
+#raise
 
 def explicit_spinup():
     resolution = 1000
@@ -139,12 +152,15 @@ def explicit_spinup():
         C_0, mucoef_0, q,
         ice_mask, surface,
         grounded
-    ) = mismip_domain_symm(resolution=resolution)
+    ) = mismip_domain_symm(resolution=resolution, half=True)
     p = jnp.zeros_like(q)
     
-    temp_field = jnp.zeros_like(q)+269
+    temp_field = jnp.zeros_like(q)+265
+
+    #thk = jnp.load(f"{nm_home}/bits_of_data/damage/mismip/impl/thickness_linearSlidingC1e4_1km_res_HalfDomain.npy")
+    thk = jnp.load(impl_dir_+"thickness_WmSlidingC1e4_1km_res_HalfDomain_4353.9years.npy")
     
-    momentum_solver, advection_stepper = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+    momentum_solver, advection_stepper = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
                                                   delta_y,
                                                   delta_x,
                                                   b,
@@ -157,11 +173,11 @@ def explicit_spinup():
                                                   temperature_field=temp_field,
                                                 )
     
-    time_marcher = make_time_marcher(momentum_solver, advection_stepper, n_timesteps, delta_x, b)
+    time_marcher = make_time_marcher(momentum_solver, advection_stepper, n_timesteps, delta_x, b, dir_=expl_dir_, t_start=4353.9)
     
     u_va, v_va, thk_final, dhdt_final = time_marcher(q, p, thk)
     
-    jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{delta_t*n_timesteps}years.npy", thk_final)
+    #jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{delta_t*n_timesteps}years.npy", thk_final)
     
     #show_vel_field(u_va, v_va)
     
@@ -177,16 +193,19 @@ def explicit_spinup():
     
     plt.imshow(dhdt_final, vmin=-1, vmax=1, cmap="RdBu")
     plt.colorbar()
-    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/dhdt_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/dhdt_{delta_x}m_{delta_t*n_timesteps}years.png")
     plt.close()
 
     plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
     plt.colorbar()
-    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
     plt.close()
 
     plt.imshow(grounded)
-    plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
     plt.close()
 
 explicit_spinup()

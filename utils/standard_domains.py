@@ -459,7 +459,7 @@ def mismip_domain_symm(resolution=2000, buffer_km=20, thk_init=None, A=2.0e-17, 
 
     #Table 1:
     xbar = 300_000.0
-    B0, B2, B4, B6 = -150.0, -728.8, 343.91, -50.75
+    B0, B2, B4, B6 = -150.0, -728.8, 343.91, -50.57
     wc, fc, dc = 24_000.0, 4_000.0, 500.0
 
     lx_ice = 640_000.0
@@ -494,8 +494,8 @@ def mismip_domain_symm(resolution=2000, buffer_km=20, thk_init=None, A=2.0e-17, 
 
     #initial thickness guess
     if thk_init is None:
-        h_divide = 600.0
-        thk = jnp.clip(h_divide * (1.0 - xx/lx_ice), 10.0, h_divide)
+        h_divide = 1200.0
+        thk = jnp.clip(h_divide * (1.0 - 0.75*xx/lx_ice), 10.0, h_divide)
         thk = jnp.where(xx > lx_ice, 0.0, thk)
     else:
         thk = thk_init
