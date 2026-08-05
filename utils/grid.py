@@ -1364,6 +1364,40 @@ def beta_function(b, mode="linear", C_scaling_function=None):
 
     return jax.jit(beta)
 
+def beta_function(b, mode="linear", C_scaling_function=None):
+    if C_scaling_function is None:
+        def C_scaling_function(b, h):
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+            return jnp.where(s_gnd>s_flt, 1, 0)
+
+    if mode=="linear":
+        def beta(C, u, v, h, grounded=None):
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+           
+            #It looks like it's best if you pass a grounded mask into the implicit
+            #solve (from h_t at the start of the timestep).
+            g = jnp.where(s_gnd>s_flt, 1, 0) if grounded is None else grounded
+
+            beta = C
+            beta = jnp.where(g>0, beta, 0)
+            beta = jnp.where(h>0, beta, 1)
+            return beta
+
+    if mode=="basic_weertman":
+        def beta(C, u, v, h, grounded=None):
+            s_gnd = h + b
+            s_flt = h * (1-c.RHO_I/c.RHO_W)
+            g = jnp.where(s_gnd>s_flt, 1, 0) if grounded is None else grounded
+
+            speed = jnp.sqrt(u*u + v*v + 1)
+            beta = C * (speed ** (1/c.GLEN_N - 1))
+            beta = jnp.where(g>0, beta, 0)
+            beta = jnp.where(h>0, beta, 1)
+            return beta
+
+    return jax.jit(beta)
 
 def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
                                extrp_over_cf, add_uv_ghost_cells,
@@ -1888,7 +1922,7 @@ def gl_unaware_driving_stress_function(dy, dx):
     """
     Just central differences
     """
-    def hgrads(h, b):
+    def hgrads(h, b, grounded=None):
         #Note: mode='edge' pads with the edge values of the array
 
         s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
@@ -1914,11 +1948,11 @@ def gl_aware_driving_stress_function(dy, dx):
     """
     Stephy Cornford et al. (2016) Eq. (2)
     """
-    def hgrads(h, b):
+    def hgrads(h, b, grounded=None):
         #Note: mode='edge' pads with the edge values of the array
 
         s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
-        grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
+        grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0) if grounded is None else grounded
         #Note: mode='edge' pads with the edge values of the array
 
         s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]

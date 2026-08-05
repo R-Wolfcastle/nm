@@ -3643,13 +3643,15 @@ def compute_uvh_linear_ssa_residuals_function_fc_visc_noextrap(ny, nx, dy, dx, b
         #s_flt = h * (1-c.RHO_I/c.RHO_W)
         #s = jnp.maximum(s_gnd, s_flt)
 
+        grounded_t = jnp.where((h_t+b)>(h_t*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
         #hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
-        hdsdx, hdsdy = hgrads_fct(h, b)
+        hdsdx, hdsdy = hgrads_fct(h, b, grounded_t)
 
         volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
 
-        #momentum_term -- no extrapolation over the calving front
+        #momentum_term witout extrapn over the cf
         u_full, v_full = add_uv_ghost_cells(u, v)
 
         #get thickness on the faces
@@ -3747,10 +3749,14 @@ def compute_uvh_residuals_function_fully_nonlinear_givenT_noextrap(ny, nx, dy, d
         #s_flt = h * (1-c.RHO_I/c.RHO_W)
         #s = jnp.maximum(s_gnd, s_flt)
 
-        #hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
-        hdsdx, hdsdy = hgrads_fct(h, b)
+        grounded_t = jnp.where((h_t+b)>(h_t*(1-c.RHO_I/c.RHO_W)), 1, 0)
 
-        beta = beta_fct(C, u, v, h)
+        #hdsdx, hdsdy = hgrads_fct(h, s, (s_gnd>s_flt).astype(int))
+        hdsdx, hdsdy = hgrads_fct(h, b, grounded_t)
+
+        #hdsdx, hdsdy = hgrads_fct(h, b)
+
+        beta = beta_fct(C, u, v, h, grounded_t)
 
         volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx
