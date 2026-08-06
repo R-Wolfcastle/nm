@@ -1312,7 +1312,8 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
             
             u_1d = (u_1d+du[:(ny*nx)]) * ice_mask_1d
             v_1d = (v_1d+du[(ny*nx):(2*ny*nx)]) * ice_mask_1d
-            h_1d = h_1d+du[(2*ny*nx):]
+
+            h_1d = jnp.where((h_1d>0), jnp.maximum(h_1d+du[(2*ny*nx):], 10), 0)
             
             #if y_symmetric_problem:
             #    u_1d = 0.5*(u_1d.reshape(ny,nx) + u_1d.reshape(ny,nx)[::-1,:]).reshape(-1) * ice_mask_1d
@@ -1492,8 +1493,10 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
 
 def solve_steady_state_direct(impl_solver, q, p, u, v, h, b, acc_val=0.0,
                               delta_t_start=20.0, delta_t_growth_factor=4.0,
-                              delta_t_max=1e6, n_outer=100, dhdt_tol=1e-3):
-    t_cum = 0
+                              delta_t_max=1e6, n_outer=100, dhdt_tol=1e-3,
+                              t_max=jnp.inf,
+                              dir_=None, t_start=0):
+    t_cum = t_start
     delta_t = delta_t_start
     for outer_i in range(n_outer):
         
@@ -1502,21 +1505,23 @@ def solve_steady_state_direct(impl_solver, q, p, u, v, h, b, acc_val=0.0,
         h = h_new
         t_cum += delta_t
         print(f"outer {outer_i}: delta_t={delta_t:.1f}  effective max|dh/dt|={dhdt:.4e}  time={t_cum:.1f}")
+        
+        if dir_ is not None:
+            if not outer_i%10:
+                plt.imshow(jnp.sqrt(u**2 + v**2), cmap="RdYlBu_r", vmin=0)
+                plt.colorbar()
+                plt.savefig(f"{dir_}/speed_{t_cum}years.png")
+                #plt.show()
+                plt.close()
     
-        plt.imshow(jnp.sqrt(u**2 + v**2), cmap="RdYlBu_r", vmin=0)
-        plt.colorbar()
-        plt.savefig(f"{nm_home}/bits_of_data/damage/mismip/impl/speed_{t_cum}years.png")
-        #plt.show()
-        plt.close()
+                plt.imshow(jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0))
+                #plt.show()
+                plt.savefig(f"{dir_}/grounded_{t_cum}years.png")
+                plt.close()
+    
+                jnp.save(f"{dir_}/thickness_WmSlidingC1e4_1km_res_HalfDomain_{t_cum:.1f}years.npy", h)
 
-        plt.imshow(jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0))
-        #plt.show()
-        plt.savefig(f"{nm_home}/bits_of_data/damage/mismip/impl/grounded_{t_cum}years.png")
-        plt.close()
-
-
-
-        if dhdt < dhdt_tol:
+        if dhdt < dhdt_tol or t_cum>t_max:
             break
         delta_t = min(delta_t * delta_t_growth_factor, delta_t_max)
     return u, v, h, dhdt, outer_i + 1
@@ -2413,9 +2418,15 @@ def make_diva3d_solver_cvjp_new(ny, nx, dy, dx, n_levels,
 
 def make_time_marcher(momentum_solver,
                       thickness_updater,
-                      n_timesteps, delta_x,
+                      delta_x,
                       b,
-                      max_delta_t=None):
+                      max_n_timesteps=5000,
+                      accumulation_function=None,
+                      cfl_number=0.95,
+                      max_delta_t=None,
+                      max_t=1e6,
+                      dir_=None,
+                      t_start=0):
     
 
     def time_marcher(q, p, h):
@@ -2423,27 +2434,32 @@ def make_time_marcher(momentum_solver,
         u_va = jnp.where(h > 1e-10, 1.0, 0)
         v_va = jnp.where(h > 1e-10, 1.0, 0)
 
-        accumulation = jnp.where(h>0, 0.3, 0)
         delta_t = None
 
-        t_cum = 0
-        for ts in range(n_timesteps):
+        t_cum = t_start
+        ts = 0
+        while ts<max_n_timesteps and t_cum<max_t:
+
             u_va, v_va, *_ = momentum_solver(q, p, u_va, v_va, h)
 
-            accumulation = jnp.where(h>0, 0.3, 0)
+            accumulation = accumulation_function(h, b, jnp.where(h>1,1,0))
 
-            delta_t = 0.45*(delta_x/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
+            delta_t = cfl_number*(delta_x/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
+            
+            delta_t = jnp.minimum(delta_t, max_t-t_cum)
+
             if max_delta_t:
-                delta_t = jnp.min(delta_t, max_delta_t)
+                delta_t = jnp.minimum(delta_t, max_delta_t)
             print(delta_t)
 
             #plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
             #plt.colorbar()
-            #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{t_cum}years.png")
+            #plt.savefig(f"{nm_home}/bits_of_data/damage/mismip/expl/speed_{delta_x}m_{t_cum:.2f}years.png")
             #plt.close()
 
 
             t_cum += delta_t
+            ts    += 1
             print(f"Time: {t_cum} years")
 
             h = thickness_updater(u_va.reshape(-1), v_va.reshape(-1),
@@ -2462,11 +2478,23 @@ def make_time_marcher(momentum_solver,
             #raise
 
             #plt.imshow(grounded)
-            #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{t_cum}years.png")
+            #plt.savefig(f"{nm_home}/bits_of_data/damage/mismip/expl/grounded_{delta_x}m_{t_cum:.2f}years.png")
             #plt.close()
 
-            if not ts%100:
-                jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.npy", h)
+            if not ts%1:
+                plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+                plt.colorbar()
+                plt.savefig(f"{dir_}/speed_{t_cum:.1f}years.png")
+                #plt.show()
+                plt.close()
+    
+                plt.imshow(jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0))
+                #plt.show()
+                plt.savefig(f"{dir_}/grounded_{t_cum:.1f}years.png")
+                plt.close()
+    
+                jnp.save(f"{dir_}/thickness_WmSlidingC1e4_1km_res_HalfDomain_{t_cum:.1f}years.npy", h)
+                #jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.npy", h)
         
         dhdt_final = ( thickness_updater(u_va.reshape(-1), v_va.reshape(-1),
                                h.reshape(-1), source=accumulation,
@@ -2479,6 +2507,105 @@ def make_time_marcher(momentum_solver,
 
     return time_marcher
 
+
+def make_picard_damvel_solver(ny, nx, dy, dx, n_levels,
+                              b, ice_mask, n_iterations,
+                              mucoef_0, C_0,
+                              sliding="linear",
+                              periodic=False,
+                              temperature_field=None,
+                              n_timesteps=0):
+    
+    #functions for various things:
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    ew_gradient, ns_gradient                   = fc_gradient_functions(dy, dx)
+    cc_gradient                                = cc_gradient_function(dy, dx)
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
+    cc_vel_gradient                            = cc_vel_gradient_function(dy, dx, add_uv_ghost_cells)
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx) 
+
+    gl_stickiness_scaling                      = make_grounded_fraction_function(add_scalar_ghost_cells)
+    beta_fct                                   = beta_function(b, sliding, gl_stickiness_scaling)
+
+    #vertical_grid functions:
+
+    #NOTE: we have a cc_resistive_and_deviatoric_stress_tensors from grid. pretty sweet.
+
+    advection_step = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
+                                            add_uv_ghost_cells, add_scalar_ghost_cells,
+                                            method="PPM")
+
+    get_uv_residuals_nonlinear_ssa = compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(
+                                                       ny, nx, dy, dx, b,
+                                                       beta_fct, ice_mask,
+                                                       interp_cc_to_fc,
+                                                       fc_velocity_gradient,
+                                                       add_uv_ghost_cells,
+                                                       add_scalar_ghost_cells,
+                                                       mucoef_0, C_0,
+                                                       temperature_field,
+                                                       hgrads_fct)
+    #############
+    #setting up bvs and coords for a single block of the jacobian
+    basis_vectors, i_coordinate_sets = basis_vectors_and_coords_2d_square_stencil(ny, nx, 1,
+                                                                                  periodic_x=periodic)
+
+    i_coordinate_sets = jnp.concatenate(i_coordinate_sets)
+    j_coordinate_sets = jnp.tile(jnp.arange(ny*nx), len(basis_vectors))
+    mask = (i_coordinate_sets>=0)
+
+
+    sparse_jacrev = make_sparse_jacrev_fct_shared_basis(
+                                                        basis_vectors,\
+                                                        i_coordinate_sets,\
+                                                        j_coordinate_sets,\
+                                                        mask,\
+                                                        2,
+                                                        active_indices=(0,1)
+                                                       )
+    #sparse_jacrev = jax.jit(sparse_jacrev)
+
+
+    i_coordinate_sets = i_coordinate_sets[mask]
+    j_coordinate_sets = j_coordinate_sets[mask]
+    #############
+
+    coords = jnp.stack([
+                    jnp.concatenate(
+                                [i_coordinate_sets,         i_coordinate_sets,\
+                                 i_coordinate_sets+(ny*nx), i_coordinate_sets+(ny*nx)]
+                                   ),\
+                    jnp.concatenate(
+                                [j_coordinate_sets, j_coordinate_sets+(ny*nx),\
+                                 j_coordinate_sets, j_coordinate_sets+(ny*nx)]
+                                   )
+                       ])
+
+   
+    la_solver = create_sparse_petsc_la_solver_with_custom_vjp_given_csr(coords, (ny*nx*2, ny*nx*2),
+                                                              indirect=False,
+                                                              ksp_type="gmres",
+                                                              preconditioner="hypre",
+                                                              ksp_max_iter=60,
+                                                              monitor_ksp=False)
+
+    ##@custom_vjp
+    #def ssa_solve(u_va_1d, v_va_1d, h_1d, damage_va_1d, ):
+    #    dJu_du, dJv_du, dJu_dv, dJv_dv = sparse_jacrev(get_uv_residuals_nonlinear_ssa,
+    #                                         (u_va_1d, v_va_1d, h_1d, mu_ew, mu_ns, beta_eff)
+    #                                                  )
+    #    nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],
+    #                                     dJv_du[mask], dJv_dv[mask]])
+
+    #    rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_va_1d, v_va_1d, h_1d,
+    #                                                       mu_ew, mu_ns, beta_eff))
+
+    #    du = la_solver(nz_jac_values, rhs)
+
+    #    return du
+
+    pass
 
 
 def make_diva3d_solver_cvjp(ny, nx, dy, dx, n_levels,
@@ -2845,7 +2972,8 @@ def make_diva3d_solver(ny, nx, dy, dx, n_levels,
                        sliding="linear",
                        periodic=False,
                        temperature_field=None,
-                       n_timesteps=0):
+                       n_timesteps=0,
+                       u_ratio_tol=1e-6):
 
     if temperature_field is None:
         temperature_field = (jnp.zeros((ny,nx))+258.15)
@@ -2974,8 +3102,9 @@ def make_diva3d_solver(ny, nx, dy, dx, n_levels,
                                                                 mu_ew, mu_ns, beta_eff))
 
             du = la_solver(nz_jac_values, rhs)
-            
-            print(f"u_ratio: {jnp.max(jnp.abs(u_1d + du[:(ny*nx)]))/jnp.max(jnp.abs(u_1d))}")
+           
+            u_ratio = jnp.max(jnp.abs(u_1d + du[:(ny*nx)]))/jnp.max(jnp.abs(u_1d))
+            print(f"u_ratio: {u_ratio}")
 
             u_1d = u_1d + du[:(ny*nx)]
             v_1d = v_1d + du[(ny*nx):]
@@ -3002,6 +3131,9 @@ def make_diva3d_solver(ny, nx, dy, dx, n_levels,
             #layers of u_vv after this function is executed... Maybe that disappears
             #as the number of vertical levels is increased...
 
+            if jnp.abs(u_ratio-1) < u_ratio_tol:
+                break
+
 
         final_residual = jnp.max(jnp.abs(rhs_new))
         print("----------")
@@ -3012,7 +3144,7 @@ def make_diva3d_solver(ny, nx, dy, dx, n_levels,
         return u_va, v_va, u_vv, v_vv, zs
     
 
-    def run_model_forward(q, p, u_trial, v_trial, h_init):
+    def run_model_forward(q, p, u_trial, v_trial, h_init, dir_=None, t_start=0, cfl_number=0.9):
         h = h_init
         u_va, v_va = u_trial, v_trial
 
@@ -3027,7 +3159,7 @@ def make_diva3d_solver(ny, nx, dy, dx, n_levels,
 
                 accumulation = jnp.where(h>0, 0.3, 0)
 
-                delta_t = 0.45*(dx/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
+                delta_t = cfl_number*(dx/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
                 print(delta_t)
                 
                 t_cum += delta_t
@@ -3038,6 +3170,23 @@ def make_diva3d_solver(ny, nx, dy, dx, n_levels,
                 h = advection_step(u_va.reshape(-1), v_va.reshape(-1),
                                    h.reshape(-1), source=accumulation,
                                    delta_t=delta_t)
+                if not ts%100:
+                    
+                    grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
+                    
+                    plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+                    plt.colorbar()
+                    plt.savefig(f"{dir_}/speed_{t_cum:.1f}years.png")
+                    #plt.show()
+                    plt.close()
+    
+                    plt.imshow(jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0))
+                    #plt.show()
+                    plt.savefig(f"{dir_}/grounded_{t_cum:.1f}years.png")
+                    plt.close()
+    
+                    jnp.save(f"{dir_}/thickness_WmSlidingC1e4_1km_res_HalfDomain_DIVA_{t_cum:.1f}years.npy", h)
+                    #jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{t_cum}years.npy", h)
         else:
             u_va, v_va, u_vv, v_vv, zs = momentum_solver(q, p, u_va, v_va, h)
 
@@ -6992,8 +7141,8 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                                    ice_mask, mucoef_0,
                                                    temperature_field)
     
-    #gl_stickiness_scaling                       = make_grounded_fraction_function(add_scalar_ghost_cells)
-    beta_fct                                    = beta_function(b, sliding, None)
+    gl_stickiness_scaling                       = make_grounded_fraction_function(add_scalar_ghost_cells)
+    beta_fct                                    = beta_function(b, sliding, gl_stickiness_scaling)
 
     get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,
                                                        interp_cc_to_fc,
@@ -7170,8 +7319,8 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
            
 
 
-            full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
-            full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
+            #full_jac = jnp.zeros((ny*nx*2, ny*nx*2))
+            #full_jac = full_jac.at[coords[0,:], coords[1,:]].set(nz_jac_values)
             
             #plt.imshow(jnp.log(jnp.abs(full_jac[:,:])).reshape((ny*nx*2,2*nx*ny)))
             #plt.colorbar()

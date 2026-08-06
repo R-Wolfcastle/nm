@@ -25,7 +25,8 @@ from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,
                               make_coupled_quasi_newton_solver_function,\
                               make_coupled_picnewton_solver_function,\
                               implicit_forward_solver,\
-                              solve_steady_state_direct
+                              solve_steady_state_direct,\
+                              make_diva3d_solver
 
 from standard_domains import mismip_domain, mismip_domain_symm
 
@@ -132,8 +133,11 @@ def implicit_spinup():
 
 impl_dir_ = f"{nm_home}/bits_of_data/damage/mismip/impl/2/"
 expl_dir_ = f"{nm_home}/bits_of_data/damage/mismip/expl/2/"
+expl_diva_dir_ = f"{nm_home}/bits_of_data/damage/mismip/diva/expl/2/"
 os.makedirs(impl_dir_, exist_ok=True)
 os.makedirs(expl_dir_, exist_ok=True)
+os.makedirs(expl_diva_dir_, exist_ok=True)
+
 #implicit_spinup()
 #raise
 
@@ -142,7 +146,7 @@ def explicit_spinup():
     n_levels = 50
     n_pic_iterations = 10
     n_newt_iterations = 7
-    n_timesteps = 10_000
+    n_timesteps = 5000
     
     (
         lx, ly, nr, nc,
@@ -171,8 +175,14 @@ def explicit_spinup():
                                                   sliding="basic_weertman",
                                                   temperature_field=temp_field,
                                                 )
-    
-    time_marcher = make_time_marcher(momentum_solver, advection_stepper, n_timesteps, delta_x, b, dir_=expl_dir_, t_start=4353.9)
+   
+    accumulation_function = lambda h, b: jnp.where(h>0, 0.3, 0)
+
+    time_marcher = make_time_marcher(momentum_solver, advection_stepper, 
+                                     delta_x, b,
+                                     max_n_timesteps=n_timesteps,
+                                     accumulation_function=accumulation_function, 
+                                     dir_=expl_dir_, t_start=4353.9)
     
     u_va, v_va, thk_final, dhdt_final = time_marcher(q, p, thk)
     
@@ -207,8 +217,128 @@ def explicit_spinup():
     #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
     plt.close()
 
-explicit_spinup()
+#explicit_spinup()
+#raise
+
+def explicit_diva_spinup():
+    resolution = 1000
+    n_levels = 32
+    n_iterations = 40
+    n_timesteps = 1000
+    
+    (
+        lx, ly, nr, nc,
+        x, y, delta_x,
+        delta_y, thk, b,
+        C_0, mucoef_0, q,
+        ice_mask, surface,
+        grounded
+    ) = mismip_domain_symm(resolution=resolution, half=True)
+    p = jnp.zeros_like(q)
+    
+    temp_field = jnp.zeros_like(q)+265
+
+    #thk = jnp.load(f"{nm_home}/bits_of_data/damage/mismip/impl/thickness_linearSlidingC1e4_1km_res_HalfDomain.npy")
+    thk = jnp.load(expl_dir_+"thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy")
+   
+    forward_solver = make_diva3d_solver(nr, nc, delta_y, delta_x, n_levels,
+                                        b, ice_mask, n_iterations,
+                                        mucoef_0, C_0,
+                                        sliding="basic_weertman",
+                                        temperature_field=temp_field,
+                                        n_timesteps=n_timesteps)
+    
+    u_init, v_init = jnp.zeros_like(C_0), jnp.zeros_like(C_0)
+
+    u_va, v_va, u_vv, v_vv, zs, thk_final, dhdt_final = forward_solver(q, p, u_init, v_init, thk, dir_=expl_diva_dir_)
+
+    grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+    
+    #plt.imshow(grounded)
+    #plt.show()
+    #
+    #plt.imshow(thk_final-thk)
+    #plt.colorbar()
+    #plt.show()
+   
+    
+    plt.imshow(dhdt_final, vmin=-1, vmax=1, cmap="RdBu")
+    plt.colorbar()
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/dhdt_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+    plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+    plt.colorbar()
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+    plt.imshow(grounded)
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+
+
+
+explicit_diva_spinup()
 raise
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ############ EXPLICIT:
 
 

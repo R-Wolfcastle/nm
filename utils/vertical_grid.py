@@ -13,7 +13,7 @@ sys.path.insert(1, os.path.join(nm_home, 'utils'))
 import constants_years as c
 
 
-
+#@jax.jit
 def define_z_coordinates(bed, thk, n_levels):
     s_gnd = bed + thk
     s_flt = thk*(1-c.RHO_I/c.RHO_W)
@@ -99,7 +99,6 @@ def interp_field_onto_new_zs(field, zs, zs_new):
     # Vectorize over spatial dimension(s)
     interp_fn = vmap(interp_single_cell, in_axes=(0, 0, 0))
     return interp_fn(flat_field, flat_zs, flat_zs_new).reshape(ny, nx, nz)
-
 
 
 def interp_fields_onto_new_zs(fields, zs, zs_new):
