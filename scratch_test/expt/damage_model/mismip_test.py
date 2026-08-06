@@ -122,15 +122,15 @@ def implicit_spinup():
     #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
     plt.close()
 
-implicit_spinup()
-raise
+#implicit_spinup()
+#raise
 
 def explicit_spinup():
     resolution = 1000
     n_levels = 50
     n_pic_iterations = 10
     n_newt_iterations = 7
-    n_timesteps = 5000
+    n_timesteps = 10_000
     
     (
         lx, ly, nr, nc,
