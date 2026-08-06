@@ -13,7 +13,7 @@ sys.path.insert(1, os.path.join(nm_home, 'utils'))
 import constants_years as c
 
 
-@jax.jit
+#@jax.jit
 def define_z_coordinates(bed, thk, n_levels):
     s_gnd = bed + thk
     s_flt = thk*(1-c.RHO_I/c.RHO_W)

@@ -1,0 +1,625 @@
+#1st party
+import os
+import sys
+
+
+#3rd party
+import jax
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+from scipy.interpolate import RegularGridInterpolator
+
+#local apps
+nm_home = os.environ['NM_HOME']   
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
+import constants_years as c
+from vertical_grid import *
+from standard_domains import mismip_domain_symm
+from plotting_stuff import show_vel_field, show_vel_field_2
+
+sys.path.insert(1, os.path.join(nm_home, 'solvers'))
+from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
+                              make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
+                              make_time_marcher,\
+                              make_coupled_quasi_newton_solver_function,\
+                              make_coupled_picnewton_solver_function,\
+                              implicit_forward_solver,\
+                              solve_steady_state_direct,\
+                              make_diva3d_solver
+
+from standard_domains import mismip_domain, mismip_domain_symm
+
+
+def implicit_spinup():
+    resolution = 1000
+    n_levels = 50
+    n_pic_iterations = 10
+    n_newt_iterations = 15
+    n_timesteps = 500
+    
+    (
+        lx, ly, nr, nc,
+        x, y, delta_x,
+        delta_y, thk, b,
+        C_0, mucoef_0, q,
+        ice_mask, surface,
+        grounded
+    ) = mismip_domain_symm(resolution=resolution, half=True)
+    p = jnp.zeros_like(q)
+
+    #thk = jnp.load(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_1001.5174506828529m_2526.3248196221084years.npy")
+    thk = jnp.load(impl_dir_+"thickness_WmSlidingC1e4_1km_res_HalfDomain_4353.9years.npy")
+    
+    temp_field = jnp.zeros_like(q)+265.43
+    #temp_field = None
+    
+    #solver = make_coupled_quasi_newton_solver_function(nr, nc,delta_y,
+    #                                              delta_x,
+    #                                              b,
+    #                                              ice_mask,
+    #                                              n_pic_iterations,
+    #                                              mucoef_0, C_0,
+    #                                              sliding="basic_weertman")
+    solver = make_coupled_picnewton_solver_function(nr, nc,delta_y,
+                                                    delta_x,
+                                                    b,
+                                                    ice_mask,
+                                                    n_pic_iterations,
+                                                    n_newt_iterations,
+                                                    mucoef_0, C_0,
+                                                    sliding="basic_weertman",
+                                                    newton_max_backtracks=10,
+                                                    temperature_field=temp_field)
+    #max_n_pic_iterations = n_pic_iterations
+    #solver = implicit_forward_solver(nr, nc, delta_y, delta_x,
+    #                                 b, ice_mask,
+    #                                 max_n_pic_iterations,
+    #                                 n_newt_iterations,
+    #                                 mucoef_0, C_0,
+    #                                 sliding="linear",
+    #                                 temperature_field=temp_field)
+    
+    
+    delta_t = 20
+    
+    u_trial = jnp.zeros_like(C_0)
+    #u_trial = u_trial.at[:, 1000:].set(50)
+    v_trial = jnp.zeros_like(u_trial)
+    
+    u_va, v_va, thk_final, dhdt, iterations_taken = solve_steady_state_direct(solver, q, p,
+                                                              u_trial, v_trial, thk, b,
+                                                              acc_val=0.3,
+                                                              delta_t_start=5,
+                                                              delta_t_growth_factor=1.5,
+                                                              delta_t_max=50,
+                                                              n_outer=1000,
+                                                              t_max=20_000,
+                                                              dir_=impl_dir_,
+                                                              t_start=4353.9)
+
+    #u_va, v_va, thk_final = solver(q, p, u_trial, v_trial, thk, delta_t, n_timesteps, accm=0.3)
+
+
+    
+    #jnp.save(f"{nm_home}/bits_of_data/mismip_figs/impl/thickness_{delta_x}m_{delta_t*n_timesteps}years.npy", thk_final)
+    
+    
+    #show_vel_field(u_va, v_va)
+    
+    grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+    
+    #plt.imshow(grounded)
+    #plt.show()
+    #
+
+    jnp.save(impl_dir_+f"/thickness_WmSlidingC1e4_1km_res_HalfDomain.npy", thk_final)
+
+    
+    plt.imshow(thk_final)
+    plt.colorbar()
+    plt.show()
+    
+    plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+    plt.colorbar()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.show()
+    plt.close()
+
+    plt.imshow(grounded)
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/impl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+impl_dir_ = f"{nm_home}/bits_of_data/damage/mismip/impl/2/"
+expl_dir_ = f"{nm_home}/bits_of_data/damage/mismip/expl/2/"
+expl_diva_dir_ = f"{nm_home}/bits_of_data/damage/mismip/diva/expl/2/"
+os.makedirs(impl_dir_, exist_ok=True)
+os.makedirs(expl_dir_, exist_ok=True)
+os.makedirs(expl_diva_dir_, exist_ok=True)
+
+#implicit_spinup()
+#raise
+
+def explicit_spinup():
+    resolution = 1000
+    n_levels = 50
+    n_pic_iterations = 10
+    n_newt_iterations = 7
+    n_timesteps = 5000
+    
+    (
+        lx, ly, nr, nc,
+        x, y, delta_x,
+        delta_y, thk, b,
+        C_0, mucoef_0, q,
+        ice_mask, surface,
+        grounded
+    ) = mismip_domain_symm(resolution=resolution, half=True)
+    p = jnp.zeros_like(q)
+    
+    temp_field = jnp.zeros_like(q)+265
+
+    #thk = jnp.load(f"{nm_home}/bits_of_data/damage/mismip/impl/thickness_linearSlidingC1e4_1km_res_HalfDomain.npy")
+    thk = jnp.load(impl_dir_+"thickness_WmSlidingC1e4_1km_res_HalfDomain_4353.9years.npy")
+    
+    momentum_solver, advection_stepper = make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(nr, nc,
+                                                  delta_y,
+                                                  delta_x,
+                                                  b,
+                                                  ice_mask,
+                                                  n_pic_iterations,
+                                                  n_newt_iterations,
+                                                  mucoef_0,
+                                                  C_0,
+                                                  sliding="basic_weertman",
+                                                  temperature_field=temp_field,
+                                                )
+   
+    accumulation_function = lambda h, b: jnp.where(h>0, 0.3, 0)
+
+    time_marcher = make_time_marcher(momentum_solver, advection_stepper, 
+                                     delta_x, b,
+                                     max_n_timesteps=n_timesteps,
+                                     accumulation_function=accumulation_function, 
+                                     dir_=expl_dir_, t_start=4353.9)
+    
+    u_va, v_va, thk_final, dhdt_final = time_marcher(q, p, thk)
+    
+    #jnp.save(f"{nm_home}/bits_of_data/mismip_figs/expl/thickness_{delta_x}m_{delta_t*n_timesteps}years.npy", thk_final)
+    
+    #show_vel_field(u_va, v_va)
+    
+    grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+    
+    #plt.imshow(grounded)
+    #plt.show()
+    #
+    #plt.imshow(thk_final-thk)
+    #plt.colorbar()
+    #plt.show()
+   
+    
+    plt.imshow(dhdt_final, vmin=-1, vmax=1, cmap="RdBu")
+    plt.colorbar()
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/dhdt_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+    plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+    plt.colorbar()
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+    plt.imshow(grounded)
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+#explicit_spinup()
+#raise
+
+def explicit_diva_spinup():
+    resolution = 1000
+    n_levels = 32
+    n_iterations = 40
+    n_timesteps = 1000
+    
+    (
+        lx, ly, nr, nc,
+        x, y, delta_x,
+        delta_y, thk, b,
+        C_0, mucoef_0, q,
+        ice_mask, surface,
+        grounded
+    ) = mismip_domain_symm(resolution=resolution, half=True)
+    p = jnp.zeros_like(q)
+    
+    temp_field = jnp.zeros_like(q)+265
+
+    #thk = jnp.load(f"{nm_home}/bits_of_data/damage/mismip/impl/thickness_linearSlidingC1e4_1km_res_HalfDomain.npy")
+    thk = jnp.load(expl_dir_+"thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy")
+   
+    forward_solver = make_diva3d_solver(nr, nc, delta_y, delta_x, n_levels,
+                                        b, ice_mask, n_iterations,
+                                        mucoef_0, C_0,
+                                        sliding="basic_weertman",
+                                        temperature_field=temp_field,
+                                        n_timesteps=n_timesteps)
+    
+    u_init, v_init = jnp.zeros_like(C_0), jnp.zeros_like(C_0)
+
+    u_va, v_va, u_vv, v_vv, zs, thk_final, dhdt_final = forward_solver(q, p, u_init, v_init, thk, dir_=expl_diva_dir_)
+
+    grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+    
+    #plt.imshow(grounded)
+    #plt.show()
+    #
+    #plt.imshow(thk_final-thk)
+    #plt.colorbar()
+    #plt.show()
+   
+    
+    plt.imshow(dhdt_final, vmin=-1, vmax=1, cmap="RdBu")
+    plt.colorbar()
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/dhdt_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+    plt.imshow(jnp.sqrt(u_va**2 + v_va**2), cmap="RdYlBu_r", vmin=0)
+    plt.colorbar()
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/speed_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+    plt.imshow(grounded)
+    plt.show()
+    #plt.savefig(f"{nm_home}/bits_of_data/mismip_figs/expl/grounded_{delta_x}m_{delta_t*n_timesteps}years.png")
+    plt.close()
+
+
+
+
+explicit_diva_spinup()
+raise
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+############ EXPLICIT:
+
+
+momentum_solver, advection_stepper = make_picnewton_velocity_solver_function_full_cvjp(nr, nc,
+                                              delta_y,
+                                              delta_x,
+                                              b,
+                                              ice_mask,
+                                              n_pic_iterations,
+                                              n_newt_iterations,
+                                              mucoef_0,
+                                              C,
+                                              sliding="basic_weertman",
+                                              temperature_field=None,
+                                            )
+
+time_marcher = make_time_marcher(momentum_solver, advection_stepper, n_timesteps, delta_x)
+
+u_va, v_va, thk_final, dhdt_final = time_marcher(q, p, thk)
+
+
+show_vel_field(u_va, v_va)
+
+grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+plt.imshow(grounded)
+plt.show()
+
+plt.imshow(thk_final)
+plt.show()
+
+
+plt.imshow(dhdt_final, vmin=-1, vmax=1, cmap="RdBu_r")
+plt.colorbar()
+plt.show()
+
+
+raise
+
+
+def functional(q_deriv):
+    u_va, v_va, u_vv, v_vv, zs = momentum_solver(q_deriv, p,
+                                                 jnp.zeros_like(q),
+                                                 jnp.zeros_like(q),
+                                                 thk)
+    return jnp.sum(u_va**2)
+
+dJ_dq = jax.grad(functional)(q)
+
+plt.imshow(dJ_dq)
+plt.colorbar()
+plt.show()
+
+raise
+
+print(f"max |dhdt| ={float(jnp.max(jnp.abs(dhdt_final)))}")
+#thk_final = jnp.load(f"{nm_home}/bits_of_data/DIVA/mismip_ss/1/thickness_{resolution}m_{n_timesteps}.npy")
+
+grounded = jnp.where((thk_final+b)>(thk_final*(1-c.RHO_I/c.RHO_W)), 1, 0)
+
+plt.imshow(grounded)
+plt.show()
+
+plt.imshow(thk_final)
+plt.show()
+
+raise
+
+plt.imshow(dhdt_final, cmap="RdBu", vmin=-10, vmax=10)
+plt.colorbar()
+plt.show()
+
+show_vel_field_2(u_va, v_va, vmin=0)
+
+plt.imshow(thk)
+plt.colorbar()
+plt.show()
+
+plt.imshow(h_final)
+plt.colorbar()
+plt.show()
+
+
+z_coordinates = define_z_coordinates(b, thk, n_levels)
+
+#diff_from_va = u_vv[64,:,:] - u_va[64,:,None]
+#diff_from_va = u_vv[64,:,:] - vertically_average(u_vv, z_coordinates)[64,:, None]
+diff_from_ssa = u_vv[64,:,:] - u_ssa[64,:,None]
+
+X, Z = jnp.meshgrid(x, jnp.arange(n_levels), indexing='ij')
+Z = z_coordinates[64,:,:]
+
+#percentage_diff_from_ssa = (100/u_va_ssa[...,None])*(u_vv-u_va_ssa[...,None])
+
+# Plot difference in vert profile from mean
+plt.figure(figsize=(8, 4))
+#contour = plt.contourf(X, Z, diff_from_va, levels=101, cmap='RdBu_r', vmin=-120, vmax=120)
+contour = plt.contourf(X, Z, diff_from_ssa, levels=101, cmap='RdBu_r', vmin=-1000, vmax=1000)
+#contour = plt.contourf(X, Z, jnp.abs(diff_from_va), levels=101, cmap='gnuplot2', vmin=0)
+plt.colorbar(contour, label='Speed diff (m/a)')
+
+plt.ylabel('Elevation (m)')
+for i in range(z_coordinates.shape[-1]):
+    plt.plot(x, z_coordinates[64,:,i], c="k", alpha=0.1)
+plt.show()
+
+
+
+
+
+
+raise
+
+
+#SPIN UP STUFF THAT'S NOT QUITE WORKED!!
+
+
+def interpolate_to_new_grid(x_old, y_old, field_old, x_new, y_new):
+
+    interp = RegularGridInterpolator(
+        (y_old, x_old),
+        jnp.asarray(field_old),
+        method="linear",
+        bounds_error=False,
+        fill_value=None,
+    )
+
+    Xn, Yn = jnp.meshgrid(x_new, y_new)
+
+    pts = jnp.column_stack([
+        Yn.ravel(),
+        Xn.ravel()
+    ])
+
+    return jnp.asarray(
+        interp(pts).reshape(len(y_new), len(x_new))
+    )
+
+def spin_up():
+
+    n_levels = 50
+    n_iterations = 40
+
+    resolutions = [8000, 4000, 2000, 1000, 500]
+
+    h_init = None
+    u_init = None
+    v_init = None
+
+    for i, resn in enumerate(resolutions):
+
+        print(f"\nResolution = {resn} m")
+
+        (
+            lx, ly, nr, nc,
+            x, y, delta_x,
+            delta_y, thk, b,
+            C, mucoef_0, q,
+            ice_mask, surface,
+            grounded
+        ) = mismip_domain_symm(resolution=resn)
+
+        
+        if i == 0:
+
+            h_init = thk
+            u_init = jnp.ones_like(thk) * 100.0
+            v_init = jnp.zeros_like(thk)
+
+        else:
+
+            h_init = interpolate_to_new_grid(
+                x_prev, y_prev, h_final,
+                x, y
+            )
+
+            u_init = interpolate_to_new_grid(
+                x_prev, y_prev, u_va,
+                x, y
+            )
+
+            v_init = interpolate_to_new_grid(
+                x_prev, y_prev, v_va,
+                x, y
+            )
+
+        n_timesteps = max(3, int(10 / (2 ** i)))
+
+        print(f"iterations = {n_iterations}")
+
+        solver = make_diva3d_solver(nr, nc,
+                                                      delta_y,
+                                                      delta_x,
+                                                      n_levels,
+                                                      b,
+                                                      ice_mask,
+                                                      n_iterations,
+                                                      mucoef_0,
+                                                      sliding="linear",
+                                                      temperature_field=None,
+                                                      n_timesteps=n_timesteps
+                                                    )
+
+        (u_va, v_va, u_vv, v_vv, zs,
+            h_final, dhdt_final) = solver(q,
+                                          C,
+                                          u_init,
+                                          v_init,
+                                          h_init
+                                      )
+
+        print(
+            "max |dhdt| =",
+            float(jnp.max(jnp.abs(dhdt_final)))
+        )
+
+        x_prev = x
+        y_prev = y
+        
+
+        plt.imshow(dhdt_final, cmap="RdBu", vmin=-10, vmax=10)
+        plt.colorbar()
+        plt.show()
+        
+        show_vel_field_2(u_va, v_va, vmin=0)
+        
+        plt.imshow(thk)
+        plt.colorbar()
+        plt.show()
+        
+        plt.imshow(h_final)
+        plt.colorbar()
+        plt.show()
+
+    return x, y, h_final, u_va, v_va, dhdt_final
+
+
+spin_up()
+
+#def spin_up():
+#
+#    n_levels = 50
+#        
+#    u_init = jnp.zeros_like(C)+100
+#    v_init = jnp.zeros_like(C)
+#
+#    for i, resn in enumerate([8000, 4000, 2000, 1000, 500]):
+#        
+#        lx, ly, nr, nc,\
+#        x, y, delta_x,\
+#        delta_y, thk, b,\
+#        C, mucoef_0, q,\
+#        ice_mask, surface,\
+#        grounded = mismip_domain(resolution=resn)
+#        
+#
+#        n_iterations = 80/(2**i)
+#
+#
+#        solver = make_diva3d_solver(nr, nc, delta_y, delta_x, n_levels,
+#                                              b, ice_mask, n_iterations,
+#                                              mucoef_0, sliding="linear",
+#                                              temperature_field=None,
+#                                              n_timesteps=1)
+#
+#        u_va, v_va, u_vv, v_vv, zs, h_final, dhdt_final = solver(q, C, u_init, v_init, thk)
+#
+#
+#
+#        plt.imshow(dhdt_final, cmap="RdBu", vmin=-10, vmax=10)
+#        plt.colorbar()
+#        plt.show()
+#        
+#        show_vel_field_2(u_va, v_va, vmin=0)
+#        
+#        plt.imshow(thk)
+#        plt.colorbar()
+#        plt.show()
+#        
+#        plt.imshow(h_final)
+#        plt.colorbar()
+#        plt.show()
+
+
