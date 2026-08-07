@@ -1427,8 +1427,8 @@ def beta_function(b, mode="linear", C_scaling_function=None):
             s_flt = h * (1-c.RHO_I/c.RHO_W)
             
             beta = C
-            #beta = C * C_scaling_function(b, h)
-            beta = jnp.where(s_gnd>s_flt, beta, 0)
+            beta = C * C_scaling_function(b, h)
+            #beta = jnp.where(s_gnd>s_flt, beta, 0)
             beta = jnp.where(h>0, beta, 1)
             return beta
     
@@ -1440,8 +1440,8 @@ def beta_function(b, mode="linear", C_scaling_function=None):
             speed = jnp.sqrt(u*u + v*v + 1)
             beta = C * (speed ** (1/c.GLEN_N - 1))
             
-            #beta = beta * C_scaling_function(b, h)
-            beta = jnp.where(s_gnd>s_flt, beta, 0)
+            beta = beta * C_scaling_function(b, h)
+            #beta = jnp.where(s_gnd>s_flt, beta, 0)
             
             beta = jnp.where(h>0, beta, 1)
 
@@ -1760,7 +1760,7 @@ def fc_viscosity_function_new_givenT_noextrap_dt(ny, nx, dy, dx, add_uv_ghost_ce
         dudx_ew, dudy_ew,\
         dvdx_ew, dvdy_ew,\
         dudx_ns, dudy_ns,\
-        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v, ice_mask)
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)#, ice_mask)
 
         u = u*ice_mask
         v = v*ice_mask
@@ -2133,4 +2133,30 @@ def gl_aware_driving_stress_function(dy, dx):
 
     return jax.jit(hgrads)
 
+@jax.jit
+def remove_icebergs(h, b):
+    """
+    Zero out the thickness of any ice not connected, via a path of
+    ice-filled cells, to either grounded ice or the x=0 no-slip wall
+    (column 0). Floating ice reachable from neither has no basal
+    friction and no Dirichlet condition to pin its rigid-body modes
+    (translation/rotation), making the momentum problem there singular.
+    Treated as a detached iceberg and calved away.
+    """
+    ny, nx = h.shape
+    ice_mask = h > 0
+    grounded = (h + b) > (h * (1 - c.RHO_I / c.RHO_W))
 
+    anchored = (grounded & ice_mask).at[:, 0].set(ice_mask[:, 0])
+
+    def grow(_, anchored):
+        g = anchored
+        g = g | jnp.pad(anchored[1:, :],  ((0, 1), (0, 0)))  # from south
+        g = g | jnp.pad(anchored[:-1, :], ((1, 0), (0, 0)))  # from north
+        g = g | jnp.pad(anchored[:, 1:],  ((0, 0), (0, 1)))  # from east
+        g = g | jnp.pad(anchored[:, :-1], ((0, 0), (1, 0)))  # from west
+        return g & ice_mask
+
+    anchored = jax.lax.fori_loop(0, ny + nx, grow, anchored)
+
+    return jnp.where(ice_mask & ~anchored, 0.0, h)

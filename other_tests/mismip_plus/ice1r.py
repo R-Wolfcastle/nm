@@ -34,8 +34,8 @@ from standard_domains import mismip_domain, mismip_domain_symm
 
 resolution = 1000
 n_levels = 32
-n_pic_iterations = 10
-n_newt_iterations = 7
+n_pic_iterations = 50
+n_newt_iterations = 50
 max_n_diva_iterations = 40
 
 (
@@ -377,9 +377,14 @@ def run_ice2rr(thk_init, t_start=100, solver="ssa", max_t=1000, max_n_timesteps=
 
 
 if __name__ == "__main__":
-    thk_init = jnp.load(
-        f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
-    )
+
+    ################### SSA ########################
+
+    #####Ice1############
+
+    #thk_init = jnp.load(
+    #    f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+    #)
     #run_ice1r(thk_init, solver="ssa")
 
     #starting_thickness = jnp.load(
@@ -388,9 +393,33 @@ if __name__ == "__main__":
     #run_ice1ra(starting_thickness, solver="ssa")
     #run_ice1rr(starting_thickness, solver="ssa")
 
-    run_ice2r(thk_init, solver="ssa")
-    #run_ice2ra(solver="ssa")
-    ## run_ice2rr(solver="ssa")
+
+    #####Ice2############
+
+
+    #thk_init = jnp.load(
+    #    f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+    #)
+    #run_ice2r(thk_init, solver="ssa")
+
+    starting_thickness = jnp.load(
+            #solver_out_root("ssa")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0years.npy"
+            solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
+                                 )
+    run_ice2ra(starting_thickness, solver="ssa")
+    ## run_ice2rr(starting_thickness, solver="ssa")
+
+    
+
+
+
+
+
+
+
+    ################### DIVA ########################
+
+    #####Ice1############
 
     # --- DIVA suite (same experiments, DIVA velocity solve) -------------
     # run_ice1r(thk_init, solver="diva")
