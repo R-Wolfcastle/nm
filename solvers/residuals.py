@@ -1706,7 +1706,7 @@ def compute_linear_ssa_residuals_function_fc_visc_new_noextrap_dt(ny, nx, dy, dx
         dudx_ew, dudy_ew,\
         dvdx_ew, dvdy_ew,\
         dudx_ns, dudy_ns,\
-        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v, ice_mask)
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)#, ice_mask)
 
 
         visc_x = 2 * mu_ew[:, 1:]*h_ew[:, 1:]*(2*dudx_ew[:, 1:] + dvdy_ew[:, 1:])*dy   -\
@@ -2329,7 +2329,7 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap_dt(ny, nx, dy, dx, b
         dudx_ew, dudy_ew,\
         dvdx_ew, dvdy_ew,\
         dudx_ns, dudy_ns,\
-        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v, ice_mask)
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)#, ice_mask)
 
 
         #interpolate things onto face-cenres
