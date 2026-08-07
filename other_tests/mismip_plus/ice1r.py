@@ -1,11 +1,13 @@
 #1st party
 import os
 import sys
-
+import re
+import glob
 
 #3rd party
 import jax
 import jax.numpy as jnp
+import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
 
@@ -51,9 +53,9 @@ p = jnp.zeros_like(q)
 
 xx, yy = jnp.meshgrid(x, y)
 
-temp_field = jnp.zeros_like(q)+265
+temp_field = jnp.zeros_like(q)+265.43
 
-nm_data_home = f"{nm_home}/bits_of_data/mismip_plus_experiments/full/"
+nm_data_home = f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/"
 
 A_ACC     = 0.3        # m a^-1, constant surface accumulation, applied everywhere there's ice
 OMEGA     = 0.2        # a^-1,   Ice1 melt-rate factor (Eq. 17)
@@ -165,7 +167,7 @@ def grounded_area(thk, b, delta_x, delta_y, mirror_y=True):
 # Plotting with an independently-scaled x/y aspect ratio
 # ============================================================================
 def show_field_scaled(field, x=x, y=y, ax=None, cmap="viridis", vmin=None, vmax=None,
-                       cbar_label=None, title=None, y_exaggeration=6.0,
+                       cbar_label=None, title=None, y_exaggeration=4.0,
                        xlabel="x (km)", ylabel="y (km)", figsize=(10, 4)):
     
     x = np.asarray(x)
@@ -241,7 +243,7 @@ def plot_grounded_area_timeseries(series, ax=None, title="Grounded area vs time"
 #                                                  n_newt_iterations,
 #                                                  mucoef_0,
 #                                                  C_0,
-#                                                  sliding="basic_weertman",
+#                                                  sliding="schoof",
 #                                                  temperature_field=temp_field,
 #                                                )
 #    
@@ -259,6 +261,134 @@ def plot_grounded_area_timeseries(series, ax=None, title="Grounded area vs time"
 
 
 
+
+# ============================================================================
+# Loading a saved thickness series + summary plots
+# ============================================================================
+_THICKNESS_RE = re.compile(
+    r"thickness_WmSlidingC1e4_1km_res_HalfDomain_([0-9]+\.[0-9]+)years\.npy$")
+
+def load_thickness_series(dir_):
+    """Scan dir_ for thickness_WmSlidingC1e4_1km_res_HalfDomain_<t>years.npy
+    files and return (times, thicknesses): times as a sorted 1-D numpy
+    array (years), thicknesses as a list of (ny,nx) numpy arrays in the
+    same order."""
+    files = glob.glob(os.path.join(dir_, "thickness_WmSlidingC1e4_1km_res_HalfDomain_*years.npy"))
+    entries = []
+    for f in files:
+        m = _THICKNESS_RE.search(os.path.basename(f))
+        if m:
+            entries.append((float(m.group(1)), f))
+    if not entries:
+        raise FileNotFoundError(f"No matching thickness files found in {dir_}")
+    entries.sort(key=lambda e: e[0])
+    times = np.array([t for t, _ in entries])
+    thicknesses = [np.load(f) for _, f in entries]
+    return times, thicknesses
+
+
+def grounded_area_series(dir_):
+    """(times, areas in m^2) for every saved thickness snapshot in dir_."""
+    times, thks = load_thickness_series(dir_)
+    areas = np.array([grounded_area(thk, b, delta_x, delta_y) for thk in thks])
+    return times, areas
+
+
+def combined_grounded_area_series(root_dir, experiment, solver="ssa"):
+    """Concatenates the r and ra phases (e.g. ice1r + ice1ra) of `experiment`
+    ('ice1' or 'ice2') into one continuous (times, areas) timeline. The ra
+    phase's saved times already continue from the r phase's final time (via
+    make_time_marcher's t_start), so this is just a concatenate + sort."""
+    r_dir = os.path.join(root_dir, f"{experiment}r")
+    ra_dir = os.path.join(root_dir, f"{experiment}ra")
+
+    t_r, a_r = grounded_area_series(r_dir)
+    t_ra, a_ra = grounded_area_series(ra_dir)
+
+    t_all = np.concatenate([t_r, t_ra])
+    a_all = np.concatenate([a_r, a_ra])
+    order = np.argsort(t_all)
+    return t_all[order], a_all[order]
+
+
+def plot_grounded_area_ice1_ice2(root_dir=None, solver="ssa", out_path=None):
+    """Grounded area vs time for ice1(r+ra) and ice2(r+ra) on one figure,
+    matching the style of Fig. 4 in Asay-Davis et al. (2016)."""
+    root_dir = root_dir or solver_out_root(solver)
+
+    series = {
+        "Ice1 (r+ra)": combined_grounded_area_series(root_dir, "ice1", solver=solver),
+        "Ice2 (r+ra)": combined_grounded_area_series(root_dir, "ice2", solver=solver),
+    }
+
+    ax = plot_grounded_area_timeseries(series, title="Grounded area: Ice1 vs Ice2")
+
+    if out_path:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    return ax
+
+def plot_experiment_summary_panels(root_dir, experiment, target_times=(0, 100, 200),
+                                    solver="ssa", speed_log=True, out_path=None):
+    """For `experiment` ('ice1' or 'ice2'), find the saved thickness
+    snapshot closest to each of target_times (searching the combined r+ra
+    series), solve for velocity at each, and save a figure with thickness
+    (top row) and speed (bottom row) -- each with the grounding line
+    overlaid -- one column per requested time."""
+    root_dir = root_dir or _solver_out_root(solver)
+    r_dir = os.path.join(root_dir, f"{experiment}r")
+    ra_dir = os.path.join(root_dir, f"{experiment}ra")
+
+    t_r, thk_r = load_thickness_series(r_dir)
+    t_ra, thk_ra = load_thickness_series(ra_dir)
+    times = np.concatenate([t_r, t_ra])
+    thicknesses = thk_r + thk_ra
+    order = np.argsort(times)
+    times = times[order]
+    thicknesses = [thicknesses[i] for i in order]
+
+    momentum_solver, _ = _SOLVER_BUILDERS[solver]()
+
+    n = len(target_times)
+    fig, axes = plt.subplots(2, n, figsize=(5.5 * n, 7))
+    if n == 1:
+        axes = axes.reshape(2, 1)
+
+    speed_kwargs = dict(cmap="RdYlBu_r")
+
+    for col, target_t in enumerate(target_times):
+        actual_t, thk = _closest_snapshot(times, thicknesses, target_t)
+        u_va, v_va = diagnostic_velocity(thk, momentum_solver)
+        speed = np.sqrt(u_va**2 + v_va**2)
+
+        ax_thk, im_thk = show_field_with_gl_scaled(
+            thk, thk, ax=axes[0, col], cmap="Blues", vmin=0,
+            title=f"t = {actual_t:.1f} a  --  thickness",
+            cbar_label="thickness (m)")
+
+        if speed_log:
+            norm = LogNorm(vmin=max(np.min(speed[speed > 0]), 1e-2), vmax=np.max(speed) + 1e-6)
+            ax_spd, im_spd = show_field_with_gl_scaled(
+                speed, thk, ax=axes[1, col], vmin=None, vmax=None,
+                title=f"t = {actual_t:.1f} a  --  speed", cbar_label="speed (m/a)",
+                **speed_kwargs)
+            im_spd.set_norm(norm)
+        else:
+            show_field_with_gl_scaled(
+                speed, thk, ax=axes[1, col],
+                title=f"t = {actual_t:.1f} a  --  speed", cbar_label="speed (m/a)",
+                **speed_kwargs)
+
+    fig.suptitle(f"{experiment} ({solver})", y=1.02)
+    plt.tight_layout()
+
+    if out_path:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+
+    return fig, axes
+
+
 # ============================================================================
 # Experiment runners (SSA/Picard-Newton and DIVA)
 # ============================================================================
@@ -267,14 +397,14 @@ def ssa_momentum_and_advection():
     return make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
         nr, nc, delta_y, delta_x, b,
         n_pic_iterations, n_newt_iterations,
-        mucoef_0, C_0, sliding="basic_weertman", temperature_field=temp_field,
+        mucoef_0, C_0, sliding="schoof", temperature_field=temp_field,
         adv_method="PPM")
  
  
 def diva_momentum_and_advection():
     return make_diva3d_solver(
-        nr, nc, delta_y, delta_x, n_levels, b, ice_mask, n_diva_iterations,
-        mucoef_0, C_0, sliding="basic_weertman", temperature_field=temp_field)
+        nr, nc, delta_y, delta_x, n_levels, b, ice_mask, max_n_diva_iterations,
+        mucoef_0, C_0, sliding="schoof", temperature_field=temp_field)
  
  
 solvers = {"ssa": ssa_momentum_and_advection, "diva": diva_momentum_and_advection}
@@ -296,13 +426,14 @@ def solver_out_root(solver):
     return os.path.join(nm_data_home, solver)
 
 
-def run_ice0(thk_init, solver="ssa", max_t=100, max_n_timesteps=1000):
+def run_ice0(thk_init, t_start=789.7538, solver="ssa", max_t=5000, max_n_timesteps=10_000):
     """100-year control run, m_i = 0."""
     momentum_solver, advection_stepper = solvers[solver]()
     out_dir = os.path.join(solver_out_root(solver), "ice0")
     return run_time_marched_experiment(momentum_solver, advection_stepper, thk_init,
                                        make_ice0_accumulation(), out_dir,
-                                       max_n_timesteps=max_n_timesteps, max_t=max_t)
+                                       max_n_timesteps=max_n_timesteps, max_t=max_t,
+                                       t_start=t_start)
 
 
 def run_ice1r(thk_init, solver="ssa", max_t=100, max_n_timesteps=1000):
@@ -378,23 +509,33 @@ def run_ice2rr(thk_init, t_start=100, solver="ssa", max_t=1000, max_n_timesteps=
 
 if __name__ == "__main__":
 
-    ################### SSA ########################
+    #################### SSA ########################
 
-    #####Ice1############
+    ######Ice1############
 
     #thk_init = jnp.load(
-    #    f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+    #    #f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+    #    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_789.7538years.npy"
     #)
-    #run_ice1r(thk_init, solver="ssa")
+    #
+    #run_ice0(thk_init, solver="ssa")
+    #raise
+    
+    thk_init = jnp.load(
+        #f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1360.1363years.npy"
+    )
+    
+    run_ice1r(thk_init, solver="ssa")
 
-    #starting_thickness = jnp.load(
-    #        solver_out_root("ssa")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0years.npy"
-    #                             )
-    #run_ice1ra(starting_thickness, solver="ssa")
-    #run_ice1rr(starting_thickness, solver="ssa")
+    starting_thickness = jnp.load(
+            solver_out_root("ssa")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+                                 )
+    run_ice1ra(starting_thickness, solver="ssa")
+    run_ice1rr(starting_thickness, solver="ssa")
 
 
-    #####Ice2############
+    ######Ice2############
 
 
     #thk_init = jnp.load(
@@ -402,14 +543,15 @@ if __name__ == "__main__":
     #)
     #run_ice2r(thk_init, solver="ssa")
 
-    starting_thickness = jnp.load(
-            #solver_out_root("ssa")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0years.npy"
-            solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
-                                 )
-    run_ice2ra(starting_thickness, solver="ssa")
-    ## run_ice2rr(starting_thickness, solver="ssa")
+    #starting_thickness = jnp.load(
+    #        solver_out_root("ssa")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+    #        #solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
+    #                             )
+    #run_ice2ra(starting_thickness, solver="ssa")
+    ####run_ice2rr(starting_thickness, solver="ssa")
 
-    
+   
+    raise
 
 
 
@@ -420,16 +562,41 @@ if __name__ == "__main__":
     ################### DIVA ########################
 
     #####Ice1############
+    
+    thk_init = jnp.load(
+        f"{nm_home}/bits_of_data/damage/mismip/diva/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_DIVA_765.7years.npy"
+    )
+    run_ice1r(thk_init, solver="diva")
 
-    # --- DIVA suite (same experiments, DIVA velocity solve) -------------
-    # run_ice1r(thk_init, solver="diva")
-    # run_ice1ra(solver="diva")
-    # run_ice2r(thk_init, solver="diva")
-    # run_ice2ra(solver="diva")
+    #starting_thickness = jnp.load(
+    #        solver_out_root("diva")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+    #                             )
+    #run_ice1ra(starting_thickness, solver="diva")
+    ####run_ice1rr(starting_thickness, solver="diva")
 
-    # --- example post-processing ----------------------------------------
-    # xGL, yGL = extract_grounding_line_from_file(
-    #     _latest_thickness_file(os.path.join(solver_out_root("ssa"), "ice1r")))
-    # show_field_with_gl_scaled(thk_init, thk_init, title="Ice1r initial state",
-    #                            cbar_label="thickness (m)")
-    # plt.show()
+
+    ######Ice2############
+
+
+    #run_ice2r(thk_init, solver="diva")
+    #
+    #starting_thickness = jnp.load(
+    #        solver_out_root("diva")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+    #        #solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
+    #                             )
+    #run_ice2ra(starting_thickness, solver="diva")
+    ####run_ice2rr(starting_thickness, solver="diva")
+
+
+    #plot_grounded_area_ice1_ice2(solver_out_root("ssa"), solver="ssa",
+    #    out_path=f"{nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png")
+    #plot_grounded_area_ice1_ice2(solver_out_root("diva"), solver="diva",
+    #    out_path=f"{nm_data_home}/plots/diva_grounded_area_ice1_vs_ice2.png")
+    
+    #plot_experiment_summary_panels(solver_out_root("ssa"), "ice1",
+    #    target_times=(0, 100, 200), solver="ssa",
+    #    out_path=f"{nm_data_home}/plots/ssa/ice1_summary.png")
+    #
+    #plot_experiment_summary_panels(solver_out_root("ssa"), "ice2",
+    #    target_times=(0, 100, 200), solver="ssa",
+    #    out_path=f"{nm_data_home}/plots/ssa/ice2_summary.png")
