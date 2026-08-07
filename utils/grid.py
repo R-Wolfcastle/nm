@@ -252,6 +252,91 @@ def fc_velocity_gradient_function_noextrap(dy, dx, ny, nx,
 #        return var_ew, var_ns
 #    return jax.jit(interp_cc_to_fc)
 
+def fc_velocity_gradient_function_cf_safe_dt(dy, dx, ny, nx, 
+                                          add_uv_ghost_cells,
+                                          add_ice_mask_ghost_cells):
+
+    def uv_ew_ns_gradient(u, v, ice_mask):
+
+        ice_mask = add_ice_mask_ghost_cells(ice_mask)
+
+        #Define a flag for each face centre for whether it has ice in the right
+        #places to define the derivatives nicely. Otherwise, we do an extrapolation
+        #depending on the direction of the derivative, whether it's a vertical or
+        #or horizontal face. This replaces having to explicitly store extrapolated
+        #velocities. The difficulty of that is that the required version of the
+        #extrapolation to keep the stecil down to 3x3 depends on the direction of the
+        #derivative and orientation of the face.
+
+        ew_missing_tr = (1 - ice_mask[:-2, 1:]).astype(int)
+        ew_missing_br = (1 - ice_mask[2:,  1:]).astype(int)
+        ew_missing_tl = (1 - ice_mask[:-2,:-1]).astype(int)
+        ew_missing_bl = (1 - ice_mask[2:, :-1]).astype(int)
+
+        ns_missing_tr = (1 - ice_mask[:-1, 2:]).astype(int)
+        ns_missing_br = (1 - ice_mask[1:,  2:]).astype(int)
+        ns_missing_tl = (1 - ice_mask[:-1,:-2]).astype(int)
+        ns_missing_bl = (1 - ice_mask[1:, :-2]).astype(int)
+
+
+        def ew_face_gradient(var):
+            dvar_dx_ew = (var[1:-1, 1:] - var[1:-1, :-1]) / dx
+
+            right = (
+                var[:-2, 1:] * (1 - ew_missing_tr)
+                + (2*var[1:-1, 1:] - var[2:, 1:]) * ew_missing_tr
+                - var[2:, 1:] * (1 - ew_missing_br)
+                - (2*var[1:-1, 1:] - var[:-2, 1:]) * ew_missing_br
+            )
+            right = jnp.where(ew_missing_tr & ew_missing_br, 0.0, right)
+
+            left = (
+                var[:-2, :-1] * (1 - ew_missing_tl)
+                + (2*var[1:-1, :-1] - var[2:, :-1]) * ew_missing_tl
+                - var[2:, :-1] * (1 - ew_missing_bl)
+                - (2*var[1:-1, :-1] - var[:-2, :-1]) * ew_missing_bl
+            )
+            left = jnp.where(ew_missing_tl & ew_missing_bl, 0.0, left)
+
+            dvar_dy_ew = (right + left) / (4*dy)
+
+            return dvar_dx_ew, dvar_dy_ew
+
+        
+        def ns_face_gradient(var):
+            dvar_dy_ns = (var[:-1, 1:-1] - var[1:, 1:-1]) / dy
+
+            top = (
+                var[:-1, 2:] * (1 - ns_missing_tr)
+                + (2*var[:-1, 1:-1] - var[:-1, :-2]) * ns_missing_tr
+                - var[:-1, :-2] * (1 - ns_missing_tl)
+                - (2*var[:-1, 1:-1] - var[:-1, 2:]) * ns_missing_tl
+            )
+            top = jnp.where(ns_missing_tr & ns_missing_tl, 0.0, top)
+
+            bottom = (
+                var[1:, 2:] * (1 - ns_missing_br)
+                + (2*var[1:, 1:-1] - var[1:, :-2]) * ns_missing_br
+                - var[1:, :-2] * (1 - ns_missing_bl)
+                - (2*var[1:, 1:-1] - var[1:, 2:]) * ns_missing_bl
+            )
+            bottom = jnp.where(ns_missing_br & ns_missing_bl, 0.0, bottom)
+
+            dvar_dx_ns = (top + bottom) / (4*dx)
+            
+            return dvar_dx_ns, dvar_dy_ns
+
+        u, v = add_uv_ghost_cells(u, v)
+
+        dudx_ew, dudy_ew = ew_face_gradient(u)
+        dvdx_ew, dvdy_ew = ew_face_gradient(v)
+        dudx_ns, dudy_ns = ns_face_gradient(u)
+        dvdx_ns, dvdy_ns = ns_face_gradient(v)
+
+        return dudx_ew, dudy_ew, dvdx_ew, dvdy_ew,\
+               dudx_ns, dudy_ns, dvdx_ns, dvdy_ns
+
+    return jax.jit(uv_ew_ns_gradient)
 
 def fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx, 
                                           ice_mask, add_uv_ghost_cells,
@@ -1636,6 +1721,50 @@ def fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx, add_uv_ghost_cells
         u = u*ice_mask
         v = v*ice_mask
         
+        #calculate face-centred viscosity:
+        mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
+                    0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        mu_ns = B_ns * mucoef_ns * (dudx_ns**2 + dvdy_ns**2 + dudx_ns*dvdy_ns +\
+                    0.25*(dudy_ns+dvdx_ns)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+        #to account for calving front boundary condition, set effective viscosities
+        #of faces of all cells with zero thickness to zero:
+        mu_ew = mu_ew.at[:, 1:].set(jnp.where(ice_mask==0, 0, mu_ew[:, 1:]))
+        mu_ew = mu_ew.at[:,:-1].set(jnp.where(ice_mask==0, 0, mu_ew[:,:-1]))
+        mu_ns = mu_ns.at[1:, :].set(jnp.where(ice_mask==0, 0, mu_ns[1:, :]))
+        mu_ns = mu_ns.at[:-1,:].set(jnp.where(ice_mask==0, 0, mu_ns[:-1,:]))
+
+        return mu_ew, mu_ns
+    return jax.jit(fc_viscosity)
+
+def fc_viscosity_function_new_givenT_noextrap_dt(ny, nx, dy, dx, add_uv_ghost_cells,
+                                                 add_s_ghost_cells,
+                                                 interp_cc_to_fc,
+                                                 fc_vel_gradient,
+                                                 mucoef_0,
+                                                 temp_cc):
+
+    temp_cc = add_s_ghost_cells(temp_cc)
+    B_cc = B_from_T(temp_cc)
+    B_ew, B_ns = interp_cc_to_fc(B_cc)
+
+    def fc_viscosity(q, u, v, ice_mask):
+        mucoef = mucoef_0*jnp.exp(q)
+        mucoef = add_s_ghost_cells(mucoef)
+        mucoef_ew, mucoef_ns = interp_cc_to_fc(mucoef)
+
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        #various face-centred derivatives
+        dudx_ew, dudy_ew,\
+        dvdx_ew, dvdy_ew,\
+        dudx_ns, dudy_ns,\
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v, ice_mask)
+
+        u = u*ice_mask
+        v = v*ice_mask
+
         #calculate face-centred viscosity:
         mu_ew = B_ew * mucoef_ew * (dudx_ew**2 + dvdy_ew**2 + dudx_ew*dvdy_ew +\
                     0.25*(dudy_ew+dvdx_ew)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
