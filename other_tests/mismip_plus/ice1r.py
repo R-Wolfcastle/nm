@@ -21,6 +21,7 @@ from plotting_stuff import show_vel_field, show_vel_field_2
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
                               make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,\
+                              make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt,\
                               make_time_marcher,\
                               make_coupled_quasi_newton_solver_function,\
                               make_coupled_picnewton_solver_function,\
@@ -263,8 +264,8 @@ def plot_grounded_area_timeseries(series, ax=None, title="Grounded area vs time"
 # ============================================================================
 
 def ssa_momentum_and_advection():
-    return make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(
-        nr, nc, delta_y, delta_x, b, ice_mask,
+    return make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
+        nr, nc, delta_y, delta_x, b,
         n_pic_iterations, n_newt_iterations,
         mucoef_0, C_0, sliding="basic_weertman", temperature_field=temp_field,
         adv_method="PPM")
