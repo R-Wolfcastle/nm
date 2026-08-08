@@ -426,7 +426,7 @@ def solver_out_root(solver):
     return os.path.join(nm_data_home, solver)
 
 
-def run_ice0(thk_init, t_start=789.7538, solver="ssa", max_t=5000, max_n_timesteps=10_000):
+def run_ice0(thk_init, t_start=0, solver="ssa", max_t=1000, max_n_timesteps=10_000):
     """100-year control run, m_i = 0."""
     momentum_solver, advection_stepper = solvers[solver]()
     out_dir = os.path.join(solver_out_root(solver), "ice0")
@@ -513,34 +513,39 @@ if __name__ == "__main__":
 
     ######Ice1############
 
+    ##thk_init = jnp.load(
+    ##    #f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+    ##    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_789.7538years.npy"
+    ##)
+    ##
+    ##run_ice0(thk_init, solver="ssa")
+    ##raise
+    #
+    ##thk_init = jnp.load(
+    ##    #f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+    ##    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1360.1363years.npy"
+    ##)
+    ##
+    ##run_ice1r(thk_init, solver="ssa")
+
+    ##starting_thickness = jnp.load(
+    ##        solver_out_root("ssa")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+    ##                             )
+    ##run_ice1ra(starting_thickness, solver="ssa")
+    ##run_ice1rr(starting_thickness, solver="ssa")
+
+
+    #######Ice2############
+
+
+    ##thk_init = jnp.load(
+    ##    f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
+    ##)
     #thk_init = jnp.load(
     #    #f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
-    #    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_789.7538years.npy"
+    #    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1360.1363years.npy"
     #)
     #
-    #run_ice0(thk_init, solver="ssa")
-    #raise
-    
-    thk_init = jnp.load(
-        #f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
-        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1360.1363years.npy"
-    )
-    
-    run_ice1r(thk_init, solver="ssa")
-
-    starting_thickness = jnp.load(
-            solver_out_root("ssa")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
-                                 )
-    run_ice1ra(starting_thickness, solver="ssa")
-    run_ice1rr(starting_thickness, solver="ssa")
-
-
-    ######Ice2############
-
-
-    #thk_init = jnp.load(
-    #    f"{nm_home}/bits_of_data/damage/mismip/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_8998.4years.npy"
-    #)
     #run_ice2r(thk_init, solver="ssa")
 
     #starting_thickness = jnp.load(
@@ -548,13 +553,13 @@ if __name__ == "__main__":
     #        #solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
     #                             )
     #run_ice2ra(starting_thickness, solver="ssa")
-    ####run_ice2rr(starting_thickness, solver="ssa")
+    #run_ice2rr(starting_thickness, solver="ssa")
 
    
-    raise
 
-
-
+    #plot_grounded_area_ice1_ice2(solver_out_root("ssa"), solver="ssa",
+    #    out_path=f"{nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png")
+    #print(f"<<<<<<<<<<<<< {nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png >>>>>>>>>>>>>>>")
 
 
 
@@ -564,19 +569,37 @@ if __name__ == "__main__":
     #####Ice1############
     
     thk_init = jnp.load(
-        f"{nm_home}/bits_of_data/damage/mismip/diva/expl/2/thickness_WmSlidingC1e4_1km_res_HalfDomain_DIVA_765.7years.npy"
+        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1360.1363years.npy"
     )
+    
+    run_ice0(thk_init, solver="diva")
+    
+    thk_init = jnp.load(
+        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/diva/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1000.0000years.npy"
+    )
+    
     run_ice1r(thk_init, solver="diva")
 
-    #starting_thickness = jnp.load(
-    #        solver_out_root("diva")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
-    #                             )
-    #run_ice1ra(starting_thickness, solver="diva")
-    ####run_ice1rr(starting_thickness, solver="diva")
-
+    starting_thickness = jnp.load(
+            solver_out_root("diva")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+                                 )
+    run_ice1ra(starting_thickness, solver="diva")
+    run_ice1rr(starting_thickness, solver="diva")
+    
 
     ######Ice2############
+    
+    thk_init = jnp.load(
+        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/diva/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1000.0000years.npy"
+    )
+    
+    run_ice2r(thk_init, solver="diva")
 
+    starting_thickness = jnp.load(
+            solver_out_root("diva")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+                                 )
+    run_ice2ra(starting_thickness, solver="diva")
+    run_ice2rr(starting_thickness, solver="diva")
 
     #run_ice2r(thk_init, solver="diva")
     #
@@ -590,8 +613,8 @@ if __name__ == "__main__":
 
     #plot_grounded_area_ice1_ice2(solver_out_root("ssa"), solver="ssa",
     #    out_path=f"{nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png")
-    #plot_grounded_area_ice1_ice2(solver_out_root("diva"), solver="diva",
-    #    out_path=f"{nm_data_home}/plots/diva_grounded_area_ice1_vs_ice2.png")
+    plot_grounded_area_ice1_ice2(solver_out_root("diva"), solver="diva",
+        out_path=f"{nm_data_home}/plots/diva_grounded_area_ice1_vs_ice2.png")
     
     #plot_experiment_summary_panels(solver_out_root("ssa"), "ice1",
     #    target_times=(0, 100, 200), solver="ssa",

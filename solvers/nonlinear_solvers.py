@@ -3030,17 +3030,18 @@ def make_diva3d_solver_dt(ny, nx, dy, dx, n_levels,
     #extrapolate_over_cf                        = linear_extrapolate_over_cf_function(ice_mask)
     cc_vel_gradient                            = cc_vel_gradient_function(dy, dx, add_uv_ghost_cells)
 
-    grounded_fraction                          = make_grounded_fraction_function(add_scalar_ghost_cells)
+    #grounded_fraction                          = make_grounded_fraction_function(add_scalar_ghost_cells)
     #hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
-    hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(
-                                                                                        dy, dx,
-                                                                                        grounded_fraction)
+    hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
+    #hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(
+    #                                                                                    dy, dx,
+    #                                                                                    grounded_fraction)
 
     
     #DIVA-specific functions from grid:
     diva_viscosity = diva_cc_viscosity_function(dy, dx, cc_vel_gradient, mucoef_0, temperature_field)
-    #beta_raw_fct   = beta_function(b, sliding)
-    beta_raw_fct   = beta_function(b, sliding, grounded_fraction)
+    beta_raw_fct   = beta_function(b, sliding)
+    #beta_raw_fct   = beta_function(b, sliding, grounded_fraction)
     beta_eff_fct   = diva_beta_eff_function(beta_raw_fct, C_0)
     new_shear      = diva_vertical_shear_function()
     reconstruct_3d = diva_reconstruct_3d_velocity_function()
@@ -3221,17 +3222,17 @@ def make_diva3d_solver(ny, nx, dy, dx, n_levels,
     fc_velocity_gradient                       = fc_velocity_gradient_function_noextrap(
                                                                                 dy, dx, ny, nx,
                                                                                 add_uv_ghost_cells)
-    grounded_fraction                          = make_grounded_fraction_function(add_scalar_ghost_cells)
-    #hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
-    hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(
-                                                                                        dy, dx,
-                                                                                        grounded_fraction)
+    #grounded_fraction                          = make_grounded_fraction_function(add_scalar_ghost_cells)
+    hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
+    #hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(
+    #                                                                                    dy, dx,
+    #                                                                                    grounded_fraction)
 
     
     #DIVA-specific functions from grid:
     diva_viscosity = diva_cc_viscosity_function(dy, dx, cc_vel_gradient, mucoef_0, temperature_field)
-    #beta_raw_fct   = beta_function(b, sliding)
-    beta_raw_fct   = beta_function(b, sliding, grounded_fraction)
+    beta_raw_fct   = beta_function(b, sliding)
+    #beta_raw_fct   = beta_function(b, sliding, grounded_fraction)
     beta_eff_fct   = diva_beta_eff_function(beta_raw_fct, C_0)
     new_shear      = diva_vertical_shear_function()
     reconstruct_3d = diva_reconstruct_3d_velocity_function()
