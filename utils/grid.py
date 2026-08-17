@@ -1414,7 +1414,8 @@ def make_grounded_fraction_function(add_s_ghost_cells, a=2):
         return jax.jit(grounded_fraction)
 
 
-def beta_function(b, mode="linear", C_scaling_function=None):
+def beta_function(b, mode="linear", C_scaling_function=None, u0=300):
+
     if C_scaling_function is None:
         def C_scaling_function(b, h):
             s_gnd = h + b
@@ -1447,42 +1448,88 @@ def beta_function(b, mode="linear", C_scaling_function=None):
 
             return beta
 
-    return jax.jit(beta)
-
-def beta_function(b, mode="linear", C_scaling_function=None):
-    if C_scaling_function is None:
-        def C_scaling_function(b, h):
-            s_gnd = h + b
-            s_flt = h * (1-c.RHO_I/c.RHO_W)
-            return jnp.where(s_gnd>s_flt, 1, 0)
-
-    if mode=="linear":
-        def beta(C, u, v, h, grounded=None):
-            s_gnd = h + b
-            s_flt = h * (1-c.RHO_I/c.RHO_W)
-           
-            #It looks like it's best if you pass a grounded mask into the implicit
-            #solve (from h_t at the start of the timestep).
-            g = jnp.where(s_gnd>s_flt, 1, 0) if grounded is None else grounded
-
-            beta = C
-            beta = jnp.where(g>0, beta, 0)
-            beta = jnp.where(h>0, beta, 1)
-            return beta
-
-    if mode=="basic_weertman":
-        def beta(C, u, v, h, grounded=None):
-            s_gnd = h + b
-            s_flt = h * (1-c.RHO_I/c.RHO_W)
-            g = jnp.where(s_gnd>s_flt, 1, 0) if grounded is None else grounded
-
+    if mode=="joughin_coulomb":
+        # Regularized Coulomb friction law of Joughin, Smith & Schoof
+        # (2019), GRL, following Schoof (2005)/Gagliardini et al. (2007)
+        # but with the effective-pressure dependence subsumed into a
+        # single reference speed u0 (they use ~300 m/a for Pine Island
+        # Glacier, testing 200-500 m/a). NOTE: C here has units of stress
+        # (Pa) -- it's the high-speed (Coulomb-plastic) limit of |tau_b| --
+        # NOT the same beta^2 units as "linear"/"basic_weertman"/"schoof";
+        # it will need its own tuning, not a reused C_0.
+        def beta(C, u, v, h):
             speed = jnp.sqrt(u*u + v*v + 1)
-            beta = C * (speed ** (1/c.GLEN_N - 1))
-            beta = jnp.where(g>0, beta, 0)
+
+            m = c.GLEN_N
+
+            beta = C * speed**(1/m - 1) / (speed + u0) ** (1/m)
+
+            beta = beta * C_scaling_function(b, h)
+            beta = jnp.where(h>0, beta, 1)
+            return beta
+
+
+    if mode=="schoof":
+        # Schoof (2005) modified power law, Eq. (11) in Asay-Davis et al.
+        # (2016) / Eq. (4) in Cornford et al. (2020). Smoothly transitions
+        # between the Weertman power law (large N, away from the grounding
+        # line) and a Coulomb law |tau_b| = alpha_sq * N (small N, near
+        # flotation). C plays the role of beta^2 -- same units/convention
+        # as basic_weertman, so C_0 tuned for Weertman is a reasonable
+        # starting point here too.
+        def beta(C, u, v, h):
+            speed = jnp.sqrt(u*u + v*v + 1)
+
+            alpha_sq = 0.5
+            m = c.GLEN_N   # friction-law exponent; m=3=GLEN_N for MISMIP+
+
+            h_f = jnp.maximum(0.0, -(c.RHO_W/c.RHO_I) * b)
+            N = jnp.maximum(c.RHO_I * c.g * (h - h_f), 0.0)
+
+            beta = (C * alpha_sq * N * speed**(1/m - 1)
+                    / (C**m * speed + (alpha_sq * N)**m) ** (1/m))
+
+            beta = beta * C_scaling_function(b, h)
             beta = jnp.where(h>0, beta, 1)
             return beta
 
     return jax.jit(beta)
+
+
+#def beta_function(b, mode="linear", C_scaling_function=None):
+#    if C_scaling_function is None:
+#        def C_scaling_function(b, h):
+#            s_gnd = h + b
+#            s_flt = h * (1-c.RHO_I/c.RHO_W)
+#            return jnp.where(s_gnd>s_flt, 1, 0)
+#
+#    if mode=="linear":
+#        def beta(C, u, v, h, grounded=None):
+#            s_gnd = h + b
+#            s_flt = h * (1-c.RHO_I/c.RHO_W)
+#           
+#            #It looks like it's best if you pass a grounded mask into the implicit
+#            #solve (from h_t at the start of the timestep).
+#            g = jnp.where(s_gnd>s_flt, 1, 0) if grounded is None else grounded
+#
+#            beta = C
+#            beta = jnp.where(g>0, beta, 0)
+#            beta = jnp.where(h>0, beta, 1)
+#            return beta
+#
+#    if mode=="basic_weertman":
+#        def beta(C, u, v, h, grounded=None):
+#            s_gnd = h + b
+#            s_flt = h * (1-c.RHO_I/c.RHO_W)
+#            g = jnp.where(s_gnd>s_flt, 1, 0) if grounded is None else grounded
+#
+#            speed = jnp.sqrt(u*u + v*v + 1)
+#            beta = C * (speed ** (1/c.GLEN_N - 1))
+#            beta = jnp.where(g>0, beta, 0)
+#            beta = jnp.where(h>0, beta, 1)
+#            return beta
+#
+#    return jax.jit(beta)
 
 def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
                                extrp_over_cf, add_uv_ghost_cells,
@@ -1760,7 +1807,8 @@ def fc_viscosity_function_new_givenT_noextrap_dt(ny, nx, dy, dx, add_uv_ghost_ce
         dudx_ew, dudy_ew,\
         dvdx_ew, dvdy_ew,\
         dudx_ns, dudy_ns,\
-        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)#, ice_mask)
+        dvdx_ns, dvdy_ns = fc_vel_gradient(u, v)
+        #dvdx_ns, dvdy_ns = fc_vel_gradient(u, v, ice_mask)
 
         u = u*ice_mask
         v = v*ice_mask
@@ -1990,13 +2038,14 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
 
 
 def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
-    """
-    Cornford et al. (2016) Eq. (2)
-    """
     def hgrads(h, b):
         s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
         grounded_fraction = grounded_fraction_fct(b, h)
         grounded = jnp.where(grounded_fraction>0.5, 1, 0)
+
+        # 3-state status: 0 = no ice, 1 = floating, 2 = grounded --
+        # a hole must never be able to register as "same" as floating ice
+        status = jnp.where(h>0, jnp.where(grounded>0, 2, 1), 0)
 
         s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
         s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
@@ -2007,16 +2056,16 @@ def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction
         h_e = jnp.pad(h, ((0,0),(0,1)), mode='edge')[:, 1:]
         h_s = jnp.pad(h, ((0,1),(0,0)), mode='edge')[1:, :]
         h_w = jnp.pad(h, ((0,0),(1,0)), mode='edge')[:, :-1]
-        
-        g_n = jnp.pad(grounded, ((1,0),(0,0)), mode='edge')[:-1, :]
-        g_e = jnp.pad(grounded, ((0,0),(0,1)), mode='edge')[:, 1:]
-        g_s = jnp.pad(grounded, ((0,1),(0,0)), mode='edge')[1:, :]
-        g_w = jnp.pad(grounded, ((0,0),(1,0)), mode='edge')[:, :-1]
-        
-        same_n = (g_n == grounded).astype(int)
-        same_e = (g_e == grounded).astype(int)
-        same_s = (g_s == grounded).astype(int)
-        same_w = (g_w == grounded).astype(int)
+
+        st_n = jnp.pad(status, ((1,0),(0,0)), mode='edge')[:-1, :]
+        st_e = jnp.pad(status, ((0,0),(0,1)), mode='edge')[:, 1:]
+        st_s = jnp.pad(status, ((0,1),(0,0)), mode='edge')[1:, :]
+        st_w = jnp.pad(status, ((0,0),(1,0)), mode='edge')[:, :-1]
+
+        same_n = (st_n == status).astype(int)
+        same_e = (st_e == status).astype(int)
+        same_s = (st_s == status).astype(int)
+        same_w = (st_w == status).astype(int)
 
         central_x   = h * (s_e - s_w) / (2*dx)
         one_sided_e = 0.5 * (h_e + h) * (s_e - s) / dx
@@ -2033,7 +2082,7 @@ def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction
         central_y   = h * (s_n - s_s) / (2*dy)
         one_sided_n = 0.5 * (h_n + h) * (s_n - s) / dy
         one_sided_s = 0.5 * (h_s + h) * (s - s_s) / dy
-        
+
         hdsdy = jnp.where(same_n & same_s, central_y,
                     jnp.where(same_n, one_sided_n,
                         jnp.where(same_s, one_sided_s,
@@ -2041,11 +2090,68 @@ def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction
                              )
                          )
                      )
-    
+
         return hdsdx, hdsdy
-        #return central_x, central_y
 
     return jax.jit(hgrads)
+
+#def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
+#    """
+#    Cornford et al. (2016) Eq. (2)
+#    """
+#    def hgrads(h, b):
+#        s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
+#        grounded_fraction = grounded_fraction_fct(b, h)
+#        grounded = jnp.where(grounded_fraction>0.5, 1, 0)
+#
+#        s_n = jnp.pad(s, ((1,0),(0,0)), mode='edge')[:-1, :]
+#        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+#        s_s = jnp.pad(s, ((0,1),(0,0)), mode='edge')[1:, :]
+#        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+#
+#        h_n = jnp.pad(h, ((1,0),(0,0)), mode='edge')[:-1, :]
+#        h_e = jnp.pad(h, ((0,0),(0,1)), mode='edge')[:, 1:]
+#        h_s = jnp.pad(h, ((0,1),(0,0)), mode='edge')[1:, :]
+#        h_w = jnp.pad(h, ((0,0),(1,0)), mode='edge')[:, :-1]
+#        
+#        g_n = jnp.pad(grounded, ((1,0),(0,0)), mode='edge')[:-1, :]
+#        g_e = jnp.pad(grounded, ((0,0),(0,1)), mode='edge')[:, 1:]
+#        g_s = jnp.pad(grounded, ((0,1),(0,0)), mode='edge')[1:, :]
+#        g_w = jnp.pad(grounded, ((0,0),(1,0)), mode='edge')[:, :-1]
+#        
+#        same_n = (g_n == grounded).astype(int)
+#        same_e = (g_e == grounded).astype(int)
+#        same_s = (g_s == grounded).astype(int)
+#        same_w = (g_w == grounded).astype(int)
+#
+#        central_x   = h * (s_e - s_w) / (2*dx)
+#        one_sided_e = 0.5 * (h_e + h) * (s_e - s) / dx
+#        one_sided_w = 0.5 * (h_w + h) * (s - s_w) / dx
+#
+#        hdsdx = jnp.where(same_e & same_w, central_x,
+#                    jnp.where(same_w, one_sided_w,
+#                        jnp.where(same_e, one_sided_e,
+#                                  central_x
+#                                 )
+#                             )
+#                         )
+#
+#        central_y   = h * (s_n - s_s) / (2*dy)
+#        one_sided_n = 0.5 * (h_n + h) * (s_n - s) / dy
+#        one_sided_s = 0.5 * (h_s + h) * (s - s_s) / dy
+#        
+#        hdsdy = jnp.where(same_n & same_s, central_y,
+#                    jnp.where(same_n, one_sided_n,
+#                        jnp.where(same_s, one_sided_s,
+#                                  central_y
+#                             )
+#                         )
+#                     )
+#    
+#        return hdsdx, hdsdy
+#        #return central_x, central_y
+#
+#    return jax.jit(hgrads)
 
 def gl_unaware_driving_stress_function(dy, dx):
     """
