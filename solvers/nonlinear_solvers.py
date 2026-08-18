@@ -1159,7 +1159,7 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
     #hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
     hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
-    #grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
+    grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
     #hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct)
 
     fc_velocity_gradient                       = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
@@ -1173,7 +1173,8 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
                                                    fc_velocity_gradient,
                                                    ice_mask, mucoef_0,
                                                    temperature_field)
-    beta_fct = beta_function(b, sliding)#, grounded_fraction_fct)
+
+    beta_fct = beta_function(b, sliding, grounded_fraction_fct)
 
     get_uvh_residuals_linear = compute_uvh_linear_ssa_residuals_function_fc_visc_noextrap(
                                                        ny, nx, dy, dx, b,
@@ -1269,8 +1270,10 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
             mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
             #print(f"mu_ew-asymmetry: {jnp.max(jnp.abs(mu_ew - mu_ew[::-1, :]))}")
             #print(f"mu_ns-asymmetry: {jnp.max(jnp.abs(mu_ns - mu_ns[::-1, :]))}")
+            #beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), 
+            #                v_1d.reshape((ny,nx)), h_current, grounded_t)
             beta = beta_fct(C_0*jnp.exp(p), u_1d.reshape((ny,nx)), 
-                            v_1d.reshape((ny,nx)), h_current, grounded_t)
+                            v_1d.reshape((ny,nx)), h_current)
            
             #print(f"beta-asymmetry: {jnp.max(jnp.abs(beta - beta[::-1, :]))}")
 
@@ -2482,6 +2485,15 @@ def make_time_marcher(momentum_solver,
             h = jnp.where(jnp.sqrt(u_va**2+v_va**2+1e-12)>5e4, 0, h)
 
             accumulation = accumulation_function(h, b, jnp.where(h>0,1,0))
+    
+            plt.imshow(accumulation)
+            plt.show()
+
+
+            #print(accumulation)
+            #print(jnp.max(accumulation))
+            #print(jnp.min(accumulation))
+            #raise
 
             delta_t = cfl_number*(delta_x/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
             
@@ -7675,8 +7687,8 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap(ny, nx, dy, d
                                                    temperature_field)
     
     grounded_fraction                          = make_grounded_fraction_function(add_scalar_ghost_cells)
-    #hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
-    hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction)
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
+    #hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction)
     beta_fct                                   = beta_function(b, sliding, grounded_fraction)
 
     get_uv_residuals_linear_ssa = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(ny, nx, dy, dx, b,

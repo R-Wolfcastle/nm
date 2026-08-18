@@ -548,11 +548,11 @@ if __name__ == "__main__":
     #
     #run_ice2r(thk_init, solver="ssa")
 
-    #starting_thickness = jnp.load(
-    #        solver_out_root("ssa")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
-    #        #solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
-    #                             )
-    #run_ice2ra(starting_thickness, solver="ssa")
+    starting_thickness = jnp.load(
+            solver_out_root("ssa")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+            #solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
+                                 )
+    run_ice2ra(starting_thickness, solver="ssa")
     #run_ice2rr(starting_thickness, solver="ssa")
 
    
@@ -562,6 +562,8 @@ if __name__ == "__main__":
     #print(f"<<<<<<<<<<<<< {nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png >>>>>>>>>>>>>>>")
 
 
+
+    raise
 
 
     ################### DIVA ########################
