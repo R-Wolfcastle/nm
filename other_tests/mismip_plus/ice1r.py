@@ -328,6 +328,51 @@ def plot_grounded_area_ice1_ice2(root_dir=None, solver="ssa", out_path=None):
         plt.savefig(out_path, dpi=150, bbox_inches="tight")
     return ax
 
+def plot_grounded_area_ice1_ice2_new(root_dir=None, solver="ssa", rr_t_max=200, out_path=None):
+    """Grounded area vs time for Ice1 and Ice2, each shown as three
+    branches -- r (0-100a), ra (continues r with no melt), and rr
+    (continues r with melt still on, clipped to rr_t_max so it's
+    comparable to ra over the same window) -- matching the style of
+    Fig. 4/6/13 in Cornford et al. (2020) / Asay-Davis et al. (2016).
+    The rr branch is skipped (with a note) if that directory doesn't
+    exist, since Ice1rr/Ice2rr are optional experiments."""
+    root_dir = root_dir or solver_out_root(solver)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    for ax, experiment in zip(axes, ["ice1", "ice2"]):
+        r_dir  = os.path.join(root_dir, f"{experiment}r")
+        ra_dir = os.path.join(root_dir, f"{experiment}ra")
+        rr_dir = os.path.join(root_dir, f"{experiment}rr")
+
+        t_r, a_r = grounded_area_series(r_dir)
+        ax.plot(t_r, a_r / 1e9, color="tab:blue", label=f"{experiment}r")
+
+        t_ra, a_ra = grounded_area_series(ra_dir)
+        ax.plot(t_ra, a_ra / 1e9, color="tab:red", label=f"{experiment}ra")
+
+        if os.path.isdir(rr_dir):
+            t_rr, a_rr = grounded_area_series(rr_dir)
+            keep = t_rr <= rr_t_max
+            ax.plot(t_rr[keep], a_rr[keep] / 1e9, color="tab:orange", label=f"{experiment}rr")
+        else:
+            ax.text(0.98, 0.02, f"({experiment}rr not found)", transform=ax.transAxes,
+                    ha="right", va="bottom", fontsize=8, color="grey")
+
+        ax.axvline(t_r[-1], color="grey", lw=0.8, linestyle=":")
+        ax.set_xlabel("Time (a)")
+        ax.set_ylabel(r"Grounded area ($10^3$ km$^2$)")
+        ax.set_title(experiment)
+        ax.legend()
+
+    plt.tight_layout()
+
+    if out_path:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    return fig, axes
+
+
 def plot_experiment_summary_panels(root_dir, experiment, target_times=(0, 100, 200),
                                     solver="ssa", speed_log=True, out_path=None):
     """For `experiment` ('ice1' or 'ice2'), find the saved thickness
@@ -552,54 +597,56 @@ if __name__ == "__main__":
     #        solver_out_root("ssa")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
     #        #solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
     #                             )
-    #run_ice2ra(starting_thickness, solver="ssa")
+    ##run_ice2ra(starting_thickness, solver="ssa")
     #run_ice2rr(starting_thickness, solver="ssa")
 
    
 
-    #plot_grounded_area_ice1_ice2(solver_out_root("ssa"), solver="ssa",
-    #    out_path=f"{nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png")
+    #plot_grounded_area_ice1_ice2_new(solver_out_root("ssa"), solver="ssa",
+    #    out_path=f"{nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2_new.png")
     #print(f"<<<<<<<<<<<<< {nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png >>>>>>>>>>>>>>>")
 
 
+
+    #raise
 
 
     ################### DIVA ########################
 
     #####Ice1############
     
-    thk_init = jnp.load(
-        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1360.1363years.npy"
-    )
-    
-    run_ice0(thk_init, solver="diva")
-    
-    thk_init = jnp.load(
-        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/diva/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1000.0000years.npy"
-    )
-    
-    run_ice1r(thk_init, solver="diva")
+    #thk_init = jnp.load(
+    #    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1360.1363years.npy"
+    #)
+    #
+    #run_ice0(thk_init, solver="diva")
+    #
+    #thk_init = jnp.load(
+    #    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/diva/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1000.0000years.npy"
+    #)
+    #
+    #run_ice1r(thk_init, solver="diva")
 
-    starting_thickness = jnp.load(
-            solver_out_root("diva")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
-                                 )
-    run_ice1ra(starting_thickness, solver="diva")
-    run_ice1rr(starting_thickness, solver="diva")
-    
+    #starting_thickness = jnp.load(
+    #        solver_out_root("diva")+"/ice1r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+    #                             )
+    #run_ice1ra(starting_thickness, solver="diva")
+    #run_ice1rr(starting_thickness, solver="diva")
+    #
 
-    ######Ice2############
-    
-    thk_init = jnp.load(
-        f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/diva/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1000.0000years.npy"
-    )
-    
-    run_ice2r(thk_init, solver="diva")
+    #######Ice2############
+    #
+    #thk_init = jnp.load(
+    #    f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/diva/ice0/thickness_WmSlidingC1e4_1km_res_HalfDomain_1000.0000years.npy"
+    #)
+    #
+    #run_ice2r(thk_init, solver="diva")
 
-    starting_thickness = jnp.load(
-            solver_out_root("diva")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
-                                 )
-    run_ice2ra(starting_thickness, solver="diva")
-    run_ice2rr(starting_thickness, solver="diva")
+    #starting_thickness = jnp.load(
+    #        solver_out_root("diva")+"/ice2r/thickness_WmSlidingC1e4_1km_res_HalfDomain_100.0000years.npy"
+    #                             )
+    #run_ice2ra(starting_thickness, solver="diva")
+    #run_ice2rr(starting_thickness, solver="diva")
 
     #run_ice2r(thk_init, solver="diva")
     #
@@ -613,8 +660,10 @@ if __name__ == "__main__":
 
     #plot_grounded_area_ice1_ice2(solver_out_root("ssa"), solver="ssa",
     #    out_path=f"{nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png")
-    plot_grounded_area_ice1_ice2(solver_out_root("diva"), solver="diva",
-        out_path=f"{nm_data_home}/plots/diva_grounded_area_ice1_vs_ice2.png")
+    #plot_grounded_area_ice1_ice2(solver_out_root("diva"), solver="diva",
+    #    out_path=f"{nm_data_home}/plots/diva_grounded_area_ice1_vs_ice2.png")
+    plot_grounded_area_ice1_ice2_new(solver_out_root("diva"), solver="diva",
+        out_path=f"{nm_data_home}/plots/diva_grounded_area_ice1_vs_ice2_new.png")
     
     #plot_experiment_summary_panels(solver_out_root("ssa"), "ice1",
     #    target_times=(0, 100, 200), solver="ssa",

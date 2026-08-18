@@ -2483,6 +2483,15 @@ def make_time_marcher(momentum_solver,
 
             accumulation = accumulation_function(h, b, jnp.where(h>0,1,0))
 
+            plt.imshow(h, vmin=0, vmax=800)
+            plt.imshow(jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0), cmap="Grays_r", alpha=0.25)
+            plt.colorbar()
+            plt.show()
+            #plt.imshow(accumulation)
+            #plt.colorbar()
+            #plt.show()
+
+
             delta_t = cfl_number*(delta_x/jnp.max(jnp.sqrt(u_va**2+v_va**2)))
             
             delta_t = jnp.minimum(delta_t, max_t-t_cum)
