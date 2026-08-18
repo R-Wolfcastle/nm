@@ -3861,13 +3861,7 @@ def compute_uvh_residuals_function_fully_nonlinear_givenT_noextrap(ny, nx, dy, d
                                    add_s_ghost_cells,
                                    hgrads_fct,
                                    mucoef_0, C_0, temp_cc):
-    """
-    Fully nonlinear coupled u,v,h residual (viscosity and beta evaluated at the
-    current iterate rather than frozen), with NO calving-front extrapolation,
-    for use in the Newton phase of a coupled Picard-Newton (picnewton) solve
-    and for adjoint linearisation. Parameterised by q (log mucoef) and p (log C)
-    to match the rest of the coupled solver stack.
-    """
+    
     temp_cc_ghost = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc_ghost)
     B_ew, B_ns = interp_cc_to_fc(B_cc)
@@ -3893,7 +3887,7 @@ def compute_uvh_residuals_function_fully_nonlinear_givenT_noextrap(ny, nx, dy, d
 
         #hdsdx, hdsdy = hgrads_fct(h, b)
 
-        beta = beta_fct(C, u, v, h, grounded_t)
+        beta = beta_fct(C, u, v, h)
 
         volume_x = - (beta * u + c.RHO_I * c.g * hdsdx) * dx * dy
         volume_y = - (beta * v + c.RHO_I * c.g * hdsdy) * dy * dx

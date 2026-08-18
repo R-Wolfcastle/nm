@@ -1449,14 +1449,11 @@ def beta_function(b, mode="linear", C_scaling_function=None, u0=300):
             return beta
 
     if mode=="joughin_coulomb":
-        # Regularized Coulomb friction law of Joughin, Smith & Schoof
-        # (2019), GRL, following Schoof (2005)/Gagliardini et al. (2007)
-        # but with the effective-pressure dependence subsumed into a
-        # single reference speed u0 (they use ~300 m/a for Pine Island
-        # Glacier, testing 200-500 m/a). NOTE: C here has units of stress
-        # (Pa) -- it's the high-speed (Coulomb-plastic) limit of |tau_b| --
-        # NOT the same beta^2 units as "linear"/"basic_weertman"/"schoof";
-        # it will need its own tuning, not a reused C_0.
+        #Regularized Coulomb friction law of Joughin, Smith & Schoof
+        #(2019), GRL, following Schoof (2005)/Gagliardini et al. (2007)
+        #but with the effective-pressure dependence subsumed into a
+        #single reference speed u0 (they use ~300 m/a for Pine Island
+        #Glacier, testing 200-500 m/a). NOTE: C here has units of Pa
         def beta(C, u, v, h):
             speed = jnp.sqrt(u*u + v*v + 1)
 
@@ -1470,13 +1467,13 @@ def beta_function(b, mode="linear", C_scaling_function=None, u0=300):
 
 
     if mode=="schoof":
-        # Schoof (2005) modified power law, Eq. (11) in Asay-Davis et al.
-        # (2016) / Eq. (4) in Cornford et al. (2020). Smoothly transitions
-        # between the Weertman power law (large N, away from the grounding
-        # line) and a Coulomb law |tau_b| = alpha_sq * N (small N, near
-        # flotation). C plays the role of beta^2 -- same units/convention
-        # as basic_weertman, so C_0 tuned for Weertman is a reasonable
-        # starting point here too.
+        #Schoof (2005) modified power law, Eq. (11) in Asay-Davis et al.
+        #(2016) / Eq. (4) in Cornford et al. (2020). Smoothly transitions
+        #between the Weertman power law (large N, away from the grounding
+        #line) and a Coulomb law |tau_b| = alpha_sq * N (small N, near
+        #flotation). C plays the role of beta^2 -- same units/convention
+        #as basic_weertman, so C_0 tuned for Weertman is a reasonable
+        #starting point here too.
         def beta(C, u, v, h):
             speed = jnp.sqrt(u*u + v*v + 1)
 
@@ -2038,7 +2035,7 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
 
 
 def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
-    def hgrads(h, b):
+    def hgrads(h, b, grounded_fraction=None):
         s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
         grounded_fraction = grounded_fraction_fct(b, h)
         grounded = jnp.where(grounded_fraction>0.5, 1, 0)

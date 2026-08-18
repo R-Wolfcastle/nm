@@ -598,17 +598,9 @@ if __name__ == "__main__":
     #        #solver_out_root("ssa")+"/ice2ra/thickness_WmSlidingC1e4_1km_res_HalfDomain_160.7852years.npy"
     #                             )
     ##run_ice2ra(starting_thickness, solver="ssa")
-    #run_ice2rr(starting_thickness, solver="ssa")
-
-   
-
-    #plot_grounded_area_ice1_ice2_new(solver_out_root("ssa"), solver="ssa",
-    #    out_path=f"{nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2_new.png")
-    #print(f"<<<<<<<<<<<<< {nm_data_home}/plots/ssa_grounded_area_ice1_vs_ice2.png >>>>>>>>>>>>>>>")
 
 
-
-    #raise
+    raise
 
 
     ################### DIVA ########################
