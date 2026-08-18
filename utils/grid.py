@@ -2035,7 +2035,7 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
 
 
 def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
-    def hgrads(h, b):
+    def hgrads(h, b, grounded_fraction=None):
         s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
         grounded_fraction = grounded_fraction_fct(b, h)
         grounded = jnp.where(grounded_fraction>0.5, 1, 0)
