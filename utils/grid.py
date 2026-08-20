@@ -2034,6 +2034,161 @@ def node_centred_viscosity_function(ny, nx, dy, dx,
  #   return jax.jit(fc_viscosity)   return jax.jit(fc_viscosity)
 
 
+
+@jax.jit
+def subgrid_gl_location_1d_x_centred(b, h):
+    h_pad = jnp.pad(h, ((0,0),(1,1)), mode="edge")
+    b_pad = jnp.pad(b, ((0,0),(1,1)), mode="edge")
+
+    hm1, h0, hp1 = h_pad[:, :-2], h_pad[:, 1:-1], h_pad[:, 2:]
+    bm1, b0, bp1 = b_pad[:, :-2], b_pad[:, 1:-1], b_pad[:, 2:]
+
+    dh = (hp1 - hm1) / 2.0
+    db = (bp1 - bm1) / 2.0
+
+    phi0 = c.RHO_W*b0 + c.RHO_I*h0
+    dphi = c.RHO_W*db + c.RHO_I*dh
+
+    xi_g_raw = -phi0 / jnp.where(dphi == 0, 1e-16, dphi)
+    straddles = (xi_g_raw > -0.5) & (xi_g_raw < 0.5)
+
+    phi_west = phi0 - 0.5*dphi
+    west_grounded = phi_west > 0.0
+
+    xi_g = jnp.clip(xi_g_raw, -0.5, 0.5)
+
+    return xi_g, straddles, west_grounded, dh, db, h0
+
+
+def gl_aware_driving_stress_analytic_LI_centred(dy, dx):
+    def hgrads(h, b, grounded_t=None):
+        xi_g, straddles, west_grounded, dh, db, h0 = subgrid_gl_location_1d_x_centred(b, h)
+
+        Sg = dh + db
+        Sf = (1 - c.RHO_I/c.RHO_W) * dh
+
+        def I(xa, xb):
+            return h0*(xb - xa) + 0.5*dh*(xb**2 - xa**2)
+
+        I_west = I(-0.5, xi_g)
+        I_east = I(xi_g, 0.5)
+
+        S_west = jnp.where(west_grounded, Sg, Sf)
+        S_east = jnp.where(west_grounded, Sf, Sg)
+
+        G_analytic = (c.RHO_I * c.g / dx) * (S_west*I_west + S_east*I_east)
+
+        s = jnp.maximum(h + b, h*(1 - c.RHO_I/c.RHO_W))
+        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+        G_central = h * (s_e - s_w) / (2*dx)
+
+        central_x = jnp.where(straddles, G_analytic, G_central)
+        central_y = jnp.zeros_like(central_x)  # ny=1
+        return central_x, central_y
+
+    return jax.jit(hgrads)
+
+def subgrid_gl_location_1d_x_grounded_fraction_centred(b, h):
+    xi_g, straddles, west_grounded, dh, db, h0 = subgrid_gl_location_1d_x_centred(b, h)
+
+    grounded_frac_straddle = jnp.where(west_grounded, xi_g + 0.5, 0.5 - xi_g)
+
+    fully_grounded = (h + b) > (h * (1 - c.RHO_I / c.RHO_W))
+
+    scale = jnp.where(straddles, grounded_frac_straddle,
+                       jnp.where(fully_grounded, 1.0, 0.0))
+    return scale
+
+
+
+
+
+
+
+
+#@jax.jit
+#def subgrid_gl_location_1d_x(b, h):
+#    h_pad = jnp.pad(h, ((0,0),(0,1)), mode="edge")
+#    b_pad = jnp.pad(b, ((0,0),(0,1)), mode="edge")
+#
+#    h_i, h_i1 = h_pad[:, :-1], h_pad[:, 1:]
+#    b_i, b_i1 = b_pad[:, :-1], b_pad[:, 1:]
+#
+#    dh = h_i1 - h_i
+#    db = b_i1 - b_i
+#
+#    denom = c.RHO_W*db + c.RHO_I*dH
+#    lam_g_raw = (c.RHO_W*bi + c.RHO_I*Hi) / jnp.where(denom == 0, 1e-16, -denom)
+#
+#    lam_g = jnp.clip(lam_g_raw, 0.0, 1.0)
+#
+#    #cells where GL is in the second half
+#    second_half_mask = (lam_g_raw > 0.5) & (lam_g_raw < 1.0)
+#    idx = jnp.where(second_half_mask)
+#
+#    lam_g = jnp.where(second_half_mask, 0.0, lam_g)
+#
+#    lam_g = lam_g.at[idx[0], idx[1] + 1].set(
+#        1.0 - lam_g[idx]
+#    )
+#    
+#    first_half_mask = (lam_g_raw > 0) & (lam_g_raw < 0.5)
+#    idx = jnp.where(first_half_mask)
+#
+#    lam_g = lam_g.at[idx[0], idx[1]].set(
+#        0.5 + lam_g[idx]
+#    )
+#
+#    straddles = (lam_g<0) | ((lam_g>0) & (lam_g<0.5))
+#
+#    grounded = jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)), True, False) & ~straddles
+#    floating = ~grounded & ~straddles
+#
+#    return lam_g, grounded, floating, straddles
+#
+##subgrid_gl_location_1d_x_grounded_fraction = lambda b, h: subgrid_gl_location_1d_x(b, h)[0][:, :-1]
+#@jax.jit
+#def subgrid_gl_location_1d_x_grounded_fraction(b, h):
+#    lambda_g, grounded, floating, _ = subgrid_gl_location_1d_x(b, h)
+#    scale = jnp.where(grounded, 1, jnp.where(floating, 0, lambda_g[:,:-1]))
+#    #jax.debug.print("{x}", x=lambda_g)
+#    return scale
+#
+#def gl_aware_driving_stress_analytic_LI(dy, dx):
+#    #NOTE: NOTE: NOTE: ONLY WORKS IN ONE DIMENSION!!
+#    #From Gladstone tc-4-605-2010; linear version so analytic function of h can be worked out.
+#    def hgrads(h, b, grounded_t=None):
+#        lam_g, _, _, straddles = subgrid_gl_location_1d_x(b, h)
+#
+#        h_pad = jnp.pad(h, ((0,0),(1,1)), mode="edge")
+#        b_pad = jnp.pad(b, ((0,0),(1,1)), mode="edge")
+#
+#        hi, hi1 = h_pad[:, :-1], h_pad[:, 1:]
+#        bi, bi1 = b_pad[:, :-1], b_pad[:, 1:]
+#        dh = hi1 - hi
+#        db = bi1 - bi
+#
+#        Sg = dh + db
+#        Sf = (1 - c.RHO_I/c.RHO_W) * dh
+#
+#        I_gnd = hi*lam_g + 0.5*dh*lam_g**2
+#        I_flt = hi*(1-lam_g) + 0.5*dh*(1-lam_g**2)
+#
+#        G_analytic = (c.RHO_I * c.g / dx) * (Sg*I_gnd + Sf*I_flt)
+#
+#        # ordinary (non-GL-straddling) central-difference driving stress
+#        s = jnp.maximum(h + b, h*(1 - c.RHO_I/c.RHO_W))
+#        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+#        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+#        G_central = h * (s_e - s_w) / (2*dx)
+#
+#        central_x = jnp.where(straddles, G_analytic[:, :-1], G_central)
+#        central_y = jnp.zeros_like(central_x)  # ny=1: no y-variation
+#        return central_x, central_y
+#
+#    return jax.jit(hgrads)
+
 def gl_aware_driving_stress_function_grounded_fraction(dy, dx, grounded_fraction_fct):
     def hgrads(h, b, grounded_fraction=None):
         s = jnp.maximum(h+b, h*(1-c.RHO_I/c.RHO_W))
