@@ -1157,9 +1157,13 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
 
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
-    hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
+    #hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
     #hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
-    grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
+    hgrads_fct                                 = gl_aware_driving_stress_analytic_LI_centred(dy, dx)
+    
+    #grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
+    grounded_fraction_fct                      = subgrid_gl_location_1d_x_grounded_fraction_centred
+    
     #hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(
     #                                                                            dy, dx,
     #                                                                            grounded_fraction_fct)
