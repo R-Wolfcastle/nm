@@ -6,6 +6,7 @@ import sys
 import jax
 import jax.numpy as jnp
 from jax.experimental.sparse import BCOO
+import matplotlib.pyplot as plt
 
 #local apps
 nm_home = os.environ['NM_HOME']   
@@ -2059,7 +2060,6 @@ def subgrid_gl_location_1d_x_centred(b, h):
 
     return xi_g, straddles, west_grounded, dh, db, h0
 
-
 def gl_aware_driving_stress_analytic_LI_centred(dy, dx):
     def hgrads(h, b, grounded_t=None):
         xi_g, straddles, west_grounded, dh, db, h0 = subgrid_gl_location_1d_x_centred(b, h)
@@ -2076,7 +2076,7 @@ def gl_aware_driving_stress_analytic_LI_centred(dy, dx):
         S_west = jnp.where(west_grounded, Sg, Sf)
         S_east = jnp.where(west_grounded, Sf, Sg)
 
-        G_analytic = (c.RHO_I * c.g / dx) * (S_west*I_west + S_east*I_east)
+        G_analytic = (S_west*I_west + S_east*I_east) / dx   # <-- removed c.RHO_I * c.g
 
         s = jnp.maximum(h + b, h*(1 - c.RHO_I/c.RHO_W))
         s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
@@ -2084,10 +2084,40 @@ def gl_aware_driving_stress_analytic_LI_centred(dy, dx):
         G_central = h * (s_e - s_w) / (2*dx)
 
         central_x = jnp.where(straddles, G_analytic, G_central)
-        central_y = jnp.zeros_like(central_x)  # ny=1
+        central_y = jnp.zeros_like(central_x)
         return central_x, central_y
 
     return jax.jit(hgrads)
+
+#def gl_aware_driving_stress_analytic_LI_centred(dy, dx):
+#    def hgrads(h, b, grounded_t=None):
+#        xi_g, straddles, west_grounded, dh, db, h0 = subgrid_gl_location_1d_x_centred(b, h)
+#
+#        Sg = dh + db
+#        Sf = (1 - c.RHO_I/c.RHO_W) * dh
+#
+#        def I(xa, xb):
+#            return h0*(xb - xa) + 0.5*dh*(xb**2 - xa**2)
+#
+#        I_west = I(-0.5, xi_g)
+#        I_east = I(xi_g, 0.5)
+#
+#        S_west = jnp.where(west_grounded, Sg, Sf)
+#        S_east = jnp.where(west_grounded, Sf, Sg)
+#
+#        G_analytic = (c.RHO_I * c.g / dx) * (S_west*I_west + S_east*I_east)
+#
+#        s = jnp.maximum(h + b, h*(1 - c.RHO_I/c.RHO_W))
+#        s_e = jnp.pad(s, ((0,0),(0,1)), mode='edge')[:, 1:]
+#        s_w = jnp.pad(s, ((0,0),(1,0)), mode='edge')[:, :-1]
+#        G_central = h * (s_e - s_w) / (2*dx)
+#
+#        central_x = jnp.where(straddles, G_analytic, G_central)
+#        central_y = jnp.zeros_like(central_x)  # ny=1
+#        return central_x, central_y
+#
+#    #return jax.jit(hgrads)
+#    return hgrads
 
 def subgrid_gl_location_1d_x_grounded_fraction_centred(b, h):
     xi_g, straddles, west_grounded, dh, db, h0 = subgrid_gl_location_1d_x_centred(b, h)
