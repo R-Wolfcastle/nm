@@ -13,7 +13,7 @@ import jax.scipy.linalg as lalg
 from jax.scipy.optimize import minimize
 
 #local apps
-nm_home = os.environ['NM_HOME']   
+nm_home = os.environ['NM_HOME']
 
 if nm_home is None:
     raise RuntimeError("NM_HOME is not set")
@@ -1158,11 +1158,11 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
     #hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
-    #hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
-    hgrads_fct                                 = gl_aware_driving_stress_analytic_LI_centred(dy, dx)
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
+    #hgrads_fct                                 = gl_aware_driving_stress_analytic_LI_centred(dy, dx)
     
-    #grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
-    grounded_fraction_fct                      = subgrid_gl_location_1d_x_grounded_fraction_centred
+    grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
+    #grounded_fraction_fct                      = subgrid_gl_location_1d_x_grounded_fraction_centred
     
     #hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(
     #                                                                            dy, dx,
@@ -4757,7 +4757,7 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
 
 def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc, 
                            add_uv_ghost_cells, add_s_ghost_cells,
-                           method="PPM"):
+                           method="PPM", conservative=True):
 
     def advection_step(u_1d, v_1d, h_1d, source=0, delta_t=0.08):
         u = u_1d.reshape((ny, nx))
@@ -4797,7 +4797,22 @@ def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                 (flux_y[:-1,:] - flux_y[1:,:])
                 * dx * delta_t
             )
-        
+       
+        if not conservative:
+            dudx = (
+                u_full[1:-1, 2:] -
+                u_full[1:-1, :-2]
+                   ) / (2*dx)
+            
+            dvdy = (
+                v_full[2:, 1:-1] -
+                v_full[:-2, 1:-1]
+                   ) / (2*dy)
+            
+            divu = dudx + dvdy
+
+            source += h * divu * (h > 0).astype(int)
+
         #to keep calving front in same location, prevent any flux into or out of ice-free cells!
         flux_term = jnp.where(h>0, flux_term, 0)
 
@@ -7399,8 +7414,8 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
                                                  mucoef_0, C_0,
                                                  adv_method="PPM",
                                                  sliding="linear",
-                                                 pic_reduction_tol=5e-3,
-                                                 newton_tol=5e-2,
+                                                 pic_reduction_tol=1e-3,
+                                                 newton_tol=1e-1,
                                                  periodic=False, B_field=None,
                                                  temperature_field=None,
                                                  newton_max_backtracks=32):
@@ -7533,12 +7548,14 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
 
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
+            
+           #print(jnp.count_nonzero(jnp.isnan(nz_jac_values)))
 
             rhs = -jnp.concatenate(get_uv_residuals_linear_ssa(u_1d, v_1d, h_1d, mu_ew, mu_ns, beta, ice_mask_2d))
             
 
             old_residual, residual, init_res = print_residual_things(
-                                                  residual, rhs, init_res, i, print_=False
+                                                  residual, rhs, init_res, i, print_=True
                                                                     )
             if ((residual/init_res) < pic_reduction_tol) or ((i > 0) and (residual < newton_tol)):
                 break
@@ -7557,6 +7574,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
                 initial_residual = jnp.max(rhs)
 
         final_residual_pic = res_fct(rhs_new)
+        print(final_residual_pic)
 
 
         for i in range(max_n_newt_iterations):
@@ -7568,10 +7586,11 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
             nz_jac_values = jnp.concatenate([dJu_du[mask], dJu_dv[mask],\
                                              dJv_du[mask], dJv_dv[mask]])
 
+
             rhs = -jnp.concatenate(get_uv_residuals_nonlinear_ssa(u_1d, v_1d, q, p, h_1d, ice_mask_2d))
             
             old_residual, residual, init_res = print_residual_things(
-                                                  residual, rhs, init_res, i, print_=False
+                                                  residual, rhs, init_res, i, print_=True
                                                                     )
             if (i > 0) and (residual < newton_tol):
                 break

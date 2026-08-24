@@ -1467,29 +1467,45 @@ def beta_function(b, mode="linear", C_scaling_function=None, u0=300):
             return beta
 
 
+    #if mode=="schoof":
+    #    #Schoof (2005) modified power law, Eq. (11) in Asay-Davis et al.
+    #    #(2016) / Eq. (4) in Cornford et al. (2020). Smoothly transitions
+    #    #between the Weertman power law (large N, away from the grounding
+    #    #line) and a Coulomb law |tau_b| = alpha_sq * N (small N, near
+    #    #flotation). C plays the role of beta^2 -- same units/convention
+    #    #as basic_weertman, so C_0 tuned for Weertman is a reasonable
+    #    #starting point here too.
+    #    def beta(C, u, v, h):
+    #        speed = jnp.sqrt(u*u + v*v + 10)
+
+    #        alpha_sq = 0.5
+    #        m = c.GLEN_N   # friction-law exponent; m=3=GLEN_N for MISMIP+
+
+    #        h_f = jnp.maximum(0.0, -(c.RHO_W/c.RHO_I) * b)
+    #        N = jnp.maximum(c.RHO_I * c.g * (h - h_f), 0.0)
+
+    #        beta = (C * alpha_sq * N * speed**(1/m - 1)
+    #                / (C**m * speed + (alpha_sq * N)**m) ** (1/m))
+
+    #        beta = beta * C_scaling_function(b, h)
+    #        beta = jnp.where(h>0, beta, 1)
+    #        return beta
     if mode=="schoof":
-        #Schoof (2005) modified power law, Eq. (11) in Asay-Davis et al.
-        #(2016) / Eq. (4) in Cornford et al. (2020). Smoothly transitions
-        #between the Weertman power law (large N, away from the grounding
-        #line) and a Coulomb law |tau_b| = alpha_sq * N (small N, near
-        #flotation). C plays the role of beta^2 -- same units/convention
-        #as basic_weertman, so C_0 tuned for Weertman is a reasonable
-        #starting point here too.
         def beta(C, u, v, h):
-            speed = jnp.sqrt(u*u + v*v + 1)
-
+            speed = jnp.sqrt(u*u + v*v + 10)
             alpha_sq = 0.5
-            m = c.GLEN_N   # friction-law exponent; m=3=GLEN_N for MISMIP+
-
+            m = c.GLEN_N
+    
             h_f = jnp.maximum(0.0, -(c.RHO_W/c.RHO_I) * b)
             N = jnp.maximum(c.RHO_I * c.g * (h - h_f), 0.0)
-
+    
             beta = (C * alpha_sq * N * speed**(1/m - 1)
-                    / (C**m * speed + (alpha_sq * N)**m) ** (1/m))
-
+                    / (C**m * speed + (alpha_sq * N)**m + c.EPSILON_VISC**m) ** (1/m))
+    
             beta = beta * C_scaling_function(b, h)
             beta = jnp.where(h>0, beta, 1)
             return beta
+
 
     return jax.jit(beta)
 

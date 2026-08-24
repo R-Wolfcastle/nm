@@ -119,5 +119,3 @@ def interp_fields_onto_new_zs(fields, zs, zs_new):
 
     return interp_fn_whole(flat_fields, flat_zs, flat_zs_new).reshape(n_fields, ny, nx, nz)
 
-
-

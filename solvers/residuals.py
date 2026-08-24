@@ -2302,7 +2302,7 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap_dt(ny, nx, dy, dx, b
                                    C_0, temp_cc,
                                    hgrads_fct):
 
-    jax.debug.print("TEMP: {t}", t=temp_cc)
+    #jax.debug.print("TEMP: {t}", t=temp_cc)
     temp_cc = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc)
     #jax.debug.print("B: {t}", t=B_cc)
@@ -2391,7 +2391,7 @@ def compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(ny, nx, dy, dx, b,
                                    C_0, temp_cc,
                                    hgrads_fct):
   
-    jax.debug.print("TEMP: {t}", t=temp_cc)
+    #jax.debug.print("TEMP: {t}", t=temp_cc)
     temp_cc = add_s_ghost_cells(temp_cc)
     B_cc = B_from_T(temp_cc)
     #jax.debug.print("B: {t}", t=B_cc)

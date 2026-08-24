@@ -1,5 +1,9 @@
+#1st party
 from pathlib import Path
+import sys
+import os
 
+#3rd party
 from PIL import Image, ImageOps
 import imageio
 import jax.numpy as jnp
@@ -7,6 +11,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+#local apps
+nm_home = os.environ['NM_HOME']   
+
+sys.path.insert(1, os.path.join(nm_home, 'utils'))
+import constants_years as c
+
 
 rho = 900
 rho_w = 1000
@@ -489,3 +500,193 @@ def plotgeoms(thks, b, upper_lim, title=None, savepath=None, axis_limits=None, s
 
     if show_plots:
         plt.show()
+
+
+#Thanks MS copilot
+def extract_grounding_line(thk, b, x, y):
+    """Extract grounding-line points from a 2-D thickness field, by linear
+    interpolation of the flotation criterion f = h - h_f between grid
+    columns straddling each row's grounded/floating transition(s),
+    following the point-data convention of Sect. 2.3 of Asay-Davis et al.
+    (2016) (one or more xGL/yGL points per row that actually has a
+    grounding line; rows with no transition contribute none).
+
+    thk, b : (ny, nx) arrays (works directly on a loaded thickness .npy
+              together with the module-level `b`)
+    x, y   : 1-D coordinate vectors of length nx, ny
+
+    Returns (xGL, yGL) as 1-D numpy arrays.
+    """
+    thk = np.asarray(thk)
+    b = np.asarray(b)
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    h_f = np.maximum(0.0, -(c.RHO_W / c.RHO_I) * b)
+    f = thk - h_f          # > 0 grounded, < 0 floating
+    ice = thk > 0
+
+    xGL, yGL = [], []
+    for j in range(thk.shape[0]):
+        row_f, row_ice = f[j, :], ice[j, :]
+        for i in range(len(x) - 1):
+            if not (row_ice[i] and row_ice[i + 1]):
+                continue
+            if row_f[i] == 0.0:
+                xGL.append(x[i]); yGL.append(y[j])
+                continue
+            if (row_f[i] > 0) != (row_f[i + 1] > 0):
+                frac = row_f[i] / (row_f[i] - row_f[i + 1])
+                xGL.append(x[i] + frac * (x[i + 1] - x[i]))
+                yGL.append(y[j])
+
+    return np.array(xGL), np.array(yGL)
+
+
+#def show_field_scaled(field, x, y, ax=None,
+#                      cmap="viridis", vmin=None, vmax=None,
+#                      cbar_label=None, title=None, y_exaggeration=4.0,
+#                      xlabel="x (km)", ylabel="y (km)", figsize=(10, 4),
+#                      reflect=True):
+#    
+#    x = np.asarray(x)
+#    y = np.asarray(y)
+#    field = np.asarray(field)
+#
+#    own_fig = ax is None
+#    if own_fig:
+#        fig, ax = plt.subplots(figsize=figsize)
+#
+#    extent = [x[0] / 1e3, x[-1] / 1e3, y[0] / 1e3, y[-1] / 1e3]
+#    im = ax.imshow(field, origin="lower", extent=extent, cmap=cmap,
+#                    vmin=vmin, vmax=vmax, aspect=y_exaggeration)
+#    ax.set_xlabel(xlabel)
+#    ax.set_ylabel(ylabel)
+#    if title:
+#        ax.set_title(title)
+#    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+#    if cbar_label:
+#        cbar.set_label(cbar_label)
+#    if own_fig:
+#        plt.tight_layout()
+#
+#    return ax, im
+#
+#def make_plot_mismip_field_function(b, x, y, reflect=True):
+#    def plot_mismip_field(field, thk, ax=None,
+#                          cmap="viridis", vmin=None, vmax=None,
+#                          cbar_label=None, title=None, y_exaggeration=3.0,
+#                          xlabel="x (km)", ylabel="y (km)", figsize=(10, 4),
+#                          gl_color="k", filepath=None):
+#    
+#        ax, im = show_field_scaled(field[::-1,:], x, y, ax=ax, cmap=cmap,
+#                                   vmin=vmin, vmax=vmax, 
+#                                   cbar_label=cbar_label,
+#                                   title=title, y_exaggeration=y_exaggeration,
+#                                   xlabel=xlabel, ylabel=ylabel,
+#                                   figsize=figsize, reflect=reflect)
+#    
+#        xGL, yGL = extract_grounding_line(thk, b, x, y)
+#    
+#        if len(xGL):
+#            order = np.argsort(yGL)
+#            ax.plot(
+#                np.asarray(xGL)[order] / 1e3,
+#                np.asarray(yGL)[order][::-1] / 1e3,
+#                gl_color + "--",
+#                lw=1.5,
+#            )
+#        
+#        if filepath is not None:
+#            fig = ax.figure
+#            fig.savefig(filepath, bbox_inches="tight", dpi=300)
+#            if ax is None:
+#                plt.close(fig)
+#        
+#        return ax, im
+#    return plot_mismip_field
+
+
+def _reflect_domain(field, y):
+    """Mirror a half-domain field/y array across the top boundary (y[-1]),
+    extending the y-extent (the y[-1] row itself is not duplicated)."""
+    field = np.asarray(field)
+    y = np.asarray(y)
+    field_full = np.concatenate([field, field[-2::-1, :]], axis=0)
+    y_full = np.concatenate([y, 2 * y[-1] - y[-2::-1]])
+    return field_full, y_full
+
+
+def show_field_scaled(field, x, y, ax=None,
+                      cmap="viridis", vmin=None, vmax=None,
+                      cbar_label=None, title=None, y_exaggeration=4.0,
+                      xlabel="x (km)", ylabel="y (km)", figsize=(10, 4),
+                      reflect=True):
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+    field = np.asarray(field)
+
+    if reflect:
+        field, y = _reflect_domain(field, y)
+
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    extent = [x[0] / 1e3, x[-1] / 1e3, y[0] / 1e3, y[-1] / 1e3]
+    im = ax.imshow(field, origin="lower", extent=extent, cmap=cmap,
+                    vmin=vmin, vmax=vmax, aspect=y_exaggeration)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if title:
+        ax.set_title(title)
+    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+    if cbar_label:
+        cbar.set_label(cbar_label)
+    if own_fig:
+        plt.tight_layout()
+
+    return ax, im
+
+def make_plot_mismip_field_function(b, x, y, reflect=True, y_exaggeration=2.0):
+    def plot_mismip_field(field, thk, ax=None,
+                          cmap="viridis", vmin=None, vmax=None,
+                          cbar_label=None, title=None,
+                          xlabel="x (km)", ylabel="y (km)", figsize=(10, 4),
+                          gl_color="k", filepath=None):
+
+        ax, im = show_field_scaled(field[::-1,:], x, y, ax=ax, cmap=cmap,
+                                   vmin=vmin, vmax=vmax,
+                                   cbar_label=cbar_label,
+                                   title=title, y_exaggeration=y_exaggeration,
+                                   xlabel=xlabel, ylabel=ylabel,
+                                   figsize=figsize, reflect=reflect)
+
+        xGL, yGL = extract_grounding_line(thk, b, x, y)
+
+        if len(xGL):
+            xGL = np.asarray(xGL)
+            yGL = np.asarray(yGL)[::-1]
+
+            if reflect:
+                # mirror the GL points across the top boundary too
+                xGL = np.concatenate([xGL, xGL])
+                yGL = np.concatenate([yGL, 2 * y[-1] - yGL])
+
+            order = np.argsort(yGL)
+            ax.plot(
+                xGL[order] / 1e3,
+                yGL[order] / 1e3,
+                gl_color + "--",
+                lw=1.5,
+            )
+
+        if filepath is not None:
+            fig = ax.figure
+            fig.savefig(filepath, bbox_inches="tight", dpi=300)
+            if ax is None:
+                plt.close(fig)
+
+        return ax, im
+    return plot_mismip_field
