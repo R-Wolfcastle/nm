@@ -4754,6 +4754,66 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
     return solver
 
 
+def make_layered_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
+                           add_uv_ghost_cells, add_s_ghost_cells,
+                           method="PPM", conservative=True):
+    def advection_step(u_1d, v_1d, h_1d, field, source=0, delta_t=0.08):
+        #field: (ny, nx, n_levels) -- e.g. the 3-D damage field
+        u = u_1d.reshape((ny, nx))
+        v = v_1d.reshape((ny, nx))
+        h = h_1d.reshape((ny, nx))
+        u_full, v_full = add_uv_ghost_cells(u, v)
+        h_full = add_s_ghost_cells(h)
+        u_full = linear_extrapolate_over_cf_dynamic_thickness(u_full, h_full)
+        v_full = linear_extrapolate_over_cf_dynamic_thickness(v_full, h_full)
+        u_fc_ew, _ = interp_cc_to_fc(u_full)
+        _, v_fc_ns = interp_cc_to_fc(v_full)
+
+        #ghost cells + calving-front extrapolation for the field, per layer.
+        #note: extrapolation reference is the real ice thickness h_full, not
+        #the field itself (unlike the original h_full = extrap(h_full, h_full)
+        #call, which was fine there only because h_full *was* the reference)
+        field_full = jax.vmap(add_s_ghost_cells, in_axes=-1, out_axes=-1)(field)
+        field_full = jax.vmap(linear_extrapolate_over_cf_dynamic_thickness,
+                               in_axes=(-1, None), out_axes=-1)(field_full, h_full)
+
+        if method=="FOU":
+            def fou_flux(field_full_layer):
+                field_fc_fou_ew = jnp.where(u_fc_ew>0, field_full_layer[1:-1,:-1], field_full_layer[1:-1, 1:])
+                field_fc_fou_ns = jnp.where(v_fc_ns>0, field_full_layer[1:, 1:-1], field_full_layer[-1:,1:-1])
+                return (u_fc_ew[:,1:]*field_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*field_fc_fou_ew[:,:-1])*dy*delta_t +\
+                       (v_fc_ns[:-1,:]*field_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*field_fc_fou_ns[1:,:])*dx*delta_t
+            flux_term = jax.vmap(fou_flux, in_axes=-1, out_axes=-1)(field_full)
+        elif method=="PPM":
+            def ppm_flux(field_full_layer):
+                flux_x = ppm_flux_x(field_full_layer[1:-1,:], u_full[1:-1,:], dx, delta_t)
+                flux_y = ppm_flux_y(field_full_layer[:,1:-1], v_full[:,1:-1], dy, delta_t)
+                return (
+                    (flux_x[:,1:] - flux_x[:,:-1]) * dy * delta_t
+                    +
+                    (flux_y[:-1,:] - flux_y[1:,:]) * dx * delta_t
+                )
+            flux_term = jax.vmap(ppm_flux, in_axes=-1, out_axes=-1)(field_full)
+
+        if not conservative:
+            dudx = (
+                u_full[1:-1, 2:] -
+                u_full[1:-1, :-2]
+                   ) / (2*dx)
+
+            dvdy = (
+                v_full[2:, 1:-1] -
+                v_full[:-2, 1:-1]
+                   ) / (2*dy)
+
+            divu = dudx + dvdy
+            source = source + field * divu[..., None] * (h[..., None] > 0).astype(int)
+
+        #to keep calving front in same location, prevent any flux into or out of ice-free cells!
+        flux_term = jnp.where(h[..., None]>0, flux_term, 0)
+        return jnp.maximum(field + source*delta_t - flux_term/(dy*dx), 0.0)
+    return jax.jit(advection_step)
+
 
 def make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc, 
                            add_uv_ghost_cells, add_s_ghost_cells,

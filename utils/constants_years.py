@@ -52,5 +52,21 @@ P_SCALING = 7.8e-8           # Temperature equiv increase with pressure (K Pa^-1
 
 
 
+############ DAMAGE MODEL CONSTANTS ########
+#Huth and Duddu epdf/10.1029/2020MS002292
+
+class dmg:
+    B_STAR     = 5.23e-7*31_557_600 #MPa^-r a^-1
+    r          = 0.43
+    k_STAR     = 4
+    alpha      = 0.21
+    beta       = 0.63
+    lambda_    = 0.16
+    sigma_th   = 0.12               #MPa
+
+
+
+
+
 
 

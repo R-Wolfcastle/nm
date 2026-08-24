@@ -16,6 +16,15 @@ import constants_years as c
 from vertical_grid import vertically_average
 from grid import principal_resistive_stress_function
 
+sys.path.insert(1, os.path.join(nm_home, 'solvers'))
+from nonlinear_solvers import make_layered_advection_stepper
+
+#Huth and Duddu epdf/10.1029/2020MS002292
+
+@jax.jit
+def macaulay_bracket(field):
+    return jnp.maximum(field, 0)
+
 
 @jax.jit
 def overburden_pressure(z_coords):
@@ -27,6 +36,39 @@ def overburden_pressure(z_coords):
 def two_component_cauchy_stress(rst, z_coordinates):
     #rst: 2x2, vertically averaged resistive stress tensor
     return rst[..., None] - overburden_pressure(z_coordinates)
+
+
+@jax.jit
+def hayhurst_stress_fct(dst, damage,
+                    z_coords,
+                    alpha=0.12, 
+                    beta=0.63,
+                    lambda_=0.16):
+    """
+    dst = deviatoric_stress_tensor
+    """
+
+    #Ignoring water pressure for now
+    p_eff = overburden_pressure(z_coords) -\
+            (1-damage)*((dst[:,:,0,0] + dst[:,:,1,1])[..., None])
+
+    pds = 0.5 * (dst[:,:,0,0] + dst[:,:,1,1] + jnp.sqrt(
+                           (dst[:,:,0,0] + dst[:,:,1,1])**2 -\
+                           4*(dst[:,:,0,0]*dst[:,:,1,1] - dst[:,:,0,1]**2)
+                                             )
+                 )
+
+    term1 = alpha * (pds[..., None] - p_eff)
+
+    term2 = beta * jnp.sqrt(1.5 * (dst[:,:,0,0]**2 +\
+                                   2*dst[:,:,1,0]**2 +\
+                                   dst[:,:,1,1]**2 +\
+                                   (dst[:,:,0,0] + dst[:,:,1,1])**2)[..., None]
+                           )
+
+    term3 = -3 * lambda_ * p_eff
+
+    return term1 + term2 + term3
 
 
 @jax.jit
@@ -119,3 +161,96 @@ def nye_vertical_damage_surfandbase_function(ny, nx, dy, dx,
 
     #return jax.jit(va_damage_nye)
     return va_damage_nye
+
+
+def isotropic_creep_damage_source_function(ny, nx, dy, dx,
+                                       add_uv_ghost_cells,
+                                       add_s_ghost_cells,
+                                       cc_gradient,
+                                       mucoef_0, temp_cc=None):
+
+    dst_function = cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
+                                                              add_uv_ghost_cells,
+                                                              add_s_ghost_cells,
+                                                              cc_gradient,
+                                                              mucoef_0, temp_cc=temp_cc)
+    def source_term(q, u, v, damage, z_coords):
+
+        _, dst = dst_function(q, u, v, z_coords[..., -1] - z_coords[..., 0])
+
+        #3D field
+        hayhurst_stress = hayhurst_stress_fct(dst, damage, z_coords)
+
+        return c.dmg.B_STAR  * (1/(1-damage))**c.dmg.k_star *\
+               hayhurst_bracket(hayhurst_stress - c.dmg.sigma_th)**c.dmg.r
+    
+    return jax.jit(source_term)
+
+
+def make_isotropic_creep_damage_stepper(nx, ny, dx, dy,
+                                        interp_cc_to_fc, 
+                                        add_uv_ghost_cells,
+                                        add_s_ghost_cells,
+                                        cc_gradient,
+                                        method="PPM"):
+
+    layered_advection_stepper = make_layered_advection_stepper(
+        nx, ny, dx, dy, interp_cc_to_fc,
+        add_uv_ghost_cells, add_s_ghost_cells,
+        method=method, conservative=False)
+    #single_layer_advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc, 
+    #                                               add_uv_ghost_cells, add_s_ghost_cells,
+    #                                               method=method, conservative=False)
+
+    source_fct = isotropic_creep_damage_source_function(ny, nx, dy, dx,
+                                       add_uv_ghost_cells,
+                                       add_s_ghost_cells,
+                                       cc_gradient,
+                                       mucoef_0, temp_cc=None)
+
+    def icd_stepper(q, u, v, damage, z_coords, delta_t):
+        source = source_fct(q, u, v, damage, z_coords)
+
+        #damage = jax.vmap(lambda dam_layer, source_layer: 
+        #                         single_layer_advection_stepper(dam_layer,
+        #                                                        u.reshape(-1),
+        #                                                        v.reshape(-1),
+        #                                                        dam_layer,
+        #                                                        source_layer,
+        #                                                        delta_t=delta_t),
+        #                  axis=-1)
+        
+        damage = layered_advection_stepper(u.reshape(-1),
+                            v.reshape(-1), h.reshape(-1),
+                            damage, source, delta_t=delta_t)
+
+        return jnp.minimum(damage, 0.9)
+
+    return jax.jit(icd_stepper)
+
+#def make_isotropic_creep_damage_stepper(nx, ny, dx, dy,
+#                                        interp_cc_to_fc,
+#                                        add_uv_ghost_cells,
+#                                        add_s_ghost_cells,
+#                                        cc_gradient,
+#                                        mucoef_0,
+#                                        method="PPM"):
+#    layered_advection_stepper = make_layered_advection_stepper(
+#        nx, ny, dx, dy, interp_cc_to_fc,
+#        add_uv_ghost_cells, add_s_ghost_cells,
+#        method=method, conservative=False)
+#
+#    source_fct = isotropic_creep_damage_source_function(
+#        ny, nx, dy, dx,
+#        add_uv_ghost_cells, add_s_ghost_cells,
+#        cc_gradient, mucoef_0, temp_cc=None)
+#
+#    def icd_stepper(q, u, v, damage, h, z_coords, delta_t):
+#        source = source_fct(q, u, v, damage, z_coords)
+#        damage = layered_advection_stepper(
+#            u.reshape(-1), v.reshape(-1), h.reshape(-1),
+#            damage, source, delta_t=delta_t)
+#        return jnp.minimum(damage, 0.9)
+#    return jax.jit(icd_stepper)
+
+
