@@ -43,7 +43,7 @@ from damage import nye_vertical_damage_function,\
 
 
 resolution = 1000
-n_levels = 50
+n_levels = 100
 n_pic_iterations = 50
 n_newt_iterations = 50
 max_n_diva_iterations = 40
@@ -227,27 +227,20 @@ def creep_damage(outdir):
        
         plt.close()
 
-        #plt.imshow(damage, vmin=0, vmax=1, cmap="gnuplot2_r")
+        #plt.imshow(np.transpose(damage[-5,:,::-1]))
         #plt.colorbar()
-        #plt.title(f"Damage {t_cum:.2f} years")
-        #plt.savefig(f"{outdir}/dam{i}.png")
-        #plt.close()    
-        
+        #plt.show()
+        #plt.close()
+
         q = jnp.log((1-va_damage)/mucoef_0)
     
         #if i==0:
         u, v = vel_solver(q, p, u, v, h)
        
-        plot_mismip_field(jnp.sqrt(u**2 + v**2), h, cmap="RdYlBu_r", vmin=0, vmax=2000,
-                          cbar_label="Speed (m a^-1)", filepath=f"{outdir}/speed{i}.png",
-                          title=f"Speed {t_cum:.2f} years"
-                          )
-        plt.close()
-        #plt.imshow(jnp.sqrt(u**2 + v**2 ), cmap="RdYlBu_r", vmin=0, vmax=5000)
-        #plt.colorbar()
-        #plt.title(f"Speed {t_cum:.2f} years")
-        #plt.savefig(f"{outdir}/speed{i}.png")
-        #plt.close()    
+        #plot_mismip_field(jnp.sqrt(u**2 + v**2), h, cmap="RdYlBu_r", vmin=0, vmax=2000,
+        #                  cbar_label="Speed (m a^-1)", filepath=f"{outdir}/speed{i}.png",
+        #                  title=f"Speed {t_cum:.2f} years"
+        #                  )
     
         delta_t = 0.95*(delta_x/jnp.max(jnp.sqrt(u**2 + v**2)))
     

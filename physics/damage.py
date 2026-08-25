@@ -48,6 +48,40 @@ def vertically_average_damage(damage, z_coords):
     return jnp.minimum(vertically_average(damage, z_coords), c.dmg.vaD_max)
 
 
+#@jax.jit
+#def hayhurst_stress_fct(dst, damage,
+#                    z_coords,
+#                    alpha=0.21, 
+#                    beta=0.63,
+#                    lambda_=0.16):
+#    """
+#    dst = deviatoric_stress_tensor
+#    """
+#    #NOTE NOTE NOTE: Need to ensure basal water pressure only included over
+#    #floating ice.
+#
+#    #Ignoring water pressure for now. do - water_pressure(z_coords) -\
+#    p_eff = overburden_pressure(z_coords) - water_pressure(z_coords) -\
+#            ((dst[:,:,0,0] + dst[:,:,1,1])[..., None])#/(1-damage)
+#
+#    pds = 0.5 * (dst[:,:,0,0] + dst[:,:,1,1] + jnp.sqrt(
+#                           (dst[:,:,0,0] + dst[:,:,1,1])**2 -\
+#                           4*(dst[:,:,0,0]*dst[:,:,1,1] - dst[:,:,0,1]**2)
+#                                             )
+#                 )[..., None]/(1-damage)
+#
+#    term1 = alpha * (pds - p_eff)
+#
+#    term2 = beta * jnp.sqrt(1.5 * (dst[:,:,0,0]**2 +\
+#                                   2*dst[:,:,1,0]**2 +\
+#                                   dst[:,:,1,1]**2 +\
+#                                   (dst[:,:,0,0] + dst[:,:,1,1])**2)[..., None]
+#                           )
+#
+#    term3 = -3 * lambda_ * p_eff
+#
+#    return term1 + term2 + term3
+
 @jax.jit
 def hayhurst_stress_fct(dst, damage,
                     z_coords,
@@ -57,6 +91,8 @@ def hayhurst_stress_fct(dst, damage,
     """
     dst = deviatoric_stress_tensor
     """
+    #NOTE NOTE NOTE: Need to ensure basal water pressure only included over
+    #floating ice.
 
     #Ignoring water pressure for now. do - water_pressure(z_coords) -\
     p_eff = overburden_pressure(z_coords) - water_pressure(z_coords) -\
@@ -66,7 +102,7 @@ def hayhurst_stress_fct(dst, damage,
                            (dst[:,:,0,0] + dst[:,:,1,1])**2 -\
                            4*(dst[:,:,0,0]*dst[:,:,1,1] - dst[:,:,0,1]**2)
                                              )
-                 )[..., None]/(1-damage)
+                 )[..., None]#/(1-damage)
 
     term1 = alpha * (pds - p_eff)
 
@@ -180,12 +216,12 @@ def isotropic_creep_damage_source_function(ny, nx, dy, dx,
                                                        mucoef_0, temp_cc=temp_cc)
     def source_term(q, u, v, damage, z_coords):
 
-        dst = dst_function(q, u, v, z_coords[..., -1] - z_coords[..., 0])
+        dst = dst_function(q*0, u, v, z_coords[..., -1] - z_coords[..., 0])
 
         #3D field
         hayhurst_stress = hayhurst_stress_fct(dst, damage, z_coords)
 
-        #plt.imshow(hayhurst_stress[:,:,-1])
+        #plt.imshow(vertically_average(hayhurst_stress, z_coords))
         #plt.colorbar()
         #plt.show()
         #plt.close()
@@ -206,7 +242,8 @@ def make_isotropic_creep_damage_stepper(nx, ny, dx, dy,
                                         cc_gradient,
                                         mucoef_0,
                                         method="PPM",
-                                        temp_cc=None):
+                                        temp_cc=None,
+                                        max_n_shrinks=6):
 
     layered_advection_stepper = make_layered_advection_stepper(
         nx, ny, dx, dy, interp_cc_to_fc,
@@ -224,6 +261,11 @@ def make_isotropic_creep_damage_stepper(nx, ny, dx, dy,
 
     def icd_stepper(q, u, v, damage, z_coords, delta_t):
         source = source_fct(q, u, v, damage, z_coords)
+        
+        #plt.imshow(vertically_average(source, z_coords))
+        #plt.colorbar()
+        #plt.show()
+        #plt.close()
 
         ice_mask = jnp.where((z_coords[..., -1] - z_coords[..., 0])>1e-3, 1, 0)[..., None]
         
@@ -239,13 +281,13 @@ def make_isotropic_creep_damage_stepper(nx, ny, dx, dy,
             return jnp.minimum(c.dmg.D_max, damage_trial)*ice_mask
         
         def dD(damage_trial):
-            va_damage = vertically_average_damage(damage_trial, z_coords)
+            va_damage = vertically_average(damage_trial, z_coords)
             return jnp.max(jnp.abs(va_damage - va_damage_init))
 
         def conditional_(state):
             _, _, n_shrinks, dD_val = state
             #jax.debug.print("dD: {x}", x=dD_val)
-            return (dD_val >= c.dmg.dD_max)
+            return (dD_val >= c.dmg.dD_max) & (n_shrinks<max_n_shrinks)
 
         def loop_body(state):
             _, dt, n_shrinks, _ = state
@@ -279,6 +321,7 @@ def make_isotropic_creep_damage_stepper(nx, ny, dx, dy,
         va_damage_final = jnp.where(va_damage_final>c.dmg.vaD_cr, c.dmg.vaD_max, va_damage_final)
         
         jax.debug.print("max vertically averaged damage: {x}", x=jnp.max(va_damage_final))
+        jax.debug.print("n shrinks used: {x}", x=n_shrinks)
 
         #plt.imshow(damage[:,:,-1])
         #plt.colorbar()

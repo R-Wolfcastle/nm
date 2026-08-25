@@ -56,7 +56,7 @@ P_SCALING = 7.8e-8           # Temperature equiv increase with pressure (K Pa^-1
 #Huth and Duddu epdf/10.1029/2020MS002292
 
 class dmg:
-    r                   = 1.43
+    r                   = 0.43
     B_STAR              = ((5.23e-7)/(1e6**r))*31_557_600 #Pa^-r a^-1
     k_STAR              = 4
     alpha               = 0.21
@@ -65,7 +65,7 @@ class dmg:
     sigma_th            = 0.12e6                          #Pa
     #sigma_th            = 0                              #Pa
     dD_max              = 0.075                           #a^-1
-    dt_shrink_factor    = 1.5
+    dt_shrink_factor    = 2
     delta_1             = 1.8
     delta_2             = 0.05
     D_cr                = 0.6
