@@ -19,6 +19,7 @@ import constants_years as c
 from vertical_grid import *
 from plotting_stuff import show_vel_field, show_vel_field_2, make_plot_mismip_field_function
 from grid import add_ghost_cells_fcts, cc_gradient_function, interp_cc_with_ghosts_to_fc_function
+from vertical_grid import vertically_average
 
 sys.path.insert(1, os.path.join(nm_home, 'solvers'))
 from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,\
@@ -35,12 +36,14 @@ from nonlinear_solvers import make_picnewton_velocity_solver_function_full_cvjp,
 from standard_domains import mismip_domain, mismip_domain_symm, ice_shelf
 
 sys.path.insert(1, os.path.join(nm_home, 'physics'))
-from damage import nye_vertical_damage_function, nye_vertical_damage_surfandbase_function
+from damage import nye_vertical_damage_function,\
+                   nye_vertical_damage_surfandbase_function,\
+                   make_isotropic_creep_damage_stepper
 
 
 
 resolution = 1000
-n_levels = 100
+n_levels = 50
 n_pic_iterations = 50
 n_newt_iterations = 50
 max_n_diva_iterations = 40
@@ -61,6 +64,7 @@ thk = jnp.load(
 )
     
 
+temp_field = jnp.zeros_like(thk) + 265.43
 
 
 #(
@@ -97,7 +101,7 @@ def ssa_momentum_and_advection():
     return make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
         nr, nc, delta_y, delta_x, b,
         n_pic_iterations, n_newt_iterations,
-        mucoef_0, C_0, sliding="schoof", temperature_field=None,
+        mucoef_0, C_0, sliding="schoof", temperature_field=temp_field,
         adv_method="PPM")
 
 vel_solver, adv_stepper = ssa_momentum_and_advection()
@@ -106,83 +110,178 @@ add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(nr, nc, period
 cc_gradient                                = cc_gradient_function(delta_y, delta_x)
 interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(nr, nc)
 
-damage_adv_stepper = make_advection_stepper(nc, nr, delta_x, delta_y,
-                                            interp_cc_to_fc,
-                                            add_uv_ghost_cells,
-                                            add_scalar_ghost_cells,
-                                            method="PPM",
-                                            conservative=False)
-
-damage_maker = nye_vertical_damage_surfandbase_function(nr, nc, delta_y, delta_x,
-                                            add_uv_ghost_cells,
-                                            add_scalar_ghost_cells,
-                                            cc_gradient,
-                                            mucoef_0,
-                                            temp_cc=None)
-#damage_maker = nye_vertical_damage_function(nr, nc, delta_y, delta_x,
-#                                            add_uv_ghost_cells,
-#                                            add_scalar_ghost_cells,
-#                                            cc_gradient,
-#                                            mucoef_0,
-#                                            temp_cc=None)
-                                            
-
-damage = jnp.zeros_like(thk)+0.01
-#damage = damage.at[30:, -70:-65].set(0.75)
-
-u, v = jnp.zeros_like(thk), jnp.zeros_like(thk)
-
-h = thk
-
-ice_mask = jnp.where(h>0, 1, 0)
-
-outdir = f"{nm_home}/bits_of_data/damage_figures/mismip/5/"
-os.makedirs(outdir, exist_ok=True)
-
-t_cum = 0
-for i in range(200):
-
-    #plot_mismip_field(damage, h, vmin=0, vmax=1, cmap="gnuplot2_r",
-    #                  cbar_label="Damage", filepath=f"{outdir}/dam{i}.png",
-    #                  title=f"Damage {t_cum:.2f} years"
-    #                  )
-    plot_mismip_field(damage, h, vmin=0, vmax=0.9, cmap="RdBu_r",
-                      cbar_label="Damage", filepath=f"{outdir}/dam{i}.png",
-                      title=f"Damage {t_cum:.2f} years"
-                      )
-
-    #plt.imshow(damage, vmin=0, vmax=1, cmap="gnuplot2_r")
-    #plt.colorbar()
-    #plt.title(f"Damage {t_cum:.2f} years")
-    #plt.savefig(f"{outdir}/dam{i}.png")
-    #plt.close()    
+def nye(outdir):
+    damage_adv_stepper = make_advection_stepper(nc, nr, delta_x, delta_y,
+                                                interp_cc_to_fc,
+                                                add_uv_ghost_cells,
+                                                add_scalar_ghost_cells,
+                                                method="PPM",
+                                                conservative=False)
     
-    q = jnp.log((1-damage)/mucoef_0)
+    damage_maker = nye_vertical_damage_surfandbase_function(nr, nc, delta_y, delta_x,
+                                                add_uv_ghost_cells,
+                                                add_scalar_ghost_cells,
+                                                cc_gradient,
+                                                mucoef_0,
+                                                temp_cc=None)
+    #damage_maker = nye_vertical_damage_function(nr, nc, delta_y, delta_x,
+    #                                            add_uv_ghost_cells,
+    #                                            add_scalar_ghost_cells,
+    #                                            cc_gradient,
+    #                                            mucoef_0,
+    #                                            temp_cc=None)
+                                                
+    
+    damage = jnp.zeros_like(thk)+0.01
+    #damage = damage.at[30:, -70:-65].set(0.75)
+    
+    u, v = jnp.zeros_like(thk), jnp.zeros_like(thk)
+    
+    h = thk
+    
+    ice_mask = jnp.where(h>0, 1, 0)
+    
+    os.makedirs(outdir, exist_ok=True)
 
-    #if i==0:
-    u, v = vel_solver(q, p, u, v, h)
-   
-    plot_mismip_field(jnp.sqrt(u**2 + v**2), h, cmap="RdYlBu_r", vmin=0, vmax=4000,
-                      cbar_label="Speed (m a^-1)", filepath=f"{outdir}/speed{i}.png",
-                      title=f"Speed {t_cum:.2f} years"
-                      )
+    t_cum = 0
+    for i in range(200):
+    
+        #plot_mismip_field(damage, h, vmin=0, vmax=1, cmap="gnuplot2_r",
+        #                  cbar_label="Damage", filepath=f"{outdir}/dam{i}.png",
+        #                  title=f"Damage {t_cum:.2f} years"
+        #                  )
+        plot_mismip_field(damage, h, vmin=0, vmax=0.9, cmap="RdBu_r",
+                          cbar_label="Damage", filepath=f"{outdir}/dam{i}.png",
+                          title=f"Damage {t_cum:.2f} years"
+                          )
+    
+        #plt.imshow(damage, vmin=0, vmax=1, cmap="gnuplot2_r")
+        #plt.colorbar()
+        #plt.title(f"Damage {t_cum:.2f} years")
+        #plt.savefig(f"{outdir}/dam{i}.png")
+        #plt.close()    
+        
+        q = jnp.log((1-damage)/mucoef_0)
+    
+        #if i==0:
+        u, v = vel_solver(q, p, u, v, h)
+       
+        plot_mismip_field(jnp.sqrt(u**2 + v**2), h, cmap="RdYlBu_r", vmin=0, vmax=4000,
+                          cbar_label="Speed (m a^-1)", filepath=f"{outdir}/speed{i}.png",
+                          title=f"Speed {t_cum:.2f} years"
+                          )
+    
+        #plt.imshow(jnp.sqrt(u**2 + v**2 ), cmap="RdYlBu_r", vmin=0, vmax=5000)
+        #plt.colorbar()
+        #plt.title(f"Speed {t_cum:.2f} years")
+        #plt.savefig(f"{outdir}/speed{i}.png")
+        #plt.close()    
+    
+        z_coords = define_z_coordinates(b, h, n_levels)
+        
+        delta_t = 0.95*(delta_x/jnp.max(jnp.sqrt(u**2 + v**2)))
+        t_cum += delta_t
+    
+        damage_adv = damage_adv_stepper(u.reshape(-1), v.reshape(-1), damage.reshape(-1), source=0, delta_t=delta_t)
+        damage = damage_maker(q, u, v, z_coords)
+        
+        #damage = damage_adv
+        damage = jnp.minimum(jnp.maximum(damage, damage_adv)*ice_mask, c.dmg.vaD_max)
+    
+        h = adv_stepper(u.reshape(-1), v.reshape(-1), h.reshape(-1), source=0, delta_t=delta_t)
+        ice_mask = jnp.where(h>0, 1, 0)
 
-    #plt.imshow(jnp.sqrt(u**2 + v**2 ), cmap="RdYlBu_r", vmin=0, vmax=5000)
-    #plt.colorbar()
-    #plt.title(f"Speed {t_cum:.2f} years")
-    #plt.savefig(f"{outdir}/speed{i}.png")
-    #plt.close()    
+
+def creep_damage(outdir):
+    damage_stepper = make_isotropic_creep_damage_stepper(nc, nr, delta_x, delta_y,
+                                                         interp_cc_to_fc,
+                                                         add_uv_ghost_cells,
+                                                         add_scalar_ghost_cells,
+                                                         cc_gradient,
+                                                         mucoef_0,
+                                                         method="PPM",
+                                                         temp_cc=temp_field)   
+
+    
+    u, v = jnp.zeros_like(thk), jnp.zeros_like(thk)
+    h = thk
+
+    damage = jnp.zeros((nr, nc, n_levels))+0.01
+
+    #damage = damage.at[-20:, -140:-136, :].set(0.5)
 
     z_coords = define_z_coordinates(b, h, n_levels)
+    va_damage = vertically_average(damage, z_coords)
     
-    delta_t = 0.95*(delta_x/jnp.max(jnp.sqrt(u**2 + v**2)))
-    t_cum += delta_t
-
-    damage_adv = damage_adv_stepper(u.reshape(-1), v.reshape(-1), damage.reshape(-1), source=0, delta_t=delta_t)
-    damage = damage_maker(q, u, v, z_coords)
-    
-    #damage = damage_adv
-    damage = jnp.minimum(jnp.maximum(damage, damage_adv)*ice_mask, 0.9)
-
-    h = adv_stepper(u.reshape(-1), v.reshape(-1), h.reshape(-1), source=0, delta_t=delta_t)
     ice_mask = jnp.where(h>0, 1, 0)
+    
+    os.makedirs(outdir, exist_ok=True)
+
+    t_cum = 0
+    for i in range(200):
+    
+        plot_mismip_field(va_damage, h, vmin=0, vmax=0.9, cmap="RdBu_r",
+                          cbar_label="Damage", filepath=f"{outdir}/dam{i}.png",
+                          title=f"Damage {t_cum:.2f} years"
+                          )
+       
+        plt.close()
+
+        #plt.imshow(damage, vmin=0, vmax=1, cmap="gnuplot2_r")
+        #plt.colorbar()
+        #plt.title(f"Damage {t_cum:.2f} years")
+        #plt.savefig(f"{outdir}/dam{i}.png")
+        #plt.close()    
+        
+        q = jnp.log((1-va_damage)/mucoef_0)
+    
+        #if i==0:
+        u, v = vel_solver(q, p, u, v, h)
+       
+        plot_mismip_field(jnp.sqrt(u**2 + v**2), h, cmap="RdYlBu_r", vmin=0, vmax=2000,
+                          cbar_label="Speed (m a^-1)", filepath=f"{outdir}/speed{i}.png",
+                          title=f"Speed {t_cum:.2f} years"
+                          )
+        plt.close()
+        #plt.imshow(jnp.sqrt(u**2 + v**2 ), cmap="RdYlBu_r", vmin=0, vmax=5000)
+        #plt.colorbar()
+        #plt.title(f"Speed {t_cum:.2f} years")
+        #plt.savefig(f"{outdir}/speed{i}.png")
+        #plt.close()    
+    
+        delta_t = 0.95*(delta_x/jnp.max(jnp.sqrt(u**2 + v**2)))
+    
+        damage, va_damage, delta_t_used = damage_stepper(q, u, v, damage, z_coords, delta_t)
+        t_cum += delta_t_used
+   
+        #va_damage = vertically_average(damage, z_coords)
+
+        h = adv_stepper(u.reshape(-1), v.reshape(-1), h.reshape(-1), source=0, delta_t=delta_t)
+        ice_mask = jnp.where(h>0, 1, 0)
+
+        #plot_mismip_field(h-thk, h, cmap="RdBu_r", vmin=-10, vmax=10,
+        #                  cbar_label="Thickness change (m)", filepath=f"{outdir}/dthk{i}.png",
+        #                  title=f"Thickness Change {t_cum:.2f} years"
+        #                  )
+        plt.close()
+
+        #plot_mismip_field(jnp.where((h+b)>(h*(1-c.RHO_I/c.RHO_W)),1,0), h,
+        #                  cbar_label="Grounded", filepath=f"{outdir}/gnd{i}.png",
+        #                  title=f"grounded{t_cum:.2f} years"
+        #                  )
+        
+
+        z_coords_new = define_z_coordinates(b, h, n_levels)
+
+        damage = interp_field_onto_new_zs(damage, z_coords, z_coords_new)
+
+        z_coords = z_coords_new
+
+
+outdir = f"{nm_home}/bits_of_data/damage_figures/mismip/9/"
+creep_damage(outdir)
+
+
+
+
+

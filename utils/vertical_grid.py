@@ -96,8 +96,8 @@ def interp_field_onto_new_zs(field, zs, zs_new):
     flat_zs = zs.reshape(-1, nz)
     flat_zs_new = zs_new.reshape(-1, nz)
 
-    # Vectorize over spatial dimension(s)
-    interp_fn = vmap(interp_single_cell, in_axes=(0, 0, 0))
+    #Vectorize over spatial dimension(s)
+    interp_fn = jax.vmap(interp_single_cell, in_axes=(0, 0, 0))
     return interp_fn(flat_field, flat_zs, flat_zs_new).reshape(ny, nx, nz)
 
 

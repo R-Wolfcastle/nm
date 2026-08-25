@@ -649,43 +649,98 @@ def show_field_scaled(field, x, y, ax=None,
 
     return ax, im
 
+#def make_plot_mismip_field_function(b, x, y, reflect=True, y_exaggeration=2.0):
+#    def plot_mismip_field(field, thk, ax=None,
+#                          cmap="viridis", vmin=None, vmax=None,
+#                          cbar_label=None, title=None,
+#                          xlabel="x (km)", ylabel="y (km)", figsize=(10, 4),
+#                          gl_color="k", filepath=None):
+#
+#        ax, im = show_field_scaled(field[::-1,:], x, y, ax=ax, cmap=cmap,
+#                                   vmin=vmin, vmax=vmax,
+#                                   cbar_label=cbar_label,
+#                                   title=title, y_exaggeration=y_exaggeration,
+#                                   xlabel=xlabel, ylabel=ylabel,
+#                                   figsize=figsize, reflect=reflect)
+#
+#        xGL, yGL = extract_grounding_line(thk, b, x, y)
+#
+#        if len(xGL):
+#            xGL = np.asarray(xGL)
+#            yGL = np.asarray(yGL)[::-1]
+#
+#            if reflect:
+#                # mirror the GL points across the top boundary too
+#                xGL = np.concatenate([xGL, xGL])
+#                yGL = np.concatenate([yGL, 2 * y[-1] - yGL])
+#
+#            order = np.argsort(yGL)
+#            ax.plot(
+#                xGL[order] / 1e3,
+#                yGL[order] / 1e3,
+#                gl_color + "--",
+#                lw=1.5,
+#            )
+#
+#        if filepath is not None:
+#            fig = ax.figure
+#            fig.savefig(filepath, bbox_inches="tight", dpi=300)
+#            if ax is None:
+#                plt.close(fig)
+#
+#        return ax, im
+#    return plot_mismip_field
+
+
 def make_plot_mismip_field_function(b, x, y, reflect=True, y_exaggeration=2.0):
+    x = np.asarray(x)
+    y = np.asarray(y)
+    b = np.asarray(b)
+
     def plot_mismip_field(field, thk, ax=None,
                           cmap="viridis", vmin=None, vmax=None,
                           cbar_label=None, title=None,
                           xlabel="x (km)", ylabel="y (km)", figsize=(10, 4),
                           gl_color="k", filepath=None):
 
-        ax, im = show_field_scaled(field[::-1,:], x, y, ax=ax, cmap=cmap,
-                                   vmin=vmin, vmax=vmax,
-                                   cbar_label=cbar_label,
-                                   title=title, y_exaggeration=y_exaggeration,
-                                   xlabel=xlabel, ylabel=ylabel,
-                                   figsize=figsize, reflect=reflect)
+        field = np.asarray(field)
+        thk = np.asarray(thk)
 
-        xGL, yGL = extract_grounding_line(thk, b, x, y)
+        f = (thk + b) - thk * (1 - c.RHO_I / c.RHO_W)
 
-        if len(xGL):
-            xGL = np.asarray(xGL)
-            yGL = np.asarray(yGL)[::-1]
+        if reflect:
+            field_plot, y_plot = _reflect_domain(field[::-1, :], y)
+            f_plot, _ = _reflect_domain(f[::-1, :], y)
+        else:
+            field_plot, y_plot = field, y
+            f_plot = f
 
-            if reflect:
-                # mirror the GL points across the top boundary too
-                xGL = np.concatenate([xGL, xGL])
-                yGL = np.concatenate([yGL, 2 * y[-1] - yGL])
+        own_fig = ax is None
+        if own_fig:
+            fig, ax = plt.subplots(figsize=figsize)
 
-            order = np.argsort(yGL)
-            ax.plot(
-                xGL[order] / 1e3,
-                yGL[order] / 1e3,
-                gl_color + "--",
-                lw=1.5,
-            )
+        extent = [x[0] / 1e3, x[-1] / 1e3, y_plot[0] / 1e3, y_plot[-1] / 1e3]
+        im = ax.imshow(field_plot, origin="upper", extent=extent, cmap=cmap,
+                        vmin=vmin, vmax=vmax, aspect=y_exaggeration)
+
+        X, Y = np.meshgrid(x / 1e3, y_plot / 1e3)
+        ax.contour(X, Y, f_plot, levels=[0.0], colors=gl_color,
+                   linewidths=1.5, linestyles="--")
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        if title:
+            ax.set_title(title)
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+        if cbar_label:
+            cbar.set_label(cbar_label)
+        if own_fig:
+            plt.tight_layout()
 
         if filepath is not None:
             fig = ax.figure
             fig.savefig(filepath, bbox_inches="tight", dpi=300)
-            if ax is None:
+            if own_fig:
                 plt.close(fig)
 
         return ax, im

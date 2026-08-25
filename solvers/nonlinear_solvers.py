@@ -1348,8 +1348,8 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
         print("----------")
 
         #################### NEWTON PHASE ####################
-        # explicit reset -- avoids any ambiguity about phase-boundary state,
-        # even though print_residual_things self-resets init_res at i==0 anyway
+        #explicit reset (avoids any ambiguity about phase-boundary state,
+        #even though print_residual_things self-resets init_res at i==0 anyway)
         residual = jnp.inf
         init_res = 0
         print("NEWTON")
@@ -2122,12 +2122,12 @@ def make_diva3d_solver_cvjp_new(ny, nx, dy, dx, n_levels,
     #    y_u, y_v = y[:ny*nx], y[ny*nx:]
     #
     #    # J^T lambda = -y_bar, reusing the SAME assembled matrix from the fwd
-    #    # pass -- no second sparse_jacrev on anything containing la_solver
+    #    # pass- no second sparse_jacrev on anything containing la_solver
     #    lam = la_solver(nz_jac_values, -y_bar, transpose=True)
     #    lam_u, lam_v = lam[:ny*nx], lam[ny*nx:]
     #
     #    # ordinary (plain, single) vjp of the smooth residual w.r.t. its
-    #    # coefficient args, evaluated AT the solution y -- no sparse_jacrev,
+    #    # coefficient args, evaluated AT the solution y - no sparse_jacrev,
     #    # no vmap, just one reverse-mode pass through a function with no la_solver in it
     #    _, pullback_fn = jax.vjp(
     #        lambda h_, mu_ew_, mu_ns_, beta_eff_: get_uv_residuals_linear_ssa(
@@ -4757,22 +4757,22 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
 def make_layered_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                            add_uv_ghost_cells, add_s_ghost_cells,
                            method="PPM", conservative=True):
+    #For case in which field is of shape (ny, nx, n_levels)
     def advection_step(u_1d, v_1d, h_1d, field, source=0, delta_t=0.08):
-        #field: (ny, nx, n_levels) -- e.g. the 3-D damage field
         u = u_1d.reshape((ny, nx))
         v = v_1d.reshape((ny, nx))
         h = h_1d.reshape((ny, nx))
+        
         u_full, v_full = add_uv_ghost_cells(u, v)
         h_full = add_s_ghost_cells(h)
+        
         u_full = linear_extrapolate_over_cf_dynamic_thickness(u_full, h_full)
         v_full = linear_extrapolate_over_cf_dynamic_thickness(v_full, h_full)
+        
         u_fc_ew, _ = interp_cc_to_fc(u_full)
         _, v_fc_ns = interp_cc_to_fc(v_full)
 
-        #ghost cells + calving-front extrapolation for the field, per layer.
-        #note: extrapolation reference is the real ice thickness h_full, not
-        #the field itself (unlike the original h_full = extrap(h_full, h_full)
-        #call, which was fine there only because h_full *was* the reference)
+        
         field_full = jax.vmap(add_s_ghost_cells, in_axes=-1, out_axes=-1)(field)
         field_full = jax.vmap(linear_extrapolate_over_cf_dynamic_thickness,
                                in_axes=(-1, None), out_axes=-1)(field_full, h_full)
@@ -4783,17 +4783,23 @@ def make_layered_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                 field_fc_fou_ns = jnp.where(v_fc_ns>0, field_full_layer[1:, 1:-1], field_full_layer[-1:,1:-1])
                 return (u_fc_ew[:,1:]*field_fc_fou_ew[:,1:] - u_fc_ew[:,:-1]*field_fc_fou_ew[:,:-1])*dy*delta_t +\
                        (v_fc_ns[:-1,:]*field_fc_fou_ns[:-1,:] - v_fc_ns[1:,:]*field_fc_fou_ns[1:,:])*dx*delta_t
+            
             flux_term = jax.vmap(fou_flux, in_axes=-1, out_axes=-1)(field_full)
+        
         elif method=="PPM":
             def ppm_flux(field_full_layer):
                 flux_x = ppm_flux_x(field_full_layer[1:-1,:], u_full[1:-1,:], dx, delta_t)
                 flux_y = ppm_flux_y(field_full_layer[:,1:-1], v_full[:,1:-1], dy, delta_t)
-                return (
-                    (flux_x[:,1:] - flux_x[:,:-1]) * dy * delta_t
-                    +
-                    (flux_y[:-1,:] - flux_y[1:,:]) * dx * delta_t
-                )
+                return ( (flux_x[:,1:] - flux_x[:,:-1]) * dy * delta_t +\
+                         (flux_y[:-1,:] - flux_y[1:,:]) * dx * delta_t
+                       )
+            
             flux_term = jax.vmap(ppm_flux, in_axes=-1, out_axes=-1)(field_full)
+
+        else:
+            raise ValueError(
+                f"Advection method specifid ({method}) not in [FOU, PPM]"
+            )
 
         if not conservative:
             dudx = (
@@ -4811,7 +4817,9 @@ def make_layered_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
 
         #to keep calving front in same location, prevent any flux into or out of ice-free cells!
         flux_term = jnp.where(h[..., None]>0, flux_term, 0)
+
         return jnp.maximum(field + source*delta_t - flux_term/(dy*dx), 0.0)
+
     return jax.jit(advection_step)
 
 

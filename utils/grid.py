@@ -1546,7 +1546,8 @@ def beta_function(b, mode="linear", C_scaling_function=None, u0=300):
 #    return jax.jit(beta)
 
 def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
-                               extrp_over_cf, add_uv_ghost_cells,
+                               extrp_over_cf,
+                               add_uv_ghost_cells,
                                add_s_ghost_cells,
                                cc_gradient, mucoef_0,
                                temp_cc=None):
@@ -1599,6 +1600,99 @@ def cc_resistive_and_deviatoric_stress_tensors(ny, nx, dy, dx,
 
 
     return jax.jit(randd_stress)
+
+
+def cc_deviatoric_stress_tensor_cf_safe(ny, nx, dy, dx,
+                               add_uv_ghost_cells,
+                               add_s_ghost_cells,
+                               cc_gradient, mucoef_0,
+                               temp_cc=None):
+    if temp_cc==None:
+        temp_cc = jnp.zeros((ny,nx))+263.15
+
+    B_cc = B_from_T(temp_cc)
+
+    @jax.jit
+    def linear_extrap_vel_component_over_cf(cc_field, ice_mask, best_k,
+                                            cf_adjacent_flat, cf_adjacent_corners,
+                                            has_1_facing):
+        cc_field = cc_field*ice_mask
+
+        u1, u2 = stack_safe_shifted(cc_field)
+        u1_uni = stack_safe_shifted_single_facing(cc_field)
+ 
+        #NEW VERSION
+        #slicing by best_k, but remember best_k is same dim as thk etc
+        u1_choice = jnp.take_along_axis(u1, best_k[None, ...], axis=0)[0]
+        u2_choice = jnp.take_along_axis(u2, best_k[None, ...], axis=0)[0]
+
+        ## LINEAR EXTRAP
+        cc_field_extrapolated = cc_field\
+                                         + cf_adjacent_flat*\
+                                                (2*u1_choice - u2_choice)\
+                                         + cf_adjacent_corners*\
+                    jnp.sum(u1_uni, axis=0)/(jnp.sum(has_1_facing, axis=0)+1e-6)
+
+        return cc_field_extrapolated
+
+
+    @jax.jit
+    def linmean_extrapolate_vel_over_cf(u, v, h):
+
+        ice_mask = (h>0.1)
+        
+        cf_adjacent_zero_ice_cells = cf_adjacent_cells_8_connected(ice_mask)
+        
+        has_1_facing = stack_safe_shifted_single_facing(ice_mask)
+        at_least_2_facing = (jnp.sum(has_1_facing, axis=0)>1)
+        
+        cf_adjacent_flat = cf_adjacent_zero_ice_cells & ~at_least_2_facing
+        cf_adjacent_corners = cf_adjacent_zero_ice_cells & at_least_2_facing
+
+        has_1, has_2 = stack_safe_shifted(ice_mask)
+        score = has_1.astype(jnp.int32) + has_2.astype(jnp.int32)
+        # Pick best direction
+        best_k = jnp.argmax(score, axis=0)
+
+        u = linear_extrap_vel_component_over_cf(u, ice_mask, best_k,
+                                                cf_adjacent_flat, cf_adjacent_corners,
+                                                has_1_facing)
+        v = linear_extrap_vel_component_over_cf(v, ice_mask, best_k,
+                                                cf_adjacent_flat, cf_adjacent_corners,
+                                                has_1_facing)
+
+        return u, v
+
+    def dev_stress(q, u, v, h):
+        mucoef = mucoef_0*jnp.exp(q)
+        
+        u = u.reshape((ny, nx))
+        v = v.reshape((ny, nx))
+
+        u, v = linmean_extrapolate_vel_over_cf(u, v, h)
+        #and add the ghost cells in
+        u, v = add_uv_ghost_cells(u, v)
+
+        dudx, dudy = cc_gradient(u)
+        dvdx, dvdy = cc_gradient(v)
+
+        #calculate face-centred viscosity:
+        mu = B_cc * mucoef * (dudx**2 + dvdy**2 + dudx*dvdy +\
+                    0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+        #mu = B_cc * (dudx**2 + dvdy**2 + dudx*dvdy +\
+        #            0.25*(dudy+dvdx)**2 + c.EPSILON_VISC**2)**(0.5*(1/c.GLEN_N - 1))
+
+
+        tau_xx = 2 * mu * dudx
+        tau_yy = 2 * mu * dvdy
+        tau_xy = mu * (dudy + dvdx)
+
+        return jnp.stack([
+            jnp.stack([tau_xx, tau_xy], axis=-1),
+            jnp.stack([tau_xy, tau_yy], axis=-1)
+        ], axis=-2)
+
+    return jax.jit(dev_stress)
 
 
 def principal_resistive_stress_function(ny, nx, dy, dx,
