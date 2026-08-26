@@ -701,7 +701,8 @@ def make_plot_mismip_field_function(b, x, y, reflect=True, y_exaggeration=2.0):
                           cmap="viridis", vmin=None, vmax=None,
                           cbar_label=None, title=None,
                           xlabel="x (km)", ylabel="y (km)", figsize=(10, 4),
-                          gl_color="k", filepath=None):
+                          gl_color="k", filepath=None,
+                          reflect_gl_y=False):
 
         field = np.asarray(field)
         thk = np.asarray(thk)
@@ -724,7 +725,11 @@ def make_plot_mismip_field_function(b, x, y, reflect=True, y_exaggeration=2.0):
                         vmin=vmin, vmax=vmax, aspect=y_exaggeration)
 
         X, Y = np.meshgrid(x / 1e3, y_plot / 1e3)
-        ax.contour(X, Y, f_plot, levels=[0.0], colors=gl_color,
+        if reflect_gl_y:
+            ax.contour(X, Y[::-1, :], f_plot, levels=[0.0], colors=gl_color,
+                   linewidths=1.5, linestyles="--")
+        else:
+            ax.contour(X, Y, f_plot, levels=[0.0], colors=gl_color,
                    linewidths=1.5, linestyles="--")
 
         ax.set_xlabel(xlabel)

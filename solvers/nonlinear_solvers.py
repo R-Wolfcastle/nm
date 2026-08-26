@@ -7483,7 +7483,7 @@ def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt(
                                                  adv_method="PPM",
                                                  sliding="linear",
                                                  pic_reduction_tol=1e-3,
-                                                 newton_tol=1e-1,
+                                                 newton_tol=1e0,
                                                  periodic=False, B_field=None,
                                                  temperature_field=None,
                                                  newton_max_backtracks=32):
