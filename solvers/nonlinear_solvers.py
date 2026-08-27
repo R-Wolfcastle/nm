@@ -1144,7 +1144,7 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
                                            periodic=False,
                                            temperature_field=None,
                                            pic_reduction_tol=5e-3,
-                                           newton_tol=5e-2,
+                                           newton_tol=5e-3,
                                            newton_max_backtracks=0,
                                            y_symmetric_problem=False):
     """

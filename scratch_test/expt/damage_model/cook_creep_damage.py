@@ -26,10 +26,13 @@ sys.path.insert(1, os.path.join(nm_home, 'physics'))
 from damage import make_isotropic_creep_damage_stepper
 
 
-in_dir  = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_data_wpp/500m_res/"
-out_dir = "/Users/eartsu/new_model/testing/nm/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
-res = 500
+#in_dir  = f"{nm_home}/bits_of_data/COOKING_TEA_BREAK/annual_ip_data_wpp/500m_res/"
+#out_dir = f"{nm_home}/bits_of_data/COOKING_TEA_BREAK/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
 
+in_dir = f"/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_data_wpp/500m_res/"
+out_dir = f"/uolstore/Research/b/b0133/eartsu/new_model_misc/cook_study/annual_ip_out_wpp/30000.0_0.2_0.002_0.0001_lambda0.0008_50its_measuresCprior/500m_res/"
+
+res = 500
 
 def define_cook_problem(year):
     with xr.open_dataset(f"{in_dir}/{year}.nc") as nc_file:
@@ -98,7 +101,7 @@ damage_stepper = make_isotropic_creep_damage_stepper(nc, nr, delta_x, delta_y,
                                                      mucoef_0,
                                                      method="PPM")
 
-outdir = f"{nm_home}/bits_of_data/damage_figures/cook_creep/2/"
+outdir = f"{nm_home}/bits_of_data/damage_figures/cook_creep/8/"
 os.makedirs(outdir, exist_ok=True)
 
 
@@ -114,16 +117,17 @@ def initialize_damage_from_va(va_damage, D_background=0.01, D_max=c.dmg.D_max):
 u, v = jnp.zeros_like(thk), jnp.zeros_like(thk)
 h = thk
 
-#damage = jnp.zeros((nr, nc, n_levels)) + 0.01
+z_coords = define_z_coordinates(b, h, n_levels)
+
+
 va_damage = 1-mucoef_0*jnp.exp(q)
 damage = initialize_damage_from_va(va_damage)
 
-
-z_coords = define_z_coordinates(b, h, n_levels)
+#damage = jnp.zeros((nr, nc, n_levels)) + 0.01
 #va_damage = vertically_average(damage, z_coords)
 
 t_cum = 0
-for i in range(200):
+for i in range(1000):
     
     grounded = jnp.where((b+h)>(h*(1-c.RHO_I/c.RHO_W)), 1, 0)
 
