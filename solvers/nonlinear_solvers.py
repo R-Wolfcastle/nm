@@ -1144,7 +1144,8 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
                                            periodic=False,
                                            temperature_field=None,
                                            pic_reduction_tol=5e-3,
-                                           newton_tol=5e-3,
+                                           pic_tol=1e4,
+                                           newton_tol=1e-2,
                                            newton_max_backtracks=0,
                                            y_symmetric_problem=False):
     """
@@ -1157,13 +1158,13 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
 
     interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
     add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
-    hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
-    #hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
+    #hgrads_fct                                 = gl_unaware_driving_stress_function(dy, dx)
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
     #hgrads_fct                                 = gl_aware_driving_stress_analytic_LI_centred(dy, dx)
     
-    #grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
+    grounded_fraction_fct                      = make_grounded_fraction_function(add_scalar_ghost_cells)
     #grounded_fraction_fct                      = subgrid_gl_location_1d_x_grounded_fraction_centred
-    grounded_fraction_fct                      = None
+    #prounded_fraction_fct                      = None
 
     #hgrads_fct                                 = gl_aware_driving_stress_function_grounded_fraction(
     #                                                                            dy, dx,
@@ -1312,7 +1313,7 @@ def make_coupled_picnewton_solver_function(ny, nx, dy, dx,
                                                   residual, rhs, init_res, i
                                                                     )
 
-            if (residual/init_res) < pic_reduction_tol:
+            if (i>0) and (((residual/init_res) < pic_reduction_tol) or (residual < pic_tol)):
                 break
 
             du = la_solver(nz_jac_values, rhs)

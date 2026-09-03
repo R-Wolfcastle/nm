@@ -1410,7 +1410,15 @@ def make_grounded_fraction_function(add_s_ghost_cells, a=2):
                 haf_ne[:, :, None, None] * w_ne
                     )
 
-            return jnp.mean(haf_sub > 0, axis=(-2, -1))
+            grounded_sub = (haf_sub > 0).astype(int)
+            grounded_fraction = jnp.mean(haf_sub > 0, axis=(-2, -1))
+            
+            ##Soft
+            #grounded_sub = 0.5 * (1.0 + jnp.tanh(haf_sub/4))
+            #grounded_fraction = jnp.mean(grounded_sub, axis=(-2, -1))
+
+            return grounded_fraction
+            #return jax.lax.stop_gradient(grounded_fraction)
 
         return jax.jit(grounded_fraction)
 

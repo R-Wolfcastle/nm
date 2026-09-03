@@ -4,7 +4,7 @@
 import sys
 
 #local apps
-sys.path.insert(1, '../')
+#sys.path.insert(1, '../')
 from sparsity_utils import basis_vectors_etc, make_sparse_jacrev_fct, dodgy_coo_to_csr
 
 #3rd party
