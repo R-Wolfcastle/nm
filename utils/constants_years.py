@@ -73,7 +73,14 @@ class dmg:
     vaD_cr              = 0.8
     vaD_max             = 0.9
 
-
+    #### Anisotropic model additions ####
+    gamma               = 1.0     #anisotropy weight: 0=isotropic, 1=fully anisotropic
+    l_c                 = 1000.0  #nonlocal regularization length (m). Huth et al. use
+                                  #1-2 km, calibrated from seismicity clustering around
+                                  #a propagating Amery Ice Shelf rift (Bassis et al. 2007),
+                                  #NOT a Griffith/LEFM process-zone length!
+                                  #This is the size of the coarse-grained
+                                  #fracture-process-zone RVE, not a mesh-convergence knob.
 
 
 

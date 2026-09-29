@@ -4758,7 +4758,8 @@ def make_pic_velocity_solver_function_gpusafe(ny, nx, dy, dx,
 
 def make_layered_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
                            add_uv_ghost_cells, add_s_ghost_cells,
-                           method="PPM", conservative=True):
+                           method="PPM", conservative=True,
+                                   dont_allow_negative=True):
     #For case in which field is of shape (ny, nx, n_levels)
     def advection_step(u_1d, v_1d, h_1d, field, source=0, delta_t=0.08):
         u = u_1d.reshape((ny, nx))
@@ -4820,7 +4821,10 @@ def make_layered_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
         #to keep calving front in same location, prevent any flux into or out of ice-free cells!
         flux_term = jnp.where(h[..., None]>0, flux_term, 0)
 
-        return jnp.maximum(field + source*delta_t - flux_term/(dy*dx), 0.0)
+        if dont_allow_negative:
+            return jnp.maximum(field + source*delta_t - flux_term/(dy*dx), 0.0)
+        else:
+            return field + source*delta_t - flux_term/(dy*dx)
 
     return jax.jit(advection_step)
 
