@@ -967,7 +967,8 @@ if __name__ == "__main__":
 
     thk = jnp.load(
         f"{nm_home}/bits_of_data/mismip_plus_experiments/full_attepmt_schoof/ssa/ice0/"
-        f"thickness_WmSlidingC1e4_1km_res_HalfDomain_789.7538years.npy"
+        #f"thickness_WmSlidingC1e4_1km_res_HalfDomain_789.7538years.npy"
+        f"thickness_WmSlidingC1e4_1km_res_HalfDomain_5000.0000years.npy"
     )
 
     #resolution = 500
@@ -978,7 +979,7 @@ if __name__ == "__main__":
     #    C_0, mucoef_0, q,
     #    ice_mask, surface,
     #    grounded
-    #) = regrid_mismip_experiment(resolution, x_r, y_r, thk, half=True)
+    #) = regrid_mismip_experiment(resolution, x, y, thk, half=True)
    
     p = jnp.zeros_like(q)
 
@@ -1001,6 +1002,11 @@ if __name__ == "__main__":
                                         add_uv_ghost_cells, add_scalar_ghost_cells,
                                         method="PPM")
 
+
+
+    #GAMMA = c.dmg.gamma
+    GAMMA = 0.5
+
     damage_stepper = make_anisotropic_creep_damage_stepper(nc, nr, delta_x, delta_y,
                                                             interp_cc_to_fc,
                                                             add_uv_ghost_cells,
@@ -1009,8 +1015,9 @@ if __name__ == "__main__":
                                                             mucoef_0,
                                                             method="PPM",
                                                             temp_cc=temp_field,
-                                                            gamma=c.dmg.gamma,
+                                                            gamma=GAMMA,
                                                             l_c=c.dmg.l_c)
+
 
     u, v = jnp.zeros_like(thk), jnp.zeros_like(thk)
     h = thk
@@ -1026,7 +1033,7 @@ if __name__ == "__main__":
     D33_bar = jnp.zeros((nr, nc))
     z_coords = define_z_coordinates(b, h, n_levels)
 
-    outdir = f"{nm_home}/bits_of_data/damage_figures/mismip/22_anisotropic/"
+    outdir = f"{nm_home}/bits_of_data/damage_figures/mismip/26_anisotropic_gamma0pt5/"
     os.makedirs(outdir, exist_ok=True)
 
     t_cum = 0
@@ -1074,6 +1081,6 @@ if __name__ == "__main__":
         D33 = interp_field_onto_new_zs(D33, z_coords, z_coords_new)
         z_coords = z_coords_new
 
-        if t_cum>1.0:
+        if t_cum>0.5:
             break
 
