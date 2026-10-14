@@ -45,7 +45,9 @@ from cg import make_sparse_matvec, make_sparse_dpgc_solver_comp,\
                make_sparse_gs_precond_bicgstab_solver,\
                make_sparse_dpcg_solver_jsp_comp,\
                make_sparse_dpcg_solver_jsp_comp_fori
-
+from geometric_multigrid import make_stencil_gmg_solver,\
+                                transpose_for_adjoint,\
+                                stencil_from_residual
 
 def print_residual_things(residual, rhs, init_residual, i, print_=True):
     old_residual = residual
@@ -64,6 +66,505 @@ def print_residual_things(residual, rhs, init_residual, i, print_=True):
             init_residual = residual.copy()
 
     return old_residual, residual, init_residual
+
+
+
+def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_gmg(ny, nx, dy, dx,
+                                                 b, ice_mask,
+                                                 n_pic_iterations, n_newt_iterations,
+                                                 mucoef_0, C_0,
+                                                 adv_method="PPM",
+                                                 sliding="linear",
+                                                 periodic=False, B_field=None,
+                                                 temperature_field=None,
+                                                 linear_rtol=1e-8,
+                                                 adjoint_rtol=1e-10,
+                                                 gmres_restart=20,
+                                                 gmres_max_restarts=30,
+                                                 max_coarse_cells=1024,
+                                                 nu1=2, nu2=2, smoother="gs4",
+                                                 probe_batch_size=3,
+                                                 linear_solver="gmres",
+                                                 mg_cycles=8,
+                                                 verbose=True,
+                                                 return_advection_stepper=True):
+
+    if periodic:
+        raise NotImplementedError("I haven't implemented a GMG that support periodic domains yet. Massive pain.")
+
+    if temperature_field is None:
+        temperature_field = (jnp.zeros((ny,nx))+263.15)
+
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
+
+    #Every field the physics depends on is passed into the jitted functions as an
+    #ordinary argument, never captured by a closure. A captured array becomes a
+    #constant baked into the compiled program, and XLA folds operations on it into
+    #more constants: at large grid sizes that adds gigabytes to the GPU binary. A
+    #right bloody memory nightmare
+    fields = dict(b=jnp.asarray(b), ice_mask=jnp.asarray(ice_mask),
+                  mucoef_0=jnp.asarray(mucoef_0), C_0=jnp.asarray(C_0),
+                  temperature_field=jnp.asarray(temperature_field))
+
+    def build_physics(f):
+        """Physics as in make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap,
+        built from (traced) fields ("f") inside the jitted functions.
+        """
+        b, ice_mask = f["b"], f["ice_mask"]
+        fc_velocity_gradient = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
+                                                          ice_mask, add_uv_ghost_cells,
+                                                          add_scalar_ghost_cells)
+        viscosity_fct = fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx,
+                                                   add_uv_ghost_cells, add_scalar_ghost_cells,
+                                                   interp_cc_to_fc, fc_velocity_gradient,
+                                                   ice_mask, f["mucoef_0"], f["temperature_field"])
+        grounded_fraction = make_grounded_fraction_function(add_scalar_ghost_cells)
+        beta_fct          = beta_function(b, sliding, grounded_fraction)
+        lin = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(
+                                        ny, nx, dy, dx, b, interp_cc_to_fc, fc_velocity_gradient,
+                                        add_uv_ghost_cells, add_scalar_ghost_cells, hgrads_fct)
+        nl = compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(
+                                        ny, nx, dy, dx, b, beta_fct, ice_mask, interp_cc_to_fc,
+                                        fc_velocity_gradient, add_uv_ghost_cells,
+                                        add_scalar_ghost_cells, f["mucoef_0"], f["C_0"],
+                                        f["temperature_field"], hgrads_fct)
+        return viscosity_fct, beta_fct, lin, nl
+
+    advection_stepper = None
+    if return_advection_stepper:
+        #lazy import: nonlinear_solvers pulls in petsc4py
+        from nonlinear_solvers import make_advection_stepper
+        advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
+                                                   add_uv_ghost_cells, add_scalar_ghost_cells,
+                                                   method=adv_method)
+
+    gmg_setup, gmg_solve, gmg_solve_mg = make_stencil_gmg_solver(ny, nx,
+                           max_coarse_cells=max_coarse_cells, nu1=nu1, nu2=nu2,
+                           smoother=smoother, restart=gmres_restart,
+                           max_restarts=gmres_max_restarts)
+
+    res_fct = lambda x: jnp.max(jnp.abs(x))
+    n = ny*nx
+
+    if linear_solver not in ("gmres", "mg"):
+        raise ValueError("linear_solver must be 'gmres' or 'mg'")
+
+    #Only for forward solves! the adjoint always uses GMRES to adjoint_rtol, because
+    #gradient accuracy is set by how well that one solve converges!
+    def linear_solve(residual_uv, u_1d, v_1d, rhs, mask2d, rtol):
+        #Defined each nl iteration
+        A = stencil_from_residual(residual_uv, u_1d, v_1d, ny, nx, probe_batch_size)
+
+        #create dictionary with all the levels, A defined for each level, the inverse of
+        #the diagnoal of A defined on each level (required for the smoother) the prolongation
+        #weights for each level and the ice mask on each level!
+        H = gmg_setup(A, mask2d)
+
+        #Either pure multigrid or multigrid-preconditioned GMRES
+        if linear_solver == "mg":
+            #exactly mg_cycles V-cycles: no stopping test, no host readback
+            return gmg_solve_mg(H, rhs, fixed_cycles=mg_cycles)
+        return gmg_solve(H, rhs, rtol)
+
+
+    #FIXED NUMBER OF PICARD AND NEWTON LOOPS!!! Need to think about that... Backtracking as well...
+    @jax.jit
+    def forward(q, p, u_trial, v_trial, h, f):
+        """
+        f are static fields passed to different things. They're not defined as closures as I think that was the
+        source of very large memory overhead.s
+        """
+
+        viscosity_fct, beta_fct, get_uv_residuals_linear_ssa, get_uv_residuals_nonlinear_ssa = build_physics(f)
+
+        C_0 = f["C_0"]
+
+        h_1d   = h.reshape(-1)
+        mask2d = h > 0
+        m1d    = mask2d.reshape(-1).astype(h.dtype)
+        u_1d   = u_trial.reshape(-1) * m1d
+        v_1d   = v_trial.reshape(-1) * m1d
+        C      = C_0*jnp.exp(p)
+
+        def picard_step(i, state):
+            u_1d, v_1d, init_res = state
+            mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
+            beta = beta_fct(C, u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+
+            #useful to put in this form so that the input and output dimensions are easy for stencil_from_linear_map
+            lin_res = lambda uu, vv: get_uv_residuals_linear_ssa(uu, vv, h_1d, mu_ew, mu_ns, beta)
+
+            rhs = -jnp.concatenate(lin_res(u_1d, v_1d))
+            du, its, rel = linear_solve(lin_res, u_1d, v_1d, rhs, mask2d, linear_rtol)
+
+            u_1d = (u_1d + du[:n]) * m1d
+            v_1d = (v_1d + du[n:]) * m1d
+            init_res = jnp.where(i==0, res_fct(rhs), init_res)
+            if verbose:
+                jax.debug.print("Picard {i}: residual {r:.3e}, GMRES its {k}, rel res {e:.1e}",
+                                i=i, r=res_fct(rhs), k=its, e=rel)
+            return (u_1d, v_1d, init_res)
+
+        u_1d, v_1d, init_res = jax.lax.fori_loop(0, n_pic_iterations, picard_step,
+                                                 (u_1d, v_1d, jnp.zeros((), h.dtype)))
+
+
+
+        #NEWTON
+        nl_res = lambda uu, vv: get_uv_residuals_nonlinear_ssa(uu, vv, q, p, h_1d)
+        def newton_step(i, state):
+            u_1d, v_1d = state
+            rhs = -jnp.concatenate(nl_res(u_1d, v_1d))
+            du, its, rel = linear_solve(nl_res, u_1d, v_1d, rhs, mask2d, linear_rtol)
+            if verbose:
+                jax.debug.print("Newton {i}: residual {r:.3e}, GMRES its {k}, rel res {e:.1e}",
+                                i=i, r=res_fct(rhs), k=its, e=rel)
+            return ((u_1d + du[:n]) * m1d, (v_1d + du[n:]) * m1d)
+
+        u_1d, v_1d = jax.lax.fori_loop(0, n_newt_iterations, newton_step, (u_1d, v_1d))
+
+        if verbose:
+            final_res = res_fct(jnp.concatenate(nl_res(u_1d, v_1d)))
+            jax.debug.print("Final Newton residual: {r:.3e}, total reduction: {f:.3e}",
+                            r=final_res, f=init_res/final_res)
+
+
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+
+    @jax.jit
+    def adjoint(u, v, q, p, h, u_bar, v_bar, f):
+        """Adjoint solve plus pullback: returns (q_bar, p_bar)."""
+        get_uv_residuals_nonlinear_ssa = build_physics(f)[3]
+        h_1d = h.reshape(-1)
+        mask2d = h > 0
+
+        #Again, needed in this form for stencil_from_linear_map inside stencil_from_residual
+        nl_res = lambda uu, vv: get_uv_residuals_nonlinear_ssa(uu, vv, q, p, h_1d)
+
+        A = stencil_from_residual(nl_res, u.reshape(-1), v.reshape(-1), ny, nx, probe_batch_size)
+
+        rhs = -jnp.concatenate([u_bar.reshape(-1), v_bar.reshape(-1)])
+
+        #Need to use the GMG solver for this, and run it until adjoint_rtol, which determines
+        #the quality of the gradient. Transpose of A is used.
+        lam, its, rel = gmg_solve(gmg_setup(transpose_for_adjoint(A, mask2d), mask2d), rhs, adjoint_rtol)
+
+        if verbose:
+            jax.debug.print("Adjoint: GMRES its {k}, rel res {e:.1e}", k=its, e=rel)
+
+
+        _, pullback_fct = jax.vjp(get_uv_residuals_nonlinear_ssa,
+                                  u.reshape(-1), v.reshape(-1), q, p, h_1d)
+        _, _, q_bar, p_bar, _ = pullback_fct((lam[:n], lam[n:]))
+
+        return q_bar.reshape((ny, nx)), p_bar.reshape((ny, nx))
+
+
+    #Sooooooo. Normally, I've just used "solver" and the fields are all closures defined at the top. However,
+    #there's some indication that the fields are baked into the graph in lots of places causing large memory
+    #overheads. So, solver is called as per usual after this factory is called. Then fields are passed to
+    #solver_with_fields
+
+
+    @custom_vjp
+    def solver_with_fields(q, p, u_trial, v_trial, h, f):
+        return forward(q, p, u_trial, v_trial, h, f)
+
+    def solver_fwd(q, p, u_trial, v_trial, h, f):
+        u, v = forward(q, p, u_trial, v_trial, h, f)
+        return (u, v), (u, v, q, p, h, f)
+
+    def solver_bwd(res, cotangent):
+        u, v, q, p, h, f = res
+        u_bar, v_bar = cotangent
+
+        q_bar, p_bar = adjoint(u, v, q, p, h, u_bar, v_bar, f)
+
+        #no gradients with respect to the trial velocities, h or the fields
+        #This is just a fancy JAX idiom for creating a zero-valued pytree with the same structure as f.
+        f_bar = jax.tree_util.tree_map(jnp.zeros_like, f)
+
+        return (q_bar, p_bar, None, None, None, f_bar)
+
+    solver_with_fields.defvjp(solver_fwd, solver_bwd)
+
+    def solver(q, p, u_trial, v_trial, h):
+        """
+        Same signature as the PETSc CPU version of the code. That's fine when called directly.
+        Inside the jax.jit, use solver.with_fields(..., solver.fields) and pass the fields
+        through your jit's arguments, or they'll be baked into the compiled program.
+        """
+        return solver_with_fields(q, p, u_trial, v_trial, h, fields)
+
+    #solver.with_fields = solver_with_fields
+    #solver.fields = fields
+
+    return solver, advection_stepper
+
+
+def make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt_gmg(ny, nx, dy, dx, b,
+                                                 max_n_pic_iterations,
+                                                 max_n_newt_iterations,
+                                                 mucoef_0, C_0,
+                                                 adv_method="PPM",
+                                                 sliding="linear",
+                                                 pic_reduction_tol=1e-3,
+                                                 newton_tol=1e0,
+                                                 periodic=False, B_field=None,
+                                                 temperature_field=None,
+                                                 newton_max_backtracks=32,
+                                                 linear_rtol=1e-8,
+                                                 adjoint_rtol=1e-10,
+                                                 gmres_restart=20,
+                                                 gmres_max_restarts=30,
+                                                 max_coarse_cells=1024,
+                                                 nu1=2, nu2=2, smoother="gs4",
+                                                 probe_batch_size=3,
+                                                 verbose=True,
+                                                 return_advection_stepper=True):
+    """
+    Dynamic-thickness version: the ice mask (and so the calving-front treatment in the
+    gradients and viscosities) comes from h on every call, so h can change between
+    solves, e.g. after an explicit advection step or a level-set move of the calving
+    front. Shapes don't change, so nothing is recompiled.
+
+    Same physics as make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_gmg.
+    Convergence control as in make_picnewton_velocity_solver_function_full_cvjp_no_cf_extrap_dt:
+      Picard: until the residual has fallen by pic_reduction_tol (or is below newton_tol),
+              at most max_n_pic_iterations.
+      Newton: until the residual is below newton_tol, at most max_n_newt_iterations,
+              each step with a backtracking line search (halving, at most
+              newton_max_backtracks times) until the residual doesn't increase.
+    A warning is printed if Newton hasn't reached newton_tol.
+    """
+
+    if periodic:
+        raise NotImplementedError("I haven't implemented a GMG that support periodic domains yet.")
+
+    if temperature_field is None:
+        temperature_field = (jnp.zeros((ny,nx))+263.15)
+
+    interp_cc_to_fc                            = interp_cc_with_ghosts_to_fc_function(ny, nx)
+    add_uv_ghost_cells, add_scalar_ghost_cells = add_ghost_cells_fcts(ny, nx, periodic=periodic)
+    hgrads_fct                                 = gl_aware_driving_stress_function(dy, dx)
+
+    #Fields that are fixed for the whole run. They're passed into the jitted functions
+    #as arguments (never captured by a closure) so they aren't baked into the program.
+    #The ice mask is NOT one of them: it comes from h on every call.
+    fields = dict(b=jnp.asarray(b),
+                  mucoef_0=jnp.asarray(mucoef_0), C_0=jnp.asarray(C_0),
+                  temperature_field=jnp.asarray(temperature_field))
+
+    def build_physics(f, ice_mask):
+        """Physics built from (traced) fields and the current ice mask."""
+        b = f["b"]
+        fc_velocity_gradient = fc_velocity_gradient_function_cf_safe(dy, dx, ny, nx,
+                                                          ice_mask, add_uv_ghost_cells,
+                                                          add_scalar_ghost_cells)
+        viscosity_fct = fc_viscosity_function_new_givenT_noextrap(ny, nx, dy, dx,
+                                                   add_uv_ghost_cells, add_scalar_ghost_cells,
+                                                   interp_cc_to_fc, fc_velocity_gradient,
+                                                   ice_mask, f["mucoef_0"], f["temperature_field"])
+        grounded_fraction = make_grounded_fraction_function(add_scalar_ghost_cells)
+        beta_fct          = beta_function(b, sliding, grounded_fraction)
+        lin = compute_linear_ssa_residuals_function_fc_visc_new_noextrap(
+                                        ny, nx, dy, dx, b, interp_cc_to_fc, fc_velocity_gradient,
+                                        add_uv_ghost_cells, add_scalar_ghost_cells, hgrads_fct)
+        nl = compute_ssa_uv_residuals_function_pnotC_givenT_noextrap(
+                                        ny, nx, dy, dx, b, beta_fct, ice_mask, interp_cc_to_fc,
+                                        fc_velocity_gradient, add_uv_ghost_cells,
+                                        add_scalar_ghost_cells, f["mucoef_0"], f["C_0"],
+                                        f["temperature_field"], hgrads_fct)
+        return viscosity_fct, beta_fct, lin, nl
+
+    advection_stepper = None
+    if return_advection_stepper:
+        #lazy import: nonlinear_solvers pulls in petsc4py
+        from nonlinear_solvers import make_advection_stepper
+        advection_stepper = make_advection_stepper(nx, ny, dx, dy, interp_cc_to_fc,
+                                                   add_uv_ghost_cells, add_scalar_ghost_cells,
+                                                   method=adv_method)
+
+    gmg_setup, gmg_solve, gmg_solve_mg = make_stencil_gmg_solver(ny, nx,
+                           max_coarse_cells=max_coarse_cells, nu1=nu1, nu2=nu2,
+                           smoother=smoother, restart=gmres_restart,
+                           max_restarts=gmres_max_restarts)
+
+    res_fct = lambda x: jnp.max(jnp.abs(x))
+    n = ny*nx
+
+    def linear_solve(residual_uv, u_1d, v_1d, rhs, mask2d):
+        A = stencil_from_residual(residual_uv, u_1d, v_1d, ny, nx, probe_batch_size)
+        return gmg_solve(gmg_setup(A, mask2d), rhs, linear_rtol)
+
+    @jax.jit
+    def forward(q, p, u_trial, v_trial, h, f):
+
+        mask2d   = h > 0
+        ice_mask = jnp.where(mask2d, 1, 0)
+        viscosity_fct, beta_fct, get_uv_residuals_linear_ssa, get_uv_residuals_nonlinear_ssa = \
+                                                                        build_physics(f, ice_mask)
+
+        h_1d = h.reshape(-1)
+        m1d  = mask2d.reshape(-1).astype(h.dtype)
+        u_1d = u_trial.reshape(-1) * m1d
+        v_1d = v_trial.reshape(-1) * m1d
+        C    = f["C_0"]*jnp.exp(p)
+        zero_step = jnp.zeros((2*n,), h.dtype)
+
+        ############ PICARD ############
+        #state: (iteration, u, v, initial residual, stop)
+        def picard_cond(state):
+            i, _, _, _, stop = state
+            return (i < max_n_pic_iterations) & (~stop)
+
+        def picard_body(state):
+            i, u_1d, v_1d, init_res, _ = state
+            mu_ew, mu_ns = viscosity_fct(q, u_1d, v_1d)
+            beta = beta_fct(C, u_1d.reshape((ny,nx)), v_1d.reshape((ny,nx)), h)
+            lin_res = lambda uu, vv: get_uv_residuals_linear_ssa(uu, vv, h_1d, mu_ew, mu_ns, beta)
+
+            rhs = -jnp.concatenate(lin_res(u_1d, v_1d))
+            res = res_fct(rhs)
+            init_res = jnp.where(i == 0, res, init_res)
+            stop = ((res/init_res) < pic_reduction_tol) | ((i > 0) & (res < newton_tol))
+
+            #only solve if we're carrying on
+            def solve(_):
+                du, its, rel = linear_solve(lin_res, u_1d, v_1d, rhs, mask2d)
+                if verbose:
+                    jax.debug.print("Picard {i}: residual {r:.3e}, GMRES its {k}, rel res {e:.1e}",
+                                    i=i, r=res, k=its, e=rel)
+                return du
+            du = jax.lax.cond(stop, lambda _: zero_step, solve, None)
+
+            return (i+1, (u_1d + du[:n]) * m1d, (v_1d + du[n:]) * m1d, init_res, stop)
+
+        i_pic, u_1d, v_1d, init_res, _ = jax.lax.while_loop(
+            picard_cond, picard_body,
+            (0, u_1d, v_1d, jnp.zeros((), h.dtype), jnp.array(False)))
+
+        ############ NEWTON ############
+        nl_res = lambda uu, vv: get_uv_residuals_nonlinear_ssa(uu, vv, q, p, h_1d)
+        res_of = lambda uu, vv: res_fct(jnp.concatenate(nl_res(uu, vv)))
+
+        #state: (iteration, u, v, stop)
+        def newton_cond(state):
+            i, _, _, stop = state
+            return (i < max_n_newt_iterations) & (~stop)
+
+        def newton_body(state):
+            i, u_1d, v_1d, _ = state
+            rhs = -jnp.concatenate(nl_res(u_1d, v_1d))
+            res = res_fct(rhs)
+            stop = (i > 0) & (res < newton_tol)
+
+            def step(_):
+                du, its, rel = linear_solve(nl_res, u_1d, v_1d, rhs, mask2d)
+
+                #backtracking line search: halve the step until the residual doesn't increase
+                def trial(scale):
+                    u_new = (u_1d + scale*du[:n]) * m1d
+                    v_new = (v_1d + scale*du[n:]) * m1d
+                    return u_new, v_new, res_of(u_new, v_new)
+
+                def bt_cond(s):
+                    _, _, _, res_new, k = s
+                    return (res_new > res) & (k < newton_max_backtracks)
+
+                def bt_body(s):
+                    scale, _, _, _, k = s
+                    scale = 0.5*scale
+                    u_new, v_new, res_new = trial(scale)
+                    return (scale, u_new, v_new, res_new, k+1)
+
+                u_new, v_new, res_new = trial(1.0)
+                scale, u_new, v_new, res_new, n_bt = jax.lax.while_loop(
+                    bt_cond, bt_body, (jnp.ones((), h.dtype), u_new, v_new, res_new, 0))
+
+                if verbose:
+                    jax.debug.print("Newton {i}: residual {r:.3e}, GMRES its {k}, rel res {e:.1e}, "
+                                    "backtracks {b} (step scale {s:.3g})",
+                                    i=i, r=res, k=its, e=rel, b=n_bt, s=scale)
+                return u_new, v_new
+
+            u_1d, v_1d = jax.lax.cond(stop, lambda _: (u_1d, v_1d), step, None)
+            return (i+1, u_1d, v_1d, stop)
+
+        i_newt, u_1d, v_1d, _ = jax.lax.while_loop(
+            newton_cond, newton_body, (0, u_1d, v_1d, jnp.array(False)))
+
+        final_res = res_of(u_1d, v_1d)
+        if verbose:
+            jax.debug.print("Final Newton residual: {r:.3e}, total reduction: {f:.3e} "
+                            "({p} Picard and {nw} Newton iterations)",
+                            r=final_res, f=init_res/final_res, p=i_pic, nw=i_newt)
+
+        #warn (only printed when it happens) if Newton didn't reach its tolerance
+        jax.lax.cond(final_res > newton_tol,
+                     lambda: jax.debug.print("WARNING: velocity solve did not converge: residual "
+                                             "{r:.3e} > newton_tol after {nw} Newton iterations",
+                                             r=final_res, nw=i_newt),
+                     lambda: None)
+
+        return u_1d.reshape((ny, nx)), v_1d.reshape((ny, nx))
+
+
+    @jax.jit
+    def adjoint(u, v, q, p, h, u_bar, v_bar, f):
+        """Adjoint solve plus pullback: returns (q_bar, p_bar)."""
+        mask2d = h > 0
+        get_uv_residuals_nonlinear_ssa = build_physics(f, jnp.where(mask2d, 1, 0))[3]
+        h_1d = h.reshape(-1)
+
+        nl_res = lambda uu, vv: get_uv_residuals_nonlinear_ssa(uu, vv, q, p, h_1d)
+        A = stencil_from_residual(nl_res, u.reshape(-1), v.reshape(-1), ny, nx, probe_batch_size)
+        rhs = -jnp.concatenate([u_bar.reshape(-1), v_bar.reshape(-1)])
+
+        #run to adjoint_rtol, which sets the quality of the gradient. Transpose of A is used.
+        lam, its, rel = gmg_solve(gmg_setup(transpose_for_adjoint(A, mask2d), mask2d), rhs, adjoint_rtol)
+        if verbose:
+            jax.debug.print("Adjoint: GMRES its {k}, rel res {e:.1e}", k=its, e=rel)
+
+        _, pullback_fct = jax.vjp(get_uv_residuals_nonlinear_ssa,
+                                  u.reshape(-1), v.reshape(-1), q, p, h_1d)
+        _, _, q_bar, p_bar, _ = pullback_fct((lam[:n], lam[n:]))
+
+        return q_bar.reshape((ny, nx)), p_bar.reshape((ny, nx))
+
+
+    @custom_vjp
+    def solver_with_fields(q, p, u_trial, v_trial, h, f):
+        return forward(q, p, u_trial, v_trial, h, f)
+
+    def solver_fwd(q, p, u_trial, v_trial, h, f):
+        u, v = forward(q, p, u_trial, v_trial, h, f)
+        return (u, v), (u, v, q, p, h, f)
+
+    def solver_bwd(res, cotangent):
+        u, v, q, p, h, f = res
+        u_bar, v_bar = cotangent
+        q_bar, p_bar = adjoint(u, v, q, p, h, u_bar, v_bar, f)
+        #no gradients with respect to the trial velocities, h or the fields
+        f_bar = jax.tree_util.tree_map(jnp.zeros_like, f)
+        return (q_bar, p_bar, None, None, None, f_bar)
+
+    solver_with_fields.defvjp(solver_fwd, solver_bwd)
+
+    def solver(q, p, u_trial, v_trial, h):
+        """Same signature as the PETSc _dt version: h (and so the ice mask) can change
+        on every call. Fine when called directly. Inside your own jax.jit, call
+        solver_with_fields with the fields passed through your jit's arguments instead,
+        or they'll be baked into the compiled program."""
+        return solver_with_fields(q, p, u_trial, v_trial, h, fields)
+
+    return solver, advection_stepper
+
+
+
 
 
 def make_newton_coupled_solver_function(ny, nx, dy, dx, C, b, n_iterations, mucoef_0, periodic=False):
